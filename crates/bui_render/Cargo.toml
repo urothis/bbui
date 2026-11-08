@@ -1,0 +1,12 @@
+[package]
+name = "bui_render"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+bevy.workspace = true
+bui_core = { path = "../bui_core" }
+bui_layout = { path = "../bui_layout" }
+bui_style = { path = "../bui_style" }
+

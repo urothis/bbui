@@ -1,0 +1,22 @@
+[package]
+name = "bui_text"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+bevy_app.workspace = true
+bevy_asset = "=0.20.1"
+bevy_ecs.workspace = true
+bevy_math = "=0.20.1"
+bevy_text = { version = "=0.20.1", features = ["default_font"] }
+bevy_time.workspace = true
+parley = "=0.11.1"
+unicode-segmentation = "=1.13.3"
+bui_core = { path = "../bui_core" }
+bui_layout = { path = "../bui_layout" }
+bui_style = { path = "../bui_style" }
+
+[dev-dependencies]
+bevy.workspace = true
+

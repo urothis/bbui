@@ -1,0 +1,15 @@
+[package]
+name = "bui_style"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+bevy_app.workspace = true
+bevy_color = "=0.20.1"
+bevy_ecs.workspace = true
+bevy_time.workspace = true
+bevy_ui = "=0.20.1"
+bui_core = { path = "../bui_core" }
+bui_layout = { path = "../bui_layout" }
+
