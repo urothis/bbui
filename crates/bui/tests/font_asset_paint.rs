@@ -25,7 +25,11 @@ fn temp_directory() -> std::path::PathBuf {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    std::env::temp_dir().join(format!("bui-font-paint-{}-{nonce}", std::process::id()))
+    let directory =
+        std::env::temp_dir().join(format!("bui-font-paint-{}-{nonce}", std::process::id()));
+    fs::create_dir_all(&directory).unwrap();
+    // Keep AssetServer and watcher paths consistent with macOS's /var symlink target.
+    fs::canonicalize(directory).unwrap()
 }
 
 fn await_font_status(app: &mut App, entity: bevy::prelude::Entity, ready: bool) {
@@ -74,7 +78,6 @@ fn generic_label_font(app: &App, label: bevy::prelude::Entity) -> TextFont {
 #[test]
 fn ready_inherited_font_reaches_generic_label_and_hidden_state_falls_back() {
     let directory = temp_directory();
-    fs::create_dir_all(&directory).unwrap();
     fs::write(directory.join("label.ttf"), FONT_BYTES).unwrap();
 
     let mut app = App::new();

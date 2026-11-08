@@ -49,6 +49,8 @@ fn main() {
         .as_nanos();
     let asset_root = std::env::temp_dir().join(format!("bui-font-demo-{nonce}"));
     fs::create_dir_all(&asset_root).expect("create temporary asset directory");
+    // Use the canonical spelling so AssetServer and file notifications agree on macOS.
+    let asset_root = fs::canonicalize(asset_root).expect("canonicalize temporary asset directory");
 
     let mut app = App::new();
     app.add_plugins((

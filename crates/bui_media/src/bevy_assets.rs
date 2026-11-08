@@ -1322,9 +1322,30 @@ mod tests {
     use bevy::prelude::{App, AssetPlugin, ImagePlugin, MinimalPlugins};
     use image::ImageEncoder;
     use std::{
-        fs, thread,
+        fs,
+        path::PathBuf,
+        thread,
         time::{SystemTime, UNIX_EPOCH},
     };
+
+    fn temp_asset_root(prefix: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "{prefix}-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        // `temp_dir()` may spell the same macOS directory as `/var` while the
+        // filesystem watcher reports `/private/var`; use one canonical root.
+        fs::canonicalize(root).unwrap()
+    }
+
+    fn bundled_asset_root() -> PathBuf {
+        fs::canonicalize(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets")).unwrap()
+    }
 
     const VP8_KEYFRAME_16X16: &[u8] = &[
         48, 1, 0, 157, 1, 42, 16, 0, 16, 0, 1, 64, 38, 37, 160, 0, 3, 112, 0, 254, 240, 83, 31,
@@ -1535,15 +1556,7 @@ mod tests {
 
     #[test]
     fn svg_and_raster_assets_report_load_errors_and_enforce_configured_limits() {
-        let root = std::env::temp_dir().join(format!(
-            "bui-still-image-loader-{}-{}",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        fs::create_dir_all(&root).unwrap();
+        let root = temp_asset_root("bui-still-image-loader");
 
         let svg = |width: u32, height: u32| {
             format!(
@@ -1675,15 +1688,7 @@ mod tests {
 
     #[test]
     fn h264_mp4_mov_assets_play_frames_pause_offscreen_and_release_cache() {
-        let root = std::env::temp_dir().join(format!(
-            "bui-h264-sequence-{}-{}",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        fs::create_dir_all(&root).unwrap();
+        let root = temp_asset_root("bui-h264-sequence");
         let mp4_path = root.join("sample.mp4");
         fs::write(&mp4_path, include_bytes!("../assets/sample-h264.mp4")).unwrap();
         let mut mov_bytes = include_bytes!("../assets/sample-h264.mp4").to_vec();
@@ -1945,15 +1950,7 @@ mod tests {
 
     #[test]
     fn h264_asset_streams_long_video_with_bounded_cache_seek_loop_and_cancel() {
-        let root = std::env::temp_dir().join(format!(
-            "bui-h264-long-stream-{}-{}",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        fs::create_dir_all(&root).unwrap();
+        let root = temp_asset_root("bui-h264-long-stream");
         fs::write(
             root.join("long.mp4"),
             include_bytes!("../assets/sample-h264-long.mp4"),
@@ -2765,10 +2762,7 @@ mod tests {
         app.add_plugins((
             MinimalPlugins,
             AssetPlugin {
-                file_path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                    .join("assets")
-                    .to_string_lossy()
-                    .into_owned(),
+                file_path: bundled_asset_root().to_string_lossy().into_owned(),
                 ..Default::default()
             },
             ImagePlugin::default(),
@@ -2899,10 +2893,7 @@ mod tests {
         app.add_plugins((
             MinimalPlugins,
             AssetPlugin {
-                file_path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                    .join("assets")
-                    .to_string_lossy()
-                    .into_owned(),
+                file_path: bundled_asset_root().to_string_lossy().into_owned(),
                 ..Default::default()
             },
             ImagePlugin::default(),
@@ -2997,10 +2988,7 @@ mod tests {
         app.add_plugins((
             MinimalPlugins,
             AssetPlugin {
-                file_path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                    .join("assets")
-                    .to_string_lossy()
-                    .into_owned(),
+                file_path: bundled_asset_root().to_string_lossy().into_owned(),
                 ..Default::default()
             },
             ImagePlugin::default(),

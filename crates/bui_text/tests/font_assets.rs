@@ -45,7 +45,11 @@ fn temp_directory() -> std::path::PathBuf {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    std::env::temp_dir().join(format!("bui-font-assets-{}-{nonce}", std::process::id()))
+    let directory =
+        std::env::temp_dir().join(format!("bui-font-assets-{}-{nonce}", std::process::id()));
+    fs::create_dir_all(&directory).unwrap();
+    // Use the same spelling the filesystem watcher reports on macOS.
+    fs::canonicalize(directory).unwrap()
 }
 
 fn await_status(app: &mut App, entity: bevy::prelude::Entity, expected: UiFontAssetStatus) {
@@ -92,7 +96,6 @@ fn await_failed(app: &mut App, entity: bevy::prelude::Entity) {
 #[test]
 fn missing_font_falls_back_recovers_and_releases_when_offscreen() {
     let directory = temp_directory();
-    fs::create_dir_all(&directory).unwrap();
 
     let mut app = App::new();
     app.add_plugins((
