@@ -6,6 +6,7 @@ on:
 jobs:
   checks:
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
@@ -32,6 +33,10 @@ jobs:
 
   linux-gpu-readback:
     runs-on: ubuntu-latest
+    env:
+      CARGO_PROFILE_TEST_DEBUG: 0
+      CARGO_INCREMENTAL: 0
+      CARGO_BUILD_JOBS: 2
     steps:
       - uses: actions/checkout@v4
       - name: Install Mesa software Vulkan adapter
