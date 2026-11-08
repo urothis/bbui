@@ -846,7 +846,8 @@ mod tests {
             std::process::id()
         ));
         fs::create_dir(&path).unwrap();
-        path
+        // Keep expectations aligned with FileBrowser's canonical directory.
+        fs::canonicalize(path).unwrap()
     }
 
     fn setup() -> World {

@@ -21090,6 +21090,9 @@ mod tests {
         std::fs::write(directory.join("alpha.txt"), "a").unwrap();
         std::fs::write(directory.join("beta.bin"), "b").unwrap();
         std::fs::write(directory.join("subfolder/nested.txt"), "n").unwrap();
+        // FileBrowser entries use canonical paths; macOS may canonicalize
+        // temp_dir's `/var` prefix to `/private/var`.
+        let directory = std::fs::canonicalize(directory).unwrap();
 
         let mut app = App::new();
         app.add_plugins(WidgetPlugin);
@@ -23431,6 +23434,7 @@ mod tests {
                 .as_nanos()
         ));
         std::fs::create_dir_all(&root).unwrap();
+        let root = std::fs::canonicalize(root).unwrap();
         let path = root.join("delete-me.txt");
         std::fs::write(&path, "external file").unwrap();
         let mut app = App::new();
@@ -23481,6 +23485,7 @@ mod tests {
                 .as_nanos()
         ));
         std::fs::create_dir_all(&root).unwrap();
+        let root = std::fs::canonicalize(root).unwrap();
         let first = root.join("a.txt");
         let missing = root.join("b.txt");
         std::fs::write(&first, "first").unwrap();

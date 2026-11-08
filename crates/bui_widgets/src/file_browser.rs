@@ -957,6 +957,10 @@ fn make_directory_removable(path: &Path, metadata: &fs::Metadata) -> io::Result<
     }
     #[cfg(not(unix))]
     if permissions.readonly() {
+        #[expect(
+            clippy::permissions_set_readonly_false,
+            reason = "on Windows this clears the read-only attribute without widening file ACLs"
+        )]
         permissions.set_readonly(false);
         fs::set_permissions(path, permissions)?;
     }
@@ -967,6 +971,10 @@ fn make_directory_removable(path: &Path, metadata: &fs::Metadata) -> io::Result<
 fn make_file_removable(path: &Path, metadata: &fs::Metadata) -> io::Result<()> {
     let mut permissions = metadata.permissions();
     if permissions.readonly() {
+        #[expect(
+            clippy::permissions_set_readonly_false,
+            reason = "on Windows this clears the read-only attribute without widening file ACLs"
+        )]
         permissions.set_readonly(false);
         fs::set_permissions(path, permissions)?;
     }
@@ -995,7 +1003,9 @@ mod tests {
                 NEXT_DIR.fetch_add(1, Ordering::Relaxed),
             ));
             fs::create_dir(&path).unwrap();
-            Self(path)
+            // FileBrowser stores canonical paths, which can differ from the
+            // temp_dir spelling on macOS (`/var` versus `/private/var`).
+            Self(fs::canonicalize(path).unwrap())
         }
     }
 

@@ -503,6 +503,7 @@ mod tests {
             NEXT_DIR.fetch_add(1, Ordering::Relaxed)
         ));
         std::fs::create_dir(&directory).unwrap();
+        let directory = std::fs::canonicalize(directory).unwrap();
         let mut browser_state = FileBrowser::new(&directory).unwrap();
         browser_state.bookmark(directory.clone()).unwrap();
 
