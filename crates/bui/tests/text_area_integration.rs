@@ -275,6 +275,9 @@ fn text_area_wraps_navigates_composes_uses_clipboard_and_scrolls_end_to_end() {
         0,
         "the BUI host bridge consumes the one-shot OS clipboard request"
     );
+    // Replace the host response with a known value. A desktop CI runner may have
+    // unrelated text in its system clipboard, which the bridge has already queued.
+    app.world_mut().resource_mut::<UiInputQueue>().clear();
     app.world_mut()
         .resource_mut::<UiInputQueue>()
         .push(UiInputEvent::Text {
