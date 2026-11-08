@@ -13,7 +13,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install Linux window dependencies
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y pkg-config libx11-dev libwayland-dev libxkbcommon-dev libxkbcommon-x11-0 mesa-vulkan-drivers
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libfontconfig-dev libx11-dev libwayland-dev libxkbcommon-dev libxkbcommon-x11-0 mesa-vulkan-drivers
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.99.0
@@ -37,7 +37,7 @@ jobs:
       - name: Install Mesa software Vulkan adapter
         run: |
           sudo apt-get update
-          sudo apt-get install -y pkg-config libx11-dev libwayland-dev libxkbcommon-dev libxkbcommon-x11-0 mesa-vulkan-drivers
+          sudo apt-get install -y pkg-config libfontconfig-dev libx11-dev libwayland-dev libxkbcommon-dev libxkbcommon-x11-0 mesa-vulkan-drivers
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.99.0
