@@ -423,6 +423,8 @@ mod tests {
         ));
         let child = directory.join("child");
         std::fs::create_dir_all(&child).unwrap();
+        let directory = std::fs::canonicalize(directory).unwrap();
+        let child = directory.join("child");
         let mut app = App::new();
         app.init_resource::<WidgetEventQueue>()
             .init_resource::<WidgetActionQueue>()
