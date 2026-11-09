@@ -46,9 +46,15 @@ fn check(label: &str, checked: bool) -> WidgetNode {
 }
 
 fn toolbar_button(icon: &str, description: &str, key: &str) -> WidgetNode {
+    let role = match key {
+        "rail-transform" => "flat-icon-orange",
+        "rail-visibility" => "flat-icon-blue",
+        "rail-display" => "flat-icon-red",
+        _ => "flat-icon-button",
+    };
     WidgetNode::icon_button(icon, description)
         .with_key(key)
-        .with_role("flat-icon-button")
+        .with_role(role)
         .with_width(UiLength::Px(26.0))
         .with_height(UiLength::Px(27.0))
 }
@@ -178,6 +184,7 @@ fn setup(world: &mut World) {
         ],
     )
     .with_key("transform")
+    .with_role("object-panel")
     .with_gap(1.0)
     .with_width(UiLength::Fill(1.0));
 

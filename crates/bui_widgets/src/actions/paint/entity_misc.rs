@@ -144,7 +144,11 @@ pub(super) fn paint_misc_controls(paint: &mut PaintEntityContext<'_>) -> bool {
                         format!("{label}: {choice} ▾")
                     },
                 },
-                theme.text,
+                if dropdown_role == Some("icon-dropdown") {
+                    Rgba(0.91, 0.52, 0.23, 1.0)
+                } else {
+                    theme.text
+                },
                 theme,
                 false,
             ),
@@ -152,6 +156,9 @@ pub(super) fn paint_misc_controls(paint: &mut PaintEntityContext<'_>) -> bool {
         return true;
     }
     if let Some(panel) = world.get::<Panel>(entity) {
+        let object_panel = world
+            .get::<UiRole>(entity)
+            .is_some_and(|role| role.0 == "object-panel");
         let sub_panel = world
             .get::<UiRole>(entity)
             .is_some_and(|role| role.0 == "sub-panel");
@@ -190,13 +197,51 @@ pub(super) fn paint_misc_controls(paint: &mut PaintEntityContext<'_>) -> bool {
                         rect.x + theme.spacing.panel.content_padding,
                         rect.y + theme.spacing.panel.content_padding,
                     ],
-                    text: format!("{arrow} {}", panel.title),
+                    text: if object_panel {
+                        arrow.into()
+                    } else {
+                        format!("{arrow} {}", panel.title)
+                    },
                 },
                 theme.text,
                 theme,
                 false,
             ),
         ));
+        if object_panel {
+            camera_items.push(item(
+                clip,
+                z.saturating_add(2),
+                styled_text_primitive_for_entity(
+                    world,
+                    entity,
+                    clip,
+                    TextPlacement {
+                        origin: [rect.x + 39.0, rect.y + theme.spacing.panel.content_padding],
+                        text: panel.title.clone(),
+                    },
+                    theme.text,
+                    theme,
+                    false,
+                ),
+            ));
+            camera_items.push(item(
+                clip,
+                z.saturating_add(2),
+                styled_text_primitive_for_entity(
+                    world,
+                    entity,
+                    clip,
+                    TextPlacement {
+                        origin: [rect.x + 20.0, rect.y + theme.spacing.panel.content_padding],
+                        text: "▣".into(),
+                    },
+                    Rgba(0.91, 0.52, 0.23, 1.0),
+                    theme,
+                    false,
+                ),
+            ));
+        }
         return true;
     }
     if let Some(progress) = world.get::<Progress>(entity) {

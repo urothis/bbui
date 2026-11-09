@@ -55,9 +55,14 @@ pub(super) fn paint_buttons_and_menus(paint: &mut PaintEntityContext<'_>) -> boo
     }
     if let Some(button) = world.get::<IconButton>(entity) {
         let enabled = enabled && button.enabled;
-        let properties_rail = world
-            .get::<UiRole>(entity)
-            .is_some_and(|role| role.0 == "flat-icon-button");
+        let icon_role = world.get::<UiRole>(entity).map(|role| role.0.as_str());
+        let properties_rail = icon_role.is_some_and(|role| role.starts_with("flat-icon-"));
+        let icon_color = match icon_role {
+            Some("flat-icon-orange") => Rgba(0.91, 0.52, 0.23, 1.0),
+            Some("flat-icon-blue") => theme.accent,
+            Some("flat-icon-red") => theme.error,
+            _ => theme.text,
+        };
         camera_items.push(item(
             clip,
             z,
@@ -97,7 +102,7 @@ pub(super) fn paint_buttons_and_menus(paint: &mut PaintEntityContext<'_>) -> boo
                         text: button.icon.clone(),
                     },
                     if enabled {
-                        theme.text
+                        icon_color
                     } else {
                         theme.color(ThemeColorToken::DisabledText)
                     },
