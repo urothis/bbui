@@ -365,7 +365,6 @@ fn setup(world: &mut World) {
                 .with_key("object-unlink")
                 .with_width(UiLength::Px(20.0)),
         ])
-        .with_role("properties-tab-rail")
         .with_gap(1.0)
         .with_height(UiLength::Px(21.0)),
         transform,
@@ -397,13 +396,8 @@ fn setup(world: &mut World) {
             toolbar_button(4, "⚙"),
             toolbar_button(5, "✣"),
         ])
+        .with_role("properties-tab-rail")
         .with_gap(1.0)
-        .with_padding(UiEdges {
-            left: 0.0,
-            top: 1.0,
-            right: 0.0,
-            bottom: 0.0,
-        })
         .with_width(UiLength::Px(29.0)),
         WidgetNode::scroll([inspector, modifiers, material, outliner, preferences, nodes])
             .with_padding(UiEdges {
