@@ -9,6 +9,7 @@ pub(in crate::actions) struct SliderPaint<'a> {
     pub(in crate::actions) enabled: bool,
     pub(in crate::actions) focused: bool,
     pub(in crate::actions) dragging: bool,
+    pub(in crate::actions) filled: bool,
     pub(in crate::actions) theme: &'a Theme,
 }
 
@@ -22,8 +23,54 @@ pub(in crate::actions) fn paint_slider(paint: SliderPaint<'_>, output: &mut Vec<
         enabled,
         focused,
         dragging,
+        filled,
         theme,
     } = paint;
+    if filled {
+        let track = ClipRect::from(rect);
+        output.push(item(
+            clip,
+            z,
+            Primitive::RoundedRect {
+                rect: track,
+                radius: 2.0,
+                color: theme.surface_hover,
+            },
+        ));
+        let fill_width = rect.width * slider.normalized_value() as f32;
+        if fill_width > 0.0 {
+            output.push(item(
+                clip,
+                z.saturating_add(1),
+                Primitive::RoundedRect {
+                    rect: ClipRect {
+                        width: fill_width,
+                        ..track
+                    },
+                    radius: 2.0,
+                    color: theme.accent,
+                },
+            ));
+        }
+        let value = format!("{:.3}", slider.value);
+        let text_width = value.chars().count() as f32 * theme.font_size * 0.54;
+        output.push(item(
+            clip,
+            z.saturating_add(2),
+            styled_text_primitive(
+                clip,
+                [
+                    rect.x + (rect.width - text_width) * 0.5,
+                    rect.y + theme.spacing.control.padding_y,
+                ],
+                value,
+                theme.text,
+                theme,
+                false,
+            ),
+        ));
+        return;
+    }
     let active = focused || dragging;
     let radius = theme.spacing.editor.handle_radius;
     let radius = if radius.is_finite() {

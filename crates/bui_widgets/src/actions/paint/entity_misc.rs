@@ -53,13 +53,18 @@ pub(super) fn paint_misc_controls(paint: &mut PaintEntityContext<'_>) -> bool {
         return true;
     }
     if let Some(dropdown) = world.get::<Dropdown>(entity) {
+        let dropdown_role = world.get::<UiRole>(entity).map(|role| role.0.as_str());
         camera_items.push(item(
             clip,
             z,
             Primitive::RoundedRect {
                 rect: ClipRect::from(rect),
                 radius: theme.corner_radius,
-                color: theme.surface,
+                color: if dropdown_role == Some("compact-dropdown") {
+                    theme.background.mix(theme.surface, 0.35)
+                } else {
+                    theme.surface
+                },
             },
         ));
         let label = world
@@ -129,7 +134,11 @@ pub(super) fn paint_misc_controls(paint: &mut PaintEntityContext<'_>) -> bool {
                         rect.x + theme.spacing.control.padding_x,
                         rect.y + theme.spacing.control.padding_y,
                     ],
-                    text: if label.is_empty() {
+                    text: if dropdown_role == Some("icon-dropdown") {
+                        "▣ ▾".into()
+                    } else if dropdown_role == Some("compact-dropdown") {
+                        format!("▣  {choice}  ▾")
+                    } else if label.is_empty() {
                         choice
                     } else {
                         format!("{label}: {choice} ▾")
@@ -143,6 +152,9 @@ pub(super) fn paint_misc_controls(paint: &mut PaintEntityContext<'_>) -> bool {
         return true;
     }
     if let Some(panel) = world.get::<Panel>(entity) {
+        let sub_panel = world
+            .get::<UiRole>(entity)
+            .is_some_and(|role| role.0 == "sub-panel");
         let header_height = rect.height.min(theme.spacing.panel.header_height);
         let panel_rect = Rect {
             height: header_height + (rect.height - header_height).max(0.0) * panel.state.progress,
@@ -154,7 +166,11 @@ pub(super) fn paint_misc_controls(paint: &mut PaintEntityContext<'_>) -> bool {
             Primitive::RoundedRect {
                 rect: ClipRect::from(panel_rect),
                 radius: theme.corner_radius,
-                color: theme.surface,
+                color: if sub_panel {
+                    theme.surface.mix(theme.background, 0.30)
+                } else {
+                    theme.surface
+                },
             },
         ));
         let arrow = if panel.state.target_expanded {

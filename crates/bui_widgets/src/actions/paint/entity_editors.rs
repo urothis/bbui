@@ -50,6 +50,105 @@ pub(super) fn paint_editor_widgets(paint: &mut PaintEntityContext<'_>) -> bool {
 
     if let Some(mut checkbox) = world.get::<Checkbox>(entity).cloned() {
         checkbox.enabled &= enabled;
+        if world
+            .get::<UiRole>(entity)
+            .is_some_and(|role| role.0 == "filled-checkbox")
+        {
+            let size = rect.height.min(13.0);
+            let square = ClipRect {
+                x: rect.x,
+                y: rect.y + (rect.height - size) * 0.5,
+                width: size,
+                height: size,
+            };
+            camera_items.push(item(
+                clip,
+                z,
+                Primitive::RoundedRect {
+                    rect: square,
+                    radius: 2.0,
+                    color: if checkbox.is_checked() {
+                        theme.accent
+                    } else {
+                        theme.surface_hover
+                    },
+                },
+            ));
+            if checkbox.is_checked() {
+                camera_items.push(item(
+                    clip,
+                    z.saturating_add(1),
+                    styled_text_primitive_for_entity(
+                        world,
+                        entity,
+                        clip,
+                        TextPlacement {
+                            origin: [square.x + 1.0, square.y - 2.0],
+                            text: "✓".into(),
+                        },
+                        theme.text,
+                        theme,
+                        false,
+                    ),
+                ));
+            }
+            camera_items.push(item(
+                clip,
+                z.saturating_add(1),
+                styled_text_primitive_for_entity(
+                    world,
+                    entity,
+                    clip,
+                    TextPlacement {
+                        origin: [square.x + size + 4.0, rect.y + 2.0],
+                        text: checkbox.label,
+                    },
+                    theme.text,
+                    theme,
+                    false,
+                ),
+            ));
+            return true;
+        }
+        if world
+            .get::<UiRole>(entity)
+            .is_some_and(|role| role.0 == "segmented-toggle")
+        {
+            camera_items.push(item(
+                clip,
+                z,
+                Primitive::RoundedRect {
+                    rect: ClipRect::from(rect),
+                    radius: 2.0,
+                    color: if checkbox.is_checked() {
+                        theme.accent
+                    } else {
+                        theme.surface_pressed
+                    },
+                },
+            ));
+            let text_width = checkbox.label.chars().count() as f32 * theme.font_size * 0.55;
+            camera_items.push(item(
+                clip,
+                z.saturating_add(1),
+                styled_text_primitive_for_entity(
+                    world,
+                    entity,
+                    clip,
+                    TextPlacement {
+                        origin: [
+                            rect.x + (rect.width - text_width).max(0.0) * 0.5,
+                            rect.y + theme.spacing.control.padding_y,
+                        ],
+                        text: checkbox.label,
+                    },
+                    theme.text,
+                    theme,
+                    false,
+                ),
+            ));
+            return true;
+        }
         camera_items.extend(checkbox.draw_items_clipped(rect, layout.clip, theme, z));
         return true;
     }

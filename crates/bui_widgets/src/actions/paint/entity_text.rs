@@ -135,6 +135,9 @@ pub(super) fn paint_text_controls(paint: &mut PaintEntityContext<'_>) -> bool {
                 enabled: enabled && slider.enabled,
                 focused,
                 dragging,
+                filled: world
+                    .get::<UiRole>(entity)
+                    .is_some_and(|role| role.0 == "filled-slider"),
                 theme,
             },
             camera_items,
@@ -150,14 +153,27 @@ pub(super) fn paint_text_controls(paint: &mut PaintEntityContext<'_>) -> bool {
                     .values()
                     .any(|scrub| scrub.targets.contains(&entity))
             });
+        let axis_suffix = world
+            .get::<UiRole>(entity)
+            .and_then(|role| match role.0.as_str() {
+                "vector-axis-meters" => Some(" m"),
+                "vector-axis-degrees" => Some("°"),
+                _ => None,
+            });
         camera_items.push(item(
             clip,
             z,
             Primitive::RoundedRect {
                 rect: ClipRect::from(rect),
-                radius: theme.corner_radius,
+                radius: if axis_suffix.is_some() {
+                    1.0
+                } else {
+                    theme.corner_radius
+                },
                 color: if scrub_selected {
                     theme.color(ThemeColorToken::EditorActiveFieldSurface)
+                } else if axis_suffix.is_some() {
+                    theme.surface.mix(theme.text, 0.12)
                 } else {
                     theme.surface
                 },
@@ -166,6 +182,46 @@ pub(super) fn paint_text_controls(paint: &mut PaintEntityContext<'_>) -> bool {
         let label = world
             .get::<Label>(entity)
             .map_or_else(String::new, |label| label.text.clone());
+        if let Some(suffix) = axis_suffix {
+            camera_items.push(item(
+                clip,
+                z.saturating_add(1),
+                styled_text_primitive_for_entity(
+                    world,
+                    entity,
+                    clip,
+                    TextPlacement {
+                        origin: [rect.x + 14.0, rect.y + theme.spacing.control.padding_y],
+                        text: label,
+                    },
+                    theme.text_muted,
+                    theme,
+                    false,
+                ),
+            ));
+            let value = format!("{}{}", field.display(), suffix);
+            let estimated_width = value.chars().count() as f32 * theme.font_size * 0.53;
+            camera_items.push(item(
+                clip,
+                z.saturating_add(1),
+                styled_text_primitive_for_entity(
+                    world,
+                    entity,
+                    clip,
+                    TextPlacement {
+                        origin: [
+                            rect.x + (rect.width - estimated_width - 12.0).max(42.0),
+                            rect.y + theme.spacing.control.padding_y,
+                        ],
+                        text: value,
+                    },
+                    theme.text,
+                    theme,
+                    false,
+                ),
+            ));
+            return true;
+        }
         let content = if label.is_empty() {
             field.display()
         } else {

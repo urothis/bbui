@@ -103,7 +103,16 @@ def raise_window(window_id: str) -> None:
         x11.XCloseDisplay(display)
 
 
-def capture(name: str, output: Path, settle: float) -> None:
+def click_window(window_id: str, x: int, y: int) -> None:
+    """Use the shared X11 input helper for an interaction capture."""
+    subprocess.run(
+        ["python3", str(ROOT / "scripts" / "x11_input.py"), str(x), str(y),
+         "--window", window_id],
+        check=True,
+    )
+
+
+def capture(name: str, output: Path, settle: float, click: tuple[int, int] | None = None) -> None:
     binary = BINARIES / name
     if not binary.is_file():
         raise FileNotFoundError(f"{binary} is missing; run cargo build -p bui --examples --locked")
@@ -135,6 +144,8 @@ def capture(name: str, output: Path, settle: float) -> None:
                 raise TimeoutError(f"{name} did not open a window")
             time.sleep(settle)
             raise_window(window[0])
+            if click is not None:
+                click_window(window[0], *click)
             time.sleep(0.2)
             for _ in range(10):
                 result = subprocess.run(
@@ -161,8 +172,17 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, default=ROOT / "docs" / "visuals" / "examples")
     parser.add_argument("--settle", type=float, default=1.5)
+    parser.add_argument("--click", metavar="X,Y", help="Click at window-local coordinates before capture")
     parser.add_argument("examples", nargs="*")
     args = parser.parse_args()
+    click = None
+    if args.click:
+        try:
+            click = tuple(int(part) for part in args.click.split(","))
+        except ValueError:
+            parser.error("--click must be X,Y integer coordinates")
+        if len(click) != 2:
+            parser.error("--click must be X,Y integer coordinates")
     if "DISPLAY" not in os.environ:
         parser.error("DISPLAY must point to an X11 display")
     names = args.examples or sorted(path.stem for path in EXAMPLES.glob("*.rs") if path.stem not in EXCLUDE)
@@ -170,7 +190,7 @@ def main() -> None:
     failures = []
     for name in names:
         try:
-            capture(name, args.output / f"{name}.png", args.settle)
+            capture(name, args.output / f"{name}.png", args.settle, click)
         except (FileNotFoundError, RuntimeError, TimeoutError, subprocess.CalledProcessError, ValueError) as error:
             failures.append(f"{name}: {error}")
             print(f"FAILED {failures[-1]}", flush=True)

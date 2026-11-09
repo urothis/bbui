@@ -55,14 +55,25 @@ pub(super) fn paint_buttons_and_menus(paint: &mut PaintEntityContext<'_>) -> boo
     }
     if let Some(button) = world.get::<IconButton>(entity) {
         let enabled = enabled && button.enabled;
+        let properties_rail = world
+            .get::<UiRole>(entity)
+            .is_some_and(|role| role.0 == "flat-icon-button");
         camera_items.push(item(
             clip,
             z,
             Primitive::RoundedRect {
                 rect: ClipRect::from(rect),
-                radius: theme.corner_radius,
+                radius: if properties_rail {
+                    1.0
+                } else {
+                    theme.corner_radius
+                },
                 color: if enabled {
-                    theme.surface
+                    if properties_rail {
+                        theme.background
+                    } else {
+                        theme.surface
+                    }
                 } else {
                     theme.color(ThemeColorToken::ButtonDisabledSurface)
                 },
@@ -98,8 +109,13 @@ pub(super) fn paint_buttons_and_menus(paint: &mut PaintEntityContext<'_>) -> boo
         return true;
     }
     if let Some(menu) = world.get::<MenuControl>(entity) {
+        let properties_menu = world
+            .get::<UiRole>(entity)
+            .is_some_and(|role| role.0 == "flat-menu");
         let background = if menu.session.open {
             theme.color(ThemeColorToken::MenuOpenSurface)
+        } else if properties_menu {
+            theme.background
         } else {
             theme.surface
         };
@@ -282,11 +298,15 @@ pub(super) fn paint_buttons_and_menus(paint: &mut PaintEntityContext<'_>) -> boo
                         rect.x + theme.spacing.menu.padding_x,
                         rect.y + theme.spacing.menu.padding_y,
                     ],
-                    text: format!(
-                        "{} {}",
-                        menu.label,
-                        if menu.session.open { "▴" } else { "▾" }
-                    ),
+                    text: if properties_menu {
+                        menu.label.clone()
+                    } else {
+                        format!(
+                            "{} {}",
+                            menu.label,
+                            if menu.session.open { "▴" } else { "▾" }
+                        )
+                    },
                 },
                 theme.text,
                 theme,

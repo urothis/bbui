@@ -17,6 +17,9 @@ Interaction captures show [Object Actions open](examples/menus_object_actions.pn
 [selected Transform pie](examples/menus_transform_pie.png), and the
 [Visibility tab in the properties editor](examples/properties_editor_visibility.png).
 
+The [properties editor source map](properties-editor-reference.md) traces this composition to
+BUI's component demo and native panel layout code.
+
 ## Regenerate
 
 On Linux, start an X11 display with at least a 1600×1000 24-bit screen, then run:
@@ -24,6 +27,9 @@ On Linux, start an X11 display with at least a 1600×1000 24-bit screen, then ru
 ```sh
 cargo build -p bui --examples --locked
 DISPLAY=:99 python3 scripts/capture_examples.py
+DISPLAY=:99 python3 scripts/capture_examples.py --click 13,90 --output /tmp/bui-visibility properties_editor
+cp /tmp/bui-visibility/properties_editor.png docs/visuals/examples/properties_editor_visibility.png
+python3 scripts/make_example_gallery.py
 ```
 
 The capture script requires `xwininfo` and `xwd`; it checks that every named example opens and
