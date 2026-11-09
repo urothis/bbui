@@ -298,12 +298,17 @@ impl DisplayList {
         match camera {
             None => self.replace_widget_items(items),
             Some(camera) => {
-                if items.is_empty() {
-                    self.camera_items.remove(&camera);
+                let changed = if items.is_empty() {
+                    self.camera_items.remove(&camera).is_some()
                 } else if self.camera_items.get(&camera) != Some(&items) {
                     self.camera_items.insert(camera, items);
+                    true
+                } else {
+                    false
+                };
+                if changed {
+                    self.rebuild_merged_items();
                 }
-                self.rebuild_merged_items();
             }
         }
     }
@@ -314,12 +319,17 @@ impl DisplayList {
     /// pass, such as thumbnails owned by a virtualized browser. Its items join the same stable z
     /// ordering as camera items, after the base camera layer at equal z.
     pub fn replace_overlay_camera_items(&mut self, camera: Entity, items: Vec<DrawItem>) {
-        if items.is_empty() {
-            self.overlay_camera_items.remove(&camera);
+        let changed = if items.is_empty() {
+            self.overlay_camera_items.remove(&camera).is_some()
         } else if self.overlay_camera_items.get(&camera) != Some(&items) {
             self.overlay_camera_items.insert(camera, items);
+            true
+        } else {
+            false
+        };
+        if changed {
+            self.rebuild_merged_items();
         }
-        self.rebuild_merged_items();
     }
 
     /// Read the widget-generated layer before z-order merging.

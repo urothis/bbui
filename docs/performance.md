@@ -50,11 +50,11 @@ After the shared `UiDirty` invalidation contract (same machine and Criterion con
 
 | Workload | Before | After | Change |
 | --- | ---: | ---: | ---: |
-| 10k checkbox widget update, idle | 2.84 ms | 0.230 ms | 12.4× faster |
-| 10k checkbox widget update, one change | 3.28 ms | 0.723 ms | 4.5× faster |
+| 10k checkbox widget update, idle | 2.84 ms | 0.238 ms | 11.9× faster |
+| 10k checkbox widget update, one change | 3.28 ms | 0.273 ms | 12.0× faster |
 | 1k checkbox public plugin update, idle | 1.31 ms | 0.748 ms | 1.8× faster |
-| 1k checkbox public plugin update, one toggle | 2.72 ms | 2.11 ms | 1.3× faster |
-| 1k-node graph pan, 3,984 links | 4.12 ms | 3.08 ms | 1.3× faster |
+| 1k checkbox public plugin update, one toggle | 2.72 ms | 2.22 ms | 1.2× faster |
+| 1k-node graph pan, 3,984 links | 4.12 ms | 3.17 ms | 1.3× faster |
 | 10k-node layout update, idle | 25.9 µs | 40.4 µs | 1.6× slower |
 | 10k-node layout update, one intrinsic change | 3.31 ms | 3.30 ms | Similar |
 
@@ -65,9 +65,11 @@ The new text-field benchmark was measured before and after text invalidation on 
 | 200 text fields, idle / one edit | 678 / 877 µs | 210 / 329 µs | 3.2× / 2.7× faster |
 | 1k text fields, idle / one edit | 4.02 / 4.67 ms | 0.968 / 1.39 ms | 4.2× / 3.4× faster |
 
-The changed checkbox, graph, and layout paths still rebuild their affected layout root or
-visible draw list. The collector itself polls Bevy change ticks, which accounts for part of
-the layout idle increase. The render synchronization benchmark changed from 12.73 ms to
+The paint collector now repaints only dirty controls and assembles their cached visible
+fragments in stable order. Changed layout paths still recompute their affected root, and
+render synchronization still checks and sorts the visible draw list when it changes.
+The collector itself polls Bevy change ticks, which accounts for part of the layout idle
+increase. The render synchronization benchmark changed from 12.73 ms to
 11.21 ms on its 10k-item first pass and from 1.18 ms to 0.888 ms for one changed item;
 its 4.6 µs idle path stayed effectively the same. These are CPU measurements, not GPU frame
 times.

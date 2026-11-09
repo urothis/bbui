@@ -1,6 +1,6 @@
 //! Bevy-facing event handlers and transaction records for reusable widgets.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::PathBuf;
 
@@ -29,10 +29,10 @@ use bevy_ecs::observer::On;
 use bevy_ecs::prelude::*;
 use bevy_text::{Font, FontCx, FontSize, LayoutCx, LineBreak, LineHeight, TextFont, TextPipeline};
 use bui_core::{
-    TextSelection, UiChildren, UiDirty, UiDirtyDomain, UiEnabled, UiFocus, UiFocusable, UiHitBox,
-    UiKey, UiKeyCode, UiLiveRegion, UiModifiers, UiNode, UiParent, UiPointerButton, UiRect,
-    UiRoutedEvent, UiRoutedEvents, UiSystems, UiVisible, detach_from_parent, is_interactable,
-    is_interactable_in_window, set_parent,
+    TextSelection, UiChildren, UiDirty, UiDirtyBatch, UiDirtyDomain, UiEnabled, UiFocus,
+    UiFocusable, UiHitBox, UiKey, UiKeyCode, UiLiveRegion, UiModifiers, UiNode, UiParent,
+    UiPointerButton, UiRect, UiRoutedEvent, UiRoutedEvents, UiSystems, UiVisible,
+    detach_from_parent, is_interactable, is_interactable_in_window, set_parent,
 };
 use bui_layout::{Rect, UiLayoutNode, UiLayoutResult, UiLayoutRoot, UiWheelHandled};
 use bui_render::{ClipRect, DisplayList, DrawItem, Primitive, TextRenderStyle};
@@ -629,6 +629,33 @@ pub struct WidgetInteractionState {
     panel_reorders: HashMap<Entity, PanelReorderGesture>,
 }
 
+impl WidgetInteractionState {
+    fn paint_targets(&self) -> HashSet<Entity> {
+        let mut targets = HashSet::new();
+        for transaction in self.checkbox_paints.values() {
+            targets.extend(transaction.visited.iter().copied());
+        }
+        for scrub in self.numeric_scrubs.values() {
+            targets.extend(scrub.targets.iter().copied());
+            targets.insert(scrub.entity);
+        }
+        targets.extend(self.slider_drags.values().map(|drag| drag.target));
+        targets.extend(self.color_ramp_drags.values().map(|drag| drag.target));
+        targets.extend(self.hsv_color_drags.values().map(|drag| drag.target));
+        targets.extend(self.curve_editor_drags.values().map(|drag| drag.target));
+        for drag in self.collection_drags.values() {
+            targets.extend([drag.owner, drag.source]);
+        }
+        for drag in self.data_table_resize_drags.values() {
+            targets.extend([drag.owner, drag.source]);
+        }
+        for drag in self.panel_reorders.values() {
+            targets.extend([drag.group, drag.source]);
+        }
+        targets
+    }
+}
+
 #[derive(Resource, Debug, Default)]
 struct WidgetPaintCameras(HashSet<Entity>);
 
@@ -640,14 +667,38 @@ struct FocusTargetSnapshot {
     captured: Option<Entity>,
 }
 
+#[derive(Debug, Default)]
+struct WidgetPaintFragment {
+    camera: Option<Entity>,
+    items: Vec<DrawItem>,
+}
+
+struct PaintFragmentGuard<'a> {
+    fragments: &'a mut HashMap<Entity, WidgetPaintFragment>,
+    entity: Entity,
+    fragment: WidgetPaintFragment,
+}
+
+impl Drop for PaintFragmentGuard<'_> {
+    fn drop(&mut self) {
+        self.fragments
+            .insert(self.entity, std::mem::take(&mut self.fragment));
+    }
+}
+
 #[derive(Resource, Debug, Default)]
 struct WidgetPaintCache {
     input_stamp: Option<u64>,
     prepared: bool,
     focus_active_window: Option<Entity>,
     focus_targets: Vec<FocusTargetSnapshot>,
+    interaction_targets: HashSet<Entity>,
+    fragments: HashMap<Entity, WidgetPaintFragment>,
+    paint_ranks: HashMap<Entity, usize>,
+    painted_order: BTreeMap<usize, Entity>,
     skipped_frames: u64,
     rebuilt_frames: u64,
+    repainted_entities: usize,
 }
 
 #[derive(Resource, Debug, Default)]
@@ -11200,6 +11251,16 @@ fn styled_theme(world: &World, entity: Entity, base: &Theme) -> Theme {
     reason = "Bevy injects the independent widget queries"
 )]
 fn collect_widget_paint_changes(
+    structural: Query<
+        Entity,
+        Or<(
+            Changed<UiParent>,
+            Changed<UiChildren>,
+            Changed<UiEnabled>,
+            Changed<UiVisible>,
+            Changed<UiLayoutRoot>,
+        )>,
+    >,
     base: Query<
         Entity,
         Or<(
@@ -11324,13 +11385,28 @@ fn collect_widget_paint_changes(
     let focus_changed =
         cache.focus_active_window != active_window || cache.focus_targets != focus_targets;
     if focus_changed {
+        for target in cache
+            .focus_targets
+            .iter()
+            .chain(focus_targets.iter())
+            .flat_map(|targets| [targets.focused, targets.hovered, targets.captured])
+            .flatten()
+        {
+            dirty.mark(UiDirtyDomain::Paint, target);
+        }
         cache.focus_active_window = active_window;
         cache.focus_targets = focus_targets;
     }
-    if theme.is_changed()
-        || interaction.is_changed()
+    if interaction.is_changed() {
+        let targets = interaction.paint_targets();
+        for target in cache.interaction_targets.union(&targets).copied() {
+            dirty.mark(UiDirtyDomain::Paint, target);
+        }
+        cache.interaction_targets = targets;
+    }
+    if !structural.is_empty()
+        || theme.is_changed()
         || menus.is_changed()
-        || focus_changed
         || canvas_images
             .as_ref()
             .is_some_and(|images| images.is_changed())
@@ -11366,7 +11442,7 @@ pub fn collect_widget_paint(world: &mut World) {
             world.resource_mut::<WidgetPaintCache>().skipped_frames += 1;
             return;
         }
-        collect_widget_paint_full(world, None);
+        collect_widget_paint_full(world, None, Some(batch));
         return;
     }
     let input_stamp = widget_paint_input_stamp(world);
@@ -11375,16 +11451,61 @@ pub fn collect_widget_paint(world: &mut World) {
         return;
     }
 
-    collect_widget_paint_full(world, Some(input_stamp));
+    collect_widget_paint_full(world, Some(input_stamp), None);
 }
 
-fn collect_widget_paint_full(world: &mut World, input_stamp: Option<u64>) {
+fn collect_widget_paint_full(
+    world: &mut World,
+    input_stamp: Option<u64>,
+    batch: Option<UiDirtyBatch>,
+) {
     let base_theme = world.resource::<Theme>().clone();
-    let mut entity_query = world.query_filtered::<Entity, With<UiLayoutResult>>();
-    let entities: Vec<_> = entity_query.iter(world).collect();
-    let mut draw_items: HashMap<Option<Entity>, Vec<DrawItem>> = HashMap::new();
+    let (mut fragments, mut paint_ranks, mut painted_order) = {
+        let mut cache = world.resource_mut::<WidgetPaintCache>();
+        (
+            std::mem::take(&mut cache.fragments),
+            std::mem::take(&mut cache.paint_ranks),
+            std::mem::take(&mut cache.painted_order),
+        )
+    };
+    let repaint_all = batch.as_ref().is_none_or(|batch| batch.all)
+        || paint_ranks.is_empty()
+        || batch.as_ref().is_some_and(|batch| {
+            batch.entities.iter().any(|entity| {
+                world.get::<UiLayoutResult>(*entity).is_some() && !paint_ranks.contains_key(entity)
+            })
+        });
+    let entities: Vec<_> = if repaint_all {
+        let mut query = world.query_filtered::<Entity, With<UiLayoutResult>>();
+        query.iter(world).collect()
+    } else {
+        batch
+            .as_ref()
+            .map(|batch| batch.entities.iter().copied().collect())
+            .unwrap_or_default()
+    };
+    if repaint_all {
+        fragments.clear();
+        paint_ranks.clear();
+        painted_order.clear();
+        paint_ranks.extend(
+            entities
+                .iter()
+                .enumerate()
+                .map(|(rank, entity)| (*entity, rank)),
+        );
+    }
+    let mut repainted_entities = 0;
 
-    for entity in entities {
+    for &entity in &entities {
+        fragments.remove(&entity);
+        if let Some(rank) = paint_ranks.get(&entity) {
+            painted_order.remove(rank);
+        }
+        if world.get::<UiLayoutResult>(entity).is_none() {
+            paint_ranks.remove(&entity);
+            continue;
+        }
         if !is_visible(world, entity) {
             continue;
         }
@@ -11445,7 +11566,16 @@ fn collect_widget_paint_full(world: &mut World, input_stamp: Option<u64>) {
         let camera = world
             .get::<bevy_camera::Camera>(layout.window)
             .map(|_| layout.window);
-        let camera_items = draw_items.entry(camera).or_default();
+        let mut fragment_guard = PaintFragmentGuard {
+            fragments: &mut fragments,
+            entity,
+            fragment: WidgetPaintFragment {
+                camera,
+                items: Vec::new(),
+            },
+        };
+        let camera_items = &mut fragment_guard.fragment.items;
+        repainted_entities += 1;
         let enabled = world
             .get::<bui_core::UiEnabled>(entity)
             .is_none_or(|enabled| enabled.0);
@@ -12573,6 +12703,22 @@ fn collect_widget_paint_full(world: &mut World, input_stamp: Option<u64>) {
         }
     }
 
+    for entity in &entities {
+        if fragments.contains_key(entity)
+            && let Some(rank) = paint_ranks.get(entity)
+        {
+            painted_order.insert(*rank, *entity);
+        }
+    }
+    let mut draw_items: HashMap<Option<Entity>, Vec<DrawItem>> = HashMap::new();
+    for entity in painted_order.values() {
+        if let Some(fragment) = fragments.get(entity) {
+            draw_items
+                .entry(fragment.camera)
+                .or_default()
+                .extend(fragment.items.iter().cloned());
+        }
+    }
     let previous_cameras = world.resource::<WidgetPaintCameras>().0.clone();
     let current_cameras: HashSet<_> = draw_items.keys().filter_map(|camera| *camera).collect();
     let mut display_list = world.resource_mut::<DisplayList>();
@@ -12585,8 +12731,12 @@ fn collect_widget_paint_full(world: &mut World, input_stamp: Option<u64>) {
     }
     world.resource_mut::<WidgetPaintCameras>().0 = current_cameras;
     let mut cache = world.resource_mut::<WidgetPaintCache>();
+    cache.fragments = fragments;
+    cache.paint_ranks = paint_ranks;
+    cache.painted_order = painted_order;
     cache.input_stamp = input_stamp;
     cache.rebuilt_frames = cache.rebuilt_frames.saturating_add(1);
+    cache.repainted_entities = repainted_entities;
 }
 
 fn widget_paint_input_stamp(world: &World) -> u64 {
@@ -17947,6 +18097,54 @@ mod tests {
             "layout changes repaint before the frame is presented"
         );
         assert_eq!(app.world().resource::<WidgetPaintCache>().rebuilt_frames, 4);
+    }
+
+    #[test]
+    fn one_changed_checkbox_repaints_only_its_fragment() {
+        let mut app = App::new();
+        app.add_plugins(WidgetPlugin);
+        let first = app
+            .world_mut()
+            .spawn((
+                UiNode,
+                Checkbox::new("first", false),
+                UiLayoutResult {
+                    window: Entity::PLACEHOLDER,
+                    rect: UiRect::new(0.0, 0.0, 120.0, 24.0),
+                    clip: None,
+                    z: 1,
+                    content_size: [120.0, 24.0],
+                    dpi_scale: 1.0,
+                },
+            ))
+            .id();
+        app.world_mut().spawn((
+            UiNode,
+            Checkbox::new("second", false),
+            UiLayoutResult {
+                window: Entity::PLACEHOLDER,
+                rect: UiRect::new(0.0, 30.0, 120.0, 24.0),
+                clip: None,
+                z: 1,
+                content_size: [120.0, 24.0],
+                dpi_scale: 1.0,
+            },
+        ));
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<WidgetPaintCache>()
+                .repainted_entities,
+            2
+        );
+        app.world_mut().get_mut::<Checkbox>(first).unwrap().toggle();
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<WidgetPaintCache>()
+                .repainted_entities,
+            1
+        );
     }
 
     #[test]

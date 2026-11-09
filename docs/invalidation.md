@@ -16,10 +16,11 @@ layout before paint.
 Consumers use the narrowest safe scope. Style resolves dirty entities and their
 descendants; text shapes dirty buffers; accessibility rebuilds dirty semantic nodes and
 their descendants. Layout recomputes owning roots when a change can affect sibling
-placement. Widget paint and render synchronization skip settled frames and rebuild when
-their input changes. A stationary pointer is hit-tested again only after a pointer or
-hit-geometry change. Active transitions and media playback continue to advance while
-active.
+placement. Widget paint caches each control's fragment and repaints dirty controls;
+the display list assembles visible fragments in stable order. Render synchronization
+skips settled frames and replaces changed render nodes. A stationary pointer is
+hit-tested again only after a pointer or hit-geometry change. Active transitions and
+media playback continue to advance while active.
 
 When adding a widget component, register its paint and accessibility change detection
 and removal in `bui_widgets::actions`. When adding a new layout or text input, add it to
