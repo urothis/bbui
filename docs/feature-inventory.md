@@ -66,7 +66,7 @@ Current implementation details are in [Architecture](architecture.md), and measu
 - [x] Add GPU visual regression scenes for Dark and Light themes, DPI scales, clipping, text, menus, overlays, and each editor; compare outputs with defined tolerances.
 - [x] Add stress benchmarks for thousands of controls, long lists/tables, many nodes/links, image grids, animation, and idle frames. Record CPU time, GPU time, allocations, and memory so regressions are visible.
 - [x] Provide a runnable example for every feature family and a single showcase exercising them together. Document public APIs, shortcuts, theme values, error behavior, and supported platforms.
-- [ ] Run formatting, linting, tests, visual checks, and examples in CI on supported desktop targets. A checkbox is complete only when its implementation, tests, documentation, and example land together; incomplete behavior remains unchecked.
+- [x] Run formatting, linting, tests, visual checks, and examples in CI on supported desktop targets. A checkbox is complete only when its implementation, tests, documentation, and example land together; incomplete behavior remains unchecked.
 
 ## Source and licensing boundary
 
