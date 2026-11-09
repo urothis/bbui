@@ -402,7 +402,7 @@ fn setup(world: &mut World) {
         WidgetNode::scroll([inspector, modifiers, material, outliner, preferences, nodes])
             .with_padding(UiEdges {
                 left: 0.0,
-                top: 0.0,
+                top: 10.0,
                 right: 8.0,
                 bottom: 0.0,
             })
@@ -445,6 +445,7 @@ fn setup(world: &mut World) {
             .with_width(UiLength::Fill(1.0))
             .with_height(UiLength::Px(72.0)),
         ])
+        .with_gap(0.0)
         .with_width(UiLength::Fill(1.0))
         .with_height(UiLength::Fill(1.0)),
     );
