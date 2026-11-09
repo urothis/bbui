@@ -119,6 +119,12 @@ Browser navigation, bookmarks, selection, filter, sort, and view changes have un
 
 Run `cargo run -p bui --example menus`. The `bui!` macro supports `menu_bar`, `menu`, `context_menu`, `popover`, `pie_menu`, and `tooltip` declarations; menu entries can contain nested submenus and shortcuts. Click to open and pick, or press and drag through a menu before releasing on an entry. Arrow keys move through entries, Enter activates the selection, and Escape closes the popup and restores focus. Type while a menu is open to search nested entries by word initials or approximate spelling. Recent choices rank within that menu instance; queue `WidgetActionKind::ClearMenuHistory` to clear its history. Right-click the context-menu trigger to place its popup at the pointer, and move radially in the pie menu to choose a slice.
 
+## Properties editor example
+
+Run `cargo run -p bui --example properties_editor` for a compact object-properties panel inspired by Blender. Drag the Location and Rotation fields, adjust Scale, switch modes, toggle visibility options, and collapse sections. The left rail opens Transform, Visibility, Viewport Display, or all sections. The menu bar and progress footer complete the reference-sized composition.
+
+Reviewed screenshots of every graphical example, including open menu states, are in [docs/visuals](docs/visuals/README.md).
+
 ## Canvas example
 
 Run `cargo run -p bui --example canvas` from the workspace root. Left-click selects a shape; Ctrl/Shift-click adds to the selection. Drag selected shapes, middle-drag to pan, and use the wheel to zoom around the cursor. Arrow keys nudge selected shapes (Shift: 10 units; Ctrl: 0.1), Page Up/Down zoom, and Home resets the view. Escape cancels a drag, Delete removes selected objects, and Ctrl+Z/Ctrl+Shift+Z undo and redo edits. The scene draws a rectangle, ellipse, line, and SVG-backed image from `assets/canvas/checker.svg`.

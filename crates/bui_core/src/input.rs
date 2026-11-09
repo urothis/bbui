@@ -915,7 +915,7 @@ fn traverse_focus(
     backwards: bool,
 ) -> Option<Entity> {
     let mut query = world.query::<(Entity, &UiFocusable)>();
-    let mut entries: Vec<(i32, usize, Entity)> = query
+    let mut entries: Vec<(i32, Vec<usize>, Entity)> = query
         .iter(world)
         .filter_map(|(entity, _)| {
             if !has_window_assignment(world, entity, window) {
@@ -929,7 +929,12 @@ fn traverse_focus(
             Some((tab, order, entity))
         })
         .collect();
-    entries.sort_by_key(|(tab, order, _)| (*tab, *order));
+    entries.sort_by(|left, right| {
+        left.0
+            .cmp(&right.0)
+            .then_with(|| left.1.cmp(&right.1))
+            .then_with(|| left.2.cmp(&right.2))
+    });
     if entries.is_empty() {
         return None;
     }
@@ -946,7 +951,7 @@ fn traverse_focus(
     Some(entries[next].2)
 }
 
-fn hierarchy_order(world: &World, entity: Entity) -> usize {
+fn hierarchy_order(world: &World, entity: Entity) -> Vec<usize> {
     let mut path = Vec::new();
     let mut current = Some(entity);
     while let Some(at) = current {
@@ -954,19 +959,17 @@ fn hierarchy_order(world: &World, entity: Entity) -> usize {
         current = world.get::<crate::UiParent>(at).map(|parent| parent.0);
     }
     path.reverse();
-    let mut order = 0usize;
+    let mut order = Vec::with_capacity(path.len());
     for (depth, item) in path.iter().enumerate() {
         if depth == 0 {
-            order = order
-                .wrapping_mul(65_537)
-                .wrapping_add(item.to_bits() as usize);
+            order.push(item.to_bits() as usize);
         } else {
             let parent = path[depth - 1];
             let child_index = world
                 .get::<crate::UiChildren>(parent)
                 .and_then(|children| children.0.iter().position(|child| child == item))
                 .unwrap_or(item.to_bits() as usize);
-            order = order.wrapping_mul(65_537).wrapping_add(child_index);
+            order.push(child_index);
         }
     }
     order
@@ -995,7 +998,7 @@ fn hit_test(world: &mut World, window: Entity, position: [f32; 2]) -> Option<Ent
         validation.hit_tests += 1;
     }
     let mut query = world.query::<(Entity, &UiHitBox)>();
-    let mut candidates: Vec<(i32, usize, Entity)> = query
+    let mut candidates: Vec<(i32, Vec<usize>, Entity)> = query
         .iter(world)
         .filter(|&(entity, bounds)| {
             bounds.window.is_none_or(|owner| owner == window)
@@ -1004,7 +1007,12 @@ fn hit_test(world: &mut World, window: Entity, position: [f32; 2]) -> Option<Ent
         })
         .map(|(entity, bounds)| (bounds.z_index, hierarchy_order(world, entity), entity))
         .collect();
-    candidates.sort_by_key(|(z, order, entity)| (*z, *order, entity.to_bits()));
+    candidates.sort_by(|left, right| {
+        left.0
+            .cmp(&right.0)
+            .then_with(|| left.1.cmp(&right.1))
+            .then_with(|| left.2.cmp(&right.2))
+    });
     candidates.last().map(|(_, _, entity)| *entity)
 }
 
@@ -1541,6 +1549,35 @@ mod tests {
             hit_test(&mut world, other_window, [15.0, 15.0]),
             Some(overlay)
         );
+    }
+
+    #[test]
+    fn deeply_nested_control_wins_hit_testing_over_its_containers() {
+        let mut world = World::new();
+        for _ in 0..400 {
+            world.spawn_empty();
+        }
+        let window = world.spawn_empty().id();
+        let hit = UiHitBox {
+            window: Some(window),
+            rect: UiRect::new(0.0, 0.0, 32.0, 32.0),
+            clip: None,
+            z_index: 0,
+        };
+        let root = world.spawn((UiNode, hit)).id();
+        let mut parent = root;
+        for _ in 0..16 {
+            let sibling = world.spawn(UiNode).id();
+            set_parent(&mut world, sibling, parent).unwrap();
+            let container = world.spawn((UiNode, hit)).id();
+            set_parent(&mut world, container, parent).unwrap();
+            parent = container;
+        }
+        let button = world.spawn((UiNode, UiFocusable, hit)).id();
+        set_parent(&mut world, button, parent).unwrap();
+
+        assert!(hierarchy_order(&world, root) < hierarchy_order(&world, button));
+        assert_eq!(hit_test(&mut world, window, [16.0, 16.0]), Some(button));
     }
 
     #[test]

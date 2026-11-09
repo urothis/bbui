@@ -3,8 +3,8 @@
 use bevy::prelude::*;
 use bevy::window::{PrimaryWindow, WindowResolution};
 use bui::prelude::*;
-use bui::widgets::WidgetEventQueue;
-use bui_layout::{Rect, UiEdges};
+use bui::widgets::{WidgetEventQueue, WidgetNode};
+use bui_layout::{Rect, UiEdges, UiLength};
 use bui_render::{ClipRect, Primitive, UiPaint};
 use bui_style::Rgba;
 
@@ -29,7 +29,7 @@ fn setup(world: &mut World) {
                     x: 0.0,
                     y: 0.0,
                     width: 920.0,
-                    height: 620.0,
+                    height: 400.0,
                 },
                 1.0,
             ),
@@ -53,14 +53,18 @@ fn setup(world: &mut World) {
     ramp.set_color_channel(1, bui::widgets::ColorChannel::Alpha, 1.0);
     ramp.add_stop(0.52, Rgba(0.15, 0.48, 0.9, 0.76));
 
-    let tree = bui! {
-        column {
-            label("Color ramp editor"),
-            label("Drag stop handles or channel bars. Double-click the ramp to add a stop."),
-            color_ramp("Gradient", ramp.clone()),
-            label("Keyboard: ←/→ move stop · ↑/↓ select stop · C edit RGBA · Enter interpolation · A add · Delete remove"),
-        }
-    };
+    let tree = WidgetTree::new(
+        WidgetNode::column([
+            WidgetNode::label("Color ramp editor"),
+            WidgetNode::label("Drag stop handles or channel bars. Double-click the ramp to add a stop."),
+            WidgetNode::color_ramp("Gradient", ramp.clone()).with_width(UiLength::Fill(1.0)),
+            WidgetNode::label(
+                "Keyboard: ←/→ move stop · ↑/↓ select stop · C edit RGBA · Enter interpolation · A add · Delete remove",
+            ),
+        ])
+        .with_gap(10.0)
+        .with_width(UiLength::Fill(1.0)),
+    );
     tree.spawn(world, Some(root))
         .expect("valid color ramp widget tree");
 }
@@ -76,7 +80,7 @@ fn main() {
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "BUI Color Ramp Editor".into(),
-                resolution: WindowResolution::new(920, 620),
+                resolution: WindowResolution::new(920, 400),
                 ..default()
             }),
             ..default()

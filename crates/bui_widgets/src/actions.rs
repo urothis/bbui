@@ -1738,12 +1738,7 @@ pub fn process_routed_widget_events(world: &mut World) {
                     );
                 } else if world.get::<MenuControl>(target).is_some() {
                     close_menus_outside(world, window, target);
-                    if world
-                        .get::<MenuControl>(target)
-                        .is_some_and(|menu| menu.display != MenuDisplay::Context)
-                    {
-                        toggle_menu(world, target);
-                    }
+                    toggle_menu(world, target);
                 } else if world.get::<FileBrowser>(target).is_some() {
                     close_menus_outside(world, window, target);
                     click_file_browser(world, target, position, click_count, window, &mut emitted);
@@ -9979,6 +9974,9 @@ pub fn sync_menu_popups(world: &mut World) {
         let menu_spacing = world
             .get_resource::<Theme>()
             .map_or_else(|| Theme::default().spacing.menu, |theme| theme.spacing.menu);
+        let menu_font_size = world
+            .get_resource::<Theme>()
+            .map_or_else(|| Theme::default().font_size, |theme| theme.font_size);
         let (
             open,
             display,
@@ -10240,11 +10238,15 @@ pub fn sync_menu_popups(world: &mut World) {
                     menu_spacing.pie_nested_item_radius
                 };
                 let radius = desired_radius.min(available_radius);
+                let item_width = (item.label.chars().count() as f32 * menu_font_size * 0.56
+                    + menu_spacing.padding_x * 2.0)
+                    .max(row_height * 1.8)
+                    .min(menu_spacing.pie_item_max_width);
                 (
                     Rect {
-                        x: center[0] + angle.cos() * radius - width * 0.5,
+                        x: center[0] + angle.cos() * radius - item_width * 0.5,
                         y: center[1] + angle.sin() * radius - row_height * 0.5,
-                        width: width.min(menu_spacing.pie_item_max_width),
+                        width: item_width,
                         height: row_height,
                     },
                     owner_layout.z.saturating_add(120),
@@ -11714,6 +11716,12 @@ pub fn sync_data_table_views(world: &mut World) {
         let mut items = Vec::new();
         for (column_index, x) in visible_columns {
             let column = &table.columns[column_index];
+            let header_rect = Rect {
+                x,
+                y: header_y,
+                width: column.width,
+                height: column_header_height,
+            };
             let header = DataTableHeaderControl {
                 owner,
                 column: column_index,
@@ -11730,20 +11738,8 @@ pub fn sync_data_table_views(world: &mut World) {
                 key: DataTableItemKey::Header(column_index),
                 header: Some(header),
                 cell: None,
-                rect: Rect {
-                    x,
-                    y: header_y,
-                    width: column.width,
-                    height: column_header_height,
-                },
-                clip: clip
-                    .intersection(Rect {
-                        x: rect.x,
-                        y: header_y,
-                        width: rect.width,
-                        height: column_header_height,
-                    })
-                    .unwrap_or_default(),
+                rect: header_rect,
+                clip: clip.intersection(header_rect).unwrap_or_default(),
             });
         }
 
@@ -11775,6 +11771,12 @@ pub fn sync_data_table_views(world: &mut World) {
                 let Some(value) = row.cells.get(column_index) else {
                     continue;
                 };
+                let cell_rect = Rect {
+                    x,
+                    y,
+                    width: column.width,
+                    height: row_height,
+                };
                 let cell = DataTableCellControl {
                     owner,
                     row_id: row.id,
@@ -11793,13 +11795,8 @@ pub fn sync_data_table_views(world: &mut World) {
                     },
                     header: None,
                     cell: Some(cell),
-                    rect: Rect {
-                        x,
-                        y,
-                        width: column.width,
-                        height: row_height,
-                    },
-                    clip: body_clip,
+                    rect: cell_rect,
+                    clip: body_clip.intersection(cell_rect).unwrap_or_default(),
                 });
             }
         }
@@ -14696,6 +14693,40 @@ fn collect_widget_paint_full(
                             color: theme.surface,
                         },
                     ));
+                    let pie_parent_path = if menu.session.path.len() > 1 {
+                        menu.session.path[..menu.session.path.len() - 1].to_vec()
+                    } else {
+                        Vec::new()
+                    };
+                    let wedge_count = menu
+                        .tree
+                        .entries_at(&pie_parent_path)
+                        .unwrap_or_default()
+                        .iter()
+                        .filter(|entry| entry.enabled && !entry.separator)
+                        .count();
+                    let center = [popup.x + popup.width * 0.5, popup.y + popup.height * 0.5];
+                    let outer_radius = popup.width.min(popup.height) * 0.5;
+                    for wedge in 0..wedge_count {
+                        let angle = std::f32::consts::TAU * wedge as f32 / wedge_count as f32
+                            - std::f32::consts::FRAC_PI_2;
+                        camera_items.push(item(
+                            popup_clip,
+                            popup_z.saturating_add(1),
+                            Primitive::Line {
+                                from: center,
+                                to: [
+                                    center[0] + angle.cos() * outer_radius,
+                                    center[1] + angle.sin() * outer_radius,
+                                ],
+                                width: 1.0,
+                                color: with_opacity(
+                                    theme.color(ThemeColorToken::MenuBorder),
+                                    progress * 0.8,
+                                ),
+                            },
+                        ));
+                    }
                     let inset = theme
                         .spacing
                         .menu
@@ -14703,7 +14734,7 @@ fn collect_widget_paint_full(
                         .min(popup.width.min(popup.height) * 0.25);
                     camera_items.push(item(
                         popup_clip,
-                        popup_z.saturating_add(1),
+                        popup_z.saturating_add(2),
                         Primitive::Ellipse {
                             rect: ClipRect::from(Rect {
                                 x: popup.x + inset,
@@ -14713,6 +14744,38 @@ fn collect_widget_paint_full(
                             }),
                             color: theme.background,
                         },
+                    ));
+                    let center_label = menu
+                        .session
+                        .path
+                        .split_last()
+                        .and_then(|(index, parent)| {
+                            menu.tree
+                                .entries_at(parent)
+                                .and_then(|entries| entries.get(*index))
+                        })
+                        .map_or_else(|| menu.label.clone(), |entry| entry.label.clone())
+                        .to_uppercase();
+                    let text_width = center_label.chars().count() as f32 * theme.font_size * 0.56;
+                    let text_height = theme.font_size * theme.line_height;
+                    camera_items.push(item(
+                        popup_clip,
+                        popup_z.saturating_add(3),
+                        styled_text_primitive_for_entity(
+                            world,
+                            entity,
+                            popup_clip,
+                            TextPlacement {
+                                origin: [
+                                    center[0] - text_width * 0.5,
+                                    center[1] - text_height * 0.5,
+                                ],
+                                text: center_label,
+                            },
+                            with_opacity(theme.text, progress),
+                            theme,
+                            false,
+                        ),
                     ));
                 } else {
                     push_popup_shadow(
@@ -14834,6 +14897,20 @@ fn collect_widget_paint_full(
                         .as_ref()
                         .map_or_else(String::new, |shortcut| format!("  {shortcut}"))
                 };
+                let text = format!("{}{suffix}", menu_item.label);
+                let text_width = text.chars().count() as f32 * theme.font_size * 0.56;
+                let text_height = theme.font_size * theme.line_height;
+                let text_origin = if menu.display == MenuDisplay::Pie {
+                    [
+                        rect.x + (rect.width - text_width).max(0.0) * 0.5,
+                        rect.y + (rect.height - text_height).max(0.0) * 0.5,
+                    ]
+                } else {
+                    [
+                        rect.x + theme.spacing.menu.padding_x,
+                        rect.y + theme.spacing.menu.padding_y,
+                    ]
+                };
                 camera_items.push(item(
                     clip,
                     z.saturating_add(1),
@@ -14842,11 +14919,8 @@ fn collect_widget_paint_full(
                         entity,
                         clip,
                         TextPlacement {
-                            origin: [
-                                rect.x + theme.spacing.menu.padding_x,
-                                rect.y + theme.spacing.menu.padding_y,
-                            ],
-                            text: format!("{}{suffix}", menu_item.label),
+                            origin: text_origin,
+                            text,
                         },
                         with_opacity(
                             if !enabled || !menu_item.enabled {
@@ -16142,6 +16216,8 @@ fn paint_data_table_cell(
         theme.color(ThemeColorToken::DataTableActiveCellSurface)
     } else if cell.selected {
         theme.color(ThemeColorToken::DataTableSelectedCellSurface)
+    } else if cell.row_index % 2 == 1 {
+        theme.surface.mix(theme.background, 0.24)
     } else {
         theme.surface
     };
@@ -16179,8 +16255,18 @@ fn paint_data_table_cell(
             color: if cell.active {
                 theme.focus
             } else {
-                theme.border
+                theme.border.mix(theme.surface, 0.5)
             },
+        },
+    ));
+    output.push(item(
+        clip,
+        z.saturating_add(2),
+        Primitive::Line {
+            from: [rect.x + rect.width - 1.0, rect.y + 4.0],
+            to: [rect.x + rect.width - 1.0, rect.y + rect.height - 4.0],
+            width: 1.0,
+            color: theme.border.mix(theme.surface, 0.5),
         },
     ));
     if cell.active {
@@ -18159,7 +18245,7 @@ fn paint_color_ramp(paint: ColorRampPaint<'_>, output: &mut Vec<DrawItem>) {
                 ],
                 channel.label().to_owned(),
                 if state.active_channel == channel {
-                    theme.accent
+                    theme.text
                 } else {
                     theme.text_muted
                 },
@@ -19307,6 +19393,31 @@ mod tests {
                 .any(|item| matches!(item.primitive, Primitive::Line { .. }))
         );
         app.world_mut().entity_mut(entity).despawn();
+    }
+
+    #[test]
+    fn color_ramp_default_spacing_separates_details_channels_and_values() {
+        let theme = Theme::default();
+        let spacing = theme.spacing.color_ramp;
+        let rect = Rect::new(0.0, 0.0, 360.0, 220.0);
+        let track = color_ramp_track_rect(rect, spacing);
+        let handle_bottom = track.y
+            + track.height
+            + spacing.marker_handle_top_inset
+            + spacing.marker_handle_radius * 2.0;
+        let details_top = rect.y + spacing.details_y;
+        let details_bottom = details_top + theme.font_size * theme.line_height;
+        let first_channel = color_ramp_channel_rect(rect, 0, spacing);
+        let last_channel_bottom =
+            color_ramp_channel_rect(rect, 3, spacing).y + spacing.channel_height;
+        let value_label_x = rect.x + rect.width - spacing.channel_value_right_inset;
+        let editing_label_y = rect.y + rect.height - spacing.editing_bottom_inset;
+
+        assert!(details_top >= handle_bottom + 4.0);
+        assert!(first_channel.y >= details_bottom + 4.0);
+        assert!(first_channel.x + first_channel.width + 4.0 <= value_label_x);
+        assert!(editing_label_y >= last_channel_bottom + 8.0);
+        assert!(editing_label_y + theme.font_size * theme.line_height <= rect.y + rect.height);
     }
 
     #[test]
@@ -24221,7 +24332,8 @@ mod tests {
             })
             .unwrap();
         let root_item_rect = app.world().get::<UiLayoutResult>(root_item).unwrap().rect;
-        assert_eq!(root_item_rect.width, 110.0);
+        assert!(root_item_rect.width > 40.0 && root_item_rect.width <= 110.0);
+        assert!((root_item_rect.x + root_item_rect.width * 0.5 - center[0]).abs() < 0.01);
         assert!((root_item_rect.y + root_item_rect.height * 0.5 - (center[1] - 66.0)).abs() < 0.01);
         assert!(app.world().get::<UiVisible>(root_item).unwrap().0);
 
@@ -27697,10 +27809,16 @@ mod tests {
             &item.primitive,
             Primitive::TextWrapped { text, .. } if text == "Name" || text == "Type"
         )));
-        assert!(items.iter().any(|item| matches!(
-            &item.primitive,
-            Primitive::TextWrapped { text, .. } if text == "Object 001"
-        )));
+        let first_cell_text = items
+            .iter()
+            .find(|item| {
+                matches!(
+                    &item.primitive,
+                    Primitive::TextWrapped { text, .. } if text == "Object 001"
+                )
+            })
+            .unwrap();
+        assert!(first_cell_text.clip.width <= 104.0);
         assert!(items.iter().all(|item| item.z >= 12));
         assert!(items.iter().all(|item| item.clip.x >= 20.0));
         assert!(

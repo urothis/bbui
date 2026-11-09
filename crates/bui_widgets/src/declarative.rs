@@ -6,7 +6,7 @@ use bui_core::{
     UiVisible, set_parent,
 };
 use bui_layout::{
-    Rect, UiFlexDirection, UiLayoutMode, UiLayoutNode, UiLength, UiScroll, UiWheelHandled,
+    Rect, UiEdges, UiFlexDirection, UiLayoutMode, UiLayoutNode, UiLength, UiScroll, UiWheelHandled,
 };
 use bui_style::{Rgba, UiInlineStyle, UiRole, UiStyleProperty, UiStyleValue};
 use bui_text::{TextBuffer, UiExternalClipboard, UiMultiline, UiTextLayout};
@@ -984,6 +984,12 @@ fn layout_for(spec: &WidgetSpec) -> UiLayoutNode {
         WidgetSpec::Panel { .. } => UiLayoutNode {
             mode: UiLayoutMode::Column,
             gap: 4.0,
+            padding: UiEdges {
+                left: 8.0,
+                top: 28.0,
+                right: 8.0,
+                bottom: 8.0,
+            },
             ..UiLayoutNode::default()
         },
         WidgetSpec::RadioGroup { group, .. } => UiLayoutNode::leaf(
@@ -1002,7 +1008,7 @@ fn layout_for(spec: &WidgetSpec) -> UiLayoutNode {
             UiLayoutNode::leaf(UiLength::Px(480.0), UiLength::Px(320.0))
         }
         WidgetSpec::ColorRamp { .. } => {
-            UiLayoutNode::leaf(UiLength::Px(360.0), UiLength::Px(194.0))
+            UiLayoutNode::leaf(UiLength::Px(360.0), UiLength::Px(220.0))
         }
         WidgetSpec::HsvColor { .. } => UiLayoutNode::leaf(UiLength::Px(448.0), UiLength::Px(236.0)),
         WidgetSpec::CurveEditor { .. } => {
@@ -1961,6 +1967,10 @@ mod tests {
         let entity = WidgetTree::new(ramp).spawn(&mut world, None).unwrap();
         assert!(world.get::<UiFocusable>(entity).is_some());
         assert_eq!(world.get::<Label>(entity).unwrap().text, "Gradient");
+        assert_eq!(
+            world.get::<UiLayoutNode>(entity).unwrap().size.height,
+            UiLength::Px(220.0)
+        );
         assert_eq!(world.get::<ColorRamp>(entity).unwrap().stops.len(), 2);
         assert_eq!(
             world

@@ -6,7 +6,7 @@ use bevy_ecs::prelude::*;
 
 use bui_core::{
     UiChildren, UiDirty, UiDirtyDomain, UiHitBox, UiKeyCode, UiNode, UiParent, UiRoutedEvent,
-    UiRoutedEvents, UiSystems, UiWheelUnit, UiZIndex,
+    UiRoutedEvents, UiSystems, UiVisible, UiWheelUnit, UiZIndex,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -371,6 +371,7 @@ struct UiLayoutCache {
     removed_z_indices: RemovedComponentReader<UiZIndex>,
     removed_scrolls: RemovedComponentReader<UiScroll>,
     removed_flex_items: RemovedComponentReader<UiFlexItem>,
+    removed_visibles: RemovedComponentReader<UiVisible>,
     removed_roots: RemovedComponentReader<UiLayoutRoot>,
 }
 
@@ -385,6 +386,7 @@ struct LayoutInputs {
     z_index: Option<UiZIndex>,
     scroll: Option<UiScroll>,
     flex_item: Option<UiFlexItem>,
+    visible: bool,
 }
 
 #[derive(Clone)]
@@ -731,6 +733,7 @@ pub fn compute_layout(world: &mut World) {
                 previous.is_node != current.is_node
                     || previous.parent != current.parent
                     || previous.children != current.children
+                    || previous.visible != current.visible
             }
             _ => true,
         };
@@ -1035,6 +1038,7 @@ fn collect_layout_changes(world: &mut World) -> Vec<LayoutInputChange> {
             Changed<UiZIndex>,
             Changed<UiScroll>,
             Changed<UiFlexItem>,
+            Changed<UiVisible>,
         )>>();
         query.iter(world).collect()
     };
@@ -1065,6 +1069,10 @@ fn collect_layout_changes(world: &mut World) -> Vec<LayoutInputChange> {
     removed.extend(read_removed::<UiFlexItem>(
         world,
         &mut cache.removed_flex_items,
+    ));
+    removed.extend(read_removed::<UiVisible>(
+        world,
+        &mut cache.removed_visibles,
     ));
     let mut dirty_entities = Vec::new();
     let mut changes = Vec::new();
@@ -1109,6 +1117,9 @@ fn layout_inputs(world: &World, entity: Entity) -> LayoutInputs {
         z_index: world.get::<UiZIndex>(entity).copied(),
         scroll: world.get::<UiScroll>(entity).copied(),
         flex_item: world.get::<UiFlexItem>(entity).copied(),
+        visible: world
+            .get::<UiVisible>(entity)
+            .is_none_or(|visible| visible.0),
     }
 }
 
@@ -1317,10 +1328,15 @@ impl LayoutPass {
         let z = style
             .z_index
             .saturating_add(world.get::<UiZIndex>(entity).map_or(0, |z| z.0));
-        let children = world
+        let mut children = world
             .get::<bui_core::UiChildren>(entity)
             .map(|children| children.0.clone())
             .unwrap_or_default();
+        children.retain(|child| {
+            world
+                .get::<UiVisible>(*child)
+                .is_none_or(|visible| visible.0)
+        });
         let content_size = measure_content_with_available(
             world,
             entity,
@@ -1621,7 +1637,32 @@ fn measured_node_with_available_uncached(
         return constrain_size([width, height], style);
     }
     let mut size = if let Some(children) = world.get::<bui_core::UiChildren>(entity) {
-        measure_content_with_available(world, entity, style, &children.0, available, measurements)
+        if children.0.iter().all(|child| {
+            world
+                .get::<UiVisible>(*child)
+                .is_none_or(|visible| visible.0)
+        }) {
+            measure_content_with_available(
+                world,
+                entity,
+                style,
+                &children.0,
+                available,
+                measurements,
+            )
+        } else {
+            let visible = children
+                .0
+                .iter()
+                .copied()
+                .filter(|child| {
+                    world
+                        .get::<UiVisible>(*child)
+                        .is_none_or(|visible| visible.0)
+                })
+                .collect::<Vec<_>>();
+            measure_content_with_available(world, entity, style, &visible, available, measurements)
+        }
     } else {
         measure_content_with_available(world, entity, style, &[], available, measurements)
     };
@@ -2508,6 +2549,61 @@ mod tests {
         {
             observation.widget_hit_box = Some(*hit_box);
         }
+    }
+
+    #[test]
+    fn hidden_child_reflows_siblings_and_releases_stale_hit_geometry() {
+        let mut app = App::new();
+        app.add_plugins((CorePlugin, LayoutPlugin));
+        let window = app.world_mut().spawn_empty().id();
+        let root = app
+            .world_mut()
+            .spawn((
+                UiNode,
+                UiLayoutNode::column(0.0),
+                UiLayoutRoot::new(window, Rect::new(0.0, 0.0, 200.0, 120.0), 1.0),
+            ))
+            .id();
+        let first = app
+            .world_mut()
+            .spawn((
+                UiNode,
+                UiVisible(true),
+                UiLayoutNode::leaf(UiLength::Px(100.0), UiLength::Px(24.0)),
+            ))
+            .id();
+        let second = app
+            .world_mut()
+            .spawn((
+                UiNode,
+                UiVisible(true),
+                UiLayoutNode::leaf(UiLength::Px(100.0), UiLength::Px(24.0)),
+            ))
+            .id();
+        set_parent(app.world_mut(), first, root).unwrap();
+        set_parent(app.world_mut(), second, root).unwrap();
+        app.update();
+        assert_eq!(
+            app.world().get::<UiLayoutResult>(second).unwrap().rect.y,
+            24.0
+        );
+
+        app.world_mut().get_mut::<UiVisible>(first).unwrap().0 = false;
+        app.update();
+        assert_eq!(
+            app.world().get::<UiLayoutResult>(second).unwrap().rect.y,
+            0.0
+        );
+        assert!(app.world().get::<UiLayoutResult>(first).is_none());
+        assert!(app.world().get::<UiHitBox>(first).is_none());
+
+        app.world_mut().get_mut::<UiVisible>(first).unwrap().0 = true;
+        app.update();
+        assert_eq!(
+            app.world().get::<UiLayoutResult>(second).unwrap().rect.y,
+            24.0
+        );
+        assert!(app.world().get::<UiHitBox>(first).is_some());
     }
 
     fn root(world: &mut World, viewport: Rect) -> (Entity, Entity) {

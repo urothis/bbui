@@ -6,11 +6,25 @@
 use bevy::prelude::*;
 use bevy::window::{PrimaryWindow, WindowResolution};
 use bui::prelude::*;
-use bui::widgets::{MenuEntry, WidgetEventQueue};
+use bui::widgets::{Label, MenuControl, MenuEntry, WidgetEvent, WidgetEventQueue};
 use bui_layout::{Rect, UiEdges};
 use bui_render::{ClipRect, Primitive, UiPaint};
 
+#[derive(Resource)]
+struct MenuExampleStatus(Entity);
+
 fn setup(world: &mut World) {
+    {
+        let mut theme = world.resource_mut::<Theme>();
+        let pie = &mut theme.spacing.menu;
+        pie.pie_popup_diameter = 256.0;
+        pie.pie_inner_inset = 56.0;
+        pie.pie_inner_radius = 17.0;
+        pie.pie_outer_radius = 111.0;
+        pie.pie_outer_item_radius = 78.0;
+        pie.pie_nested_item_radius = 46.0;
+        pie.pie_item_max_width = 100.0;
+    }
     let background = world.resource::<Theme>().background;
     world.spawn(Camera2d);
     let window = world
@@ -21,11 +35,11 @@ fn setup(world: &mut World) {
         .spawn((
             UiNode,
             UiLayoutNode {
-                padding: UiEdges::all(20.0),
+                padding: UiEdges::all(32.0),
                 gap: 12.0,
                 ..UiLayoutNode::default()
             },
-            UiLayoutRoot::new(window, Rect::new(0.0, 0.0, 900.0, 520.0), 1.0),
+            UiLayoutRoot::new(window, Rect::new(0.0, 0.0, 900.0, 360.0), 1.0),
             UiPaint(Primitive::RoundedRect {
                 rect: ClipRect {
                     x: 0.0,
@@ -79,6 +93,8 @@ fn setup(world: &mut World) {
 
     let tree = bui! {
         column {
+            label("MENUS & COMMAND SURFACES"),
+            label("Explore navigation, contextual actions, and radial transforms."),
             menu_bar {
                 menu("File", file_entries.clone()),
                 menu("Edit", edit_entries.clone()),
@@ -95,17 +111,48 @@ fn setup(world: &mut World) {
             tooltip("Apply changes to the current scene") {
                 button("Apply"),
             },
-            label("Menu keys: arrows navigate, Enter picks, Escape closes; type to fuzzy-search."),
-            label("Right-click Object Actions for its context popup; use the pie control for radial selection."),
+            label("Click Object Actions to open its menu, or right-click to place it at the pointer."),
+            label("Use the Transform Pie by moving into a segment, then click a command."),
+            label("Choose a command to see the result here."),
         }
     };
     tree.spawn(world, Some(root))
         .expect("valid menu example widget tree");
+    let status = {
+        let mut labels = world.query::<(Entity, &Label)>();
+        labels
+            .iter(world)
+            .find(|(_, label)| label.text == "Choose a command to see the result here.")
+            .map(|(entity, _)| entity)
+            .expect("menu example status label")
+    };
+    world.insert_resource(MenuExampleStatus(status));
 }
 
-fn log_widget_events(mut events: ResMut<WidgetEventQueue>) {
+fn log_widget_events(
+    mut events: ResMut<WidgetEventQueue>,
+    mut labels: Query<&mut Label>,
+    menus: Query<&MenuControl>,
+    status: Res<MenuExampleStatus>,
+) {
     for event in events.take() {
         info!("widget event: {event:?}");
+        if let WidgetEvent::MenuCommand { target, command_id } = &event {
+            let command_label = menus
+                .get(*target)
+                .ok()
+                .and_then(|menu| {
+                    menu.tree
+                        .flattened()
+                        .into_iter()
+                        .find(|(_, _, entry)| entry.id == *command_id)
+                        .map(|(_, _, entry)| entry.label.clone())
+                })
+                .unwrap_or_else(|| command_id.clone());
+            if let Ok(mut label) = labels.get_mut(status.0) {
+                label.text = format!("Last action: {command_label}");
+            }
+        }
     }
 }
 
@@ -114,7 +161,7 @@ fn main() {
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "BUI menus, popovers, pie menus, and tooltips".into(),
-                resolution: WindowResolution::new(900, 520),
+                resolution: WindowResolution::new(900, 360),
                 ..default()
             }),
             ..default()

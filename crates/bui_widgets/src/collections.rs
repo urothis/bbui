@@ -792,20 +792,23 @@ impl DataTable {
         {
             return false;
         }
+        let numeric_column = !self.rows.is_empty()
+            && self.rows.iter().all(|row| {
+                row.cells
+                    .get(column)
+                    .and_then(|value| value.trim().parse::<f64>().ok())
+                    .is_some_and(f64::is_finite)
+            });
         self.rows.sort_by(|a, b| {
-            let left = a
-                .cells
-                .get(column)
-                .map(String::as_str)
-                .unwrap_or("")
-                .to_lowercase();
-            let right = b
-                .cells
-                .get(column)
-                .map(String::as_str)
-                .unwrap_or("")
-                .to_lowercase();
-            let order = left.cmp(&right);
+            let left = a.cells.get(column).map(String::as_str).unwrap_or("");
+            let right = b.cells.get(column).map(String::as_str).unwrap_or("");
+            let order = if numeric_column {
+                let left = left.trim().parse::<f64>().unwrap_or_default();
+                let right = right.trim().parse::<f64>().unwrap_or_default();
+                left.total_cmp(&right)
+            } else {
+                left.to_lowercase().cmp(&right.to_lowercase())
+            };
             let order = if ascending { order } else { order.reverse() };
             order.then_with(|| a.id.cmp(&b.id))
         });
@@ -1234,6 +1237,34 @@ mod tests {
         );
         let json = table.to_json().unwrap();
         assert_eq!(DataTable::from_json(&json).unwrap(), table);
+    }
+
+    #[test]
+    fn data_table_sorts_numeric_columns_by_value() {
+        let mut table = DataTable {
+            columns: vec![TableColumn::new("Vertices", 100.0)],
+            rows: vec![
+                TableRow {
+                    id: 1,
+                    cells: vec!["100".into()],
+                },
+                TableRow {
+                    id: 2,
+                    cells: vec!["20".into()],
+                },
+                TableRow {
+                    id: 3,
+                    cells: vec!["20".into()],
+                },
+            ],
+            ..DataTable::default()
+        };
+
+        assert!(table.sort_by(0, true));
+        assert_eq!(
+            table.rows.iter().map(|row| row.id).collect::<Vec<_>>(),
+            [2, 3, 1]
+        );
     }
 
     #[test]
