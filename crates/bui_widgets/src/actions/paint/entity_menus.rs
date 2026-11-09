@@ -383,6 +383,10 @@ pub(super) fn paint_buttons_and_menus(paint: &mut PaintEntityContext<'_>) -> boo
         let flat_text_width = flat_label
             .as_ref()
             .map(|label| measured_text_width(world, entity, label, theme));
+        // Center the line box, then compensate for glyphs sitting high within it.
+        let flat_text_y = rect.y
+            + (rect.height - theme.font_size * theme.line_height).max(0.0) * 0.5
+            + theme.font_size * 0.1;
         camera_items.push(item(
             clip,
             z.saturating_add(1),
@@ -394,7 +398,7 @@ pub(super) fn paint_buttons_and_menus(paint: &mut PaintEntityContext<'_>) -> boo
                     TextPlacement {
                         origin: [
                             rect.x + (rect.width - flat_text_width.unwrap_or(0.0)).max(0.0) * 0.5,
-                            rect.y + 1.0,
+                            flat_text_y,
                         ],
                         text: flat_label.unwrap_or_default(),
                     },
