@@ -1,0 +1,99 @@
+use bevy::{
+    asset::AssetPlugin,
+    clipboard::ClipboardPlugin,
+    input::InputPlugin,
+    prelude::{App, ImagePlugin, MinimalPlugins, Window},
+    window::WindowPlugin,
+};
+use bui::BuiPlugin;
+use bui_core::UiChildren;
+use bui_layout::{Rect, UiLayoutRoot};
+use bui_render::{ClipRect, DisplayList, Primitive, UiPaint};
+use bui_style::Theme;
+use bui_widgets::{Checkbox, WidgetNode, WidgetTree};
+use criterion::{BenchmarkId, Criterion, Throughput};
+use std::hint::black_box;
+
+struct Scene {
+    app: App,
+    changed_control: bevy::ecs::entity::Entity,
+}
+
+fn scene(controls: usize) -> Scene {
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins)
+        .add_plugins(AssetPlugin::default())
+        .add_plugins(WindowPlugin {
+            primary_window: None,
+            ..Default::default()
+        })
+        .add_plugins((ImagePlugin::default(), InputPlugin, ClipboardPlugin))
+        .add_plugins(BuiPlugin);
+    let mut window = Window::default();
+    window.resolution.set(1280.0, 720.0);
+    let window = app.world_mut().spawn(window).id();
+    let tree =
+        WidgetTree::new(WidgetNode::column((0..controls).map(|index| {
+            WidgetNode::checkbox(format!("Control {index:04}"), false)
+        })));
+    let root = tree
+        .spawn(app.world_mut(), None)
+        .expect("valid integrated benchmark widget tree");
+    app.world_mut().entity_mut(root).insert((
+        UiLayoutRoot::new(window, Rect::new(0.0, 0.0, 1280.0, 720.0), 1.0),
+        UiPaint(Primitive::RoundedRect {
+            rect: ClipRect {
+                x: 0.0,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+            },
+            radius: 0.0,
+            color: Theme::default().background,
+        }),
+    ));
+    let changed_control = app
+        .world()
+        .get::<UiChildren>(root)
+        .expect("root has controls")
+        .0[0];
+    for _ in 0..3 {
+        app.update();
+    }
+    Scene {
+        app,
+        changed_control,
+    }
+}
+
+pub fn bench(c: &mut Criterion) {
+    let mut group = c.benchmark_group("bui_plugin/headless_cpu_update");
+    for controls in [200, 1_000] {
+        group.throughput(Throughput::Elements(controls as u64));
+        let mut idle = scene(controls);
+        group.bench_with_input(BenchmarkId::new("idle", controls), &controls, |b, _| {
+            b.iter(|| {
+                idle.app.update();
+                black_box(idle.app.world().resource::<DisplayList>().items().len());
+            });
+        });
+        let mut dirty = scene(controls);
+        group.bench_with_input(
+            BenchmarkId::new("toggle_checkbox", controls),
+            &controls,
+            |b, _| {
+                b.iter(|| {
+                    dirty
+                        .app
+                        .world_mut()
+                        .get_mut::<Checkbox>(dirty.changed_control)
+                        .expect("checkbox is mounted")
+                        .toggle();
+                    dirty.app.update();
+                    black_box(dirty.app.world().resource::<DisplayList>().items().len());
+                });
+            },
+        );
+    }
+    group.finish();
+}

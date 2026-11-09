@@ -1,4 +1,54 @@
-# Renderer CPU Measurements
+# Performance benchmarking
+
+The release-mode Criterion suite is the repeatable CPU comparison harness for the workspace:
+
+```sh
+cargo bench -p bui --bench performance --locked
+cargo bench -p bui --bench performance --locked -- --save-baseline main
+# After a code change, on the same machine:
+cargo bench -p bui --bench performance --locked -- --baseline main
+```
+
+Open `target/criterion/report/index.html` for distributions and per-workload comparisons. Filter
+to one path with `cargo bench -p bui --bench performance --locked -- 'widgets/full_update'`.
+
+| Path | Timed cases |
+| --- | --- |
+| `bui_core`, `bui_layout` | Transaction undo/redo; idle and one-change layout at 1k/10k nodes |
+| `bui_style`, `bui_widgets` | 1k/10k checkboxes; virtual list/table; 1k-node graph pan; active style animation |
+| `bui_text` | Bundled-font shaping; expression evaluation; text edit/undo/redo |
+| `bui_render` | First, idle, and one-change synchronization for rectangles and image grids |
+| `bui_media` | Full PNG/SVG and PNG/GIF/VP8/H.264 poster decoding |
+| `bui` | Public plugin headless CPU updates with 200/1k mounted controls |
+
+Scene construction and fixture encoding are outside timed loops; each changed case includes the
+edit and its `App::update`. Throughput is input elements or compressed bytes,
+not drawn pixels or an FPS estimate. Run comparisons on the same machine with the same feature
+set and build profile. Criterion measures CPU wall time; it does not report allocations, live
+heap, GPU time, or frame pacing. The standalone harnesses below retain allocator/heap counters,
+and the offscreen GPU stress harness retains real GPU timestamp queries.
+Proc-macro expansion (`bui_macros`) and filesystem I/O are outside this runtime suite.
+
+Initial release baseline on the local aarch64 development machine (2026-11-09, Rust 1.99,
+30 samples per case; mean estimates rounded):
+
+| Workload | Mean CPU time |
+| --- | ---: |
+| Layout idle / one intrinsic change, 10k nodes | 25.9 µs / 3.31 ms |
+| Renderer sync first / idle / one changed rectangle, 10k items | 12.73 ms / 4.60 µs / 1.18 ms |
+| Full widget update idle / one changed checkbox, 10k controls | 2.84 ms / 3.28 ms |
+| Full widget update idle / graph pan, 1k nodes and 3,984 links | 122 µs / 4.12 ms |
+| Public `BuiPlugin` update idle / one toggled checkbox, 1k controls | 1.31 ms / 2.72 ms |
+| Wrapped paragraph shaping / 512 × 512 PNG full decode | 183 µs / 1.80 ms |
+
+These are local comparison points, not portable performance targets. The graph pan stays within
+the viewport, so each changed iteration paints the same graph-sized workload. The complete
+confidence intervals and every case are in the generated Criterion report.
+
+The numbers below were collected by earlier single-run harnesses on 2026-11-08. Use them as
+historical context, not as statistical baselines for the new Criterion suite.
+
+## Renderer CPU Measurements
 
 Run `cargo run -p bui_render --example render_sync_bench --release --locked` to measure Bevy UI
 entity synchronization for large draw lists. The harness records CPU elapsed time, allocation count
@@ -36,11 +86,11 @@ These scenes and the other editor readbacks check sampled pixels with defined co
 rather than storing golden images. GPU timestamps are measured separately by the offscreen stress
 harness; the visual coverage contract is in the [feature inventory](feature-inventory.md).
 
-# Canvas Viewport Baseline
+## Canvas Viewport Baseline
 
 Run `cargo run --release -p bui_widgets --example canvas_stress --locked` to measure canvas painting and hit testing with 100,000 rectangles, 100 of them inside a 100 × 100 logical-pixel viewport. On the development container (2026-11-08, release build), 100 warm frames averaged **0.307 ms** for painting and **0.105 ms** for hit testing. A second pass counted **zero allocations and zero allocated bytes** across 100 paint and hit-test frames. Painting produced 101 draw items per frame (100 visible rectangles plus the background) and reused a 26,624-byte draw buffer. These CPU timings exclude Bevy render synchronization and GPU work. The accompanying regression test checks that 10,000 offscreen selected objects produce no draw items.
 
-# Layout Dirty-Propagation Baseline
+## Layout Dirty-Propagation Baseline
 
 Run `cargo run --release -p bui_layout --example layout_idle_bench` to compare idle layout updates against one intrinsic-size change per update. The harness creates one root with 2,000 child nodes, warms up one initial layout, then measures 120 idle frames and 120 frames that each change one child's intrinsic width.
 
@@ -53,7 +103,7 @@ Measurements on the development container (2026-11-08, release build):
 
 The changed workload assigns geometry to all 2,001 nodes in the affected root per update, keeping descendant rectangles and clips correct after ancestor or measurement changes. Idle frames skip that root traversal. The change collector still checks ECS change ticks for candidate layout entities; these figures measure the current Bevy `Changed`-query implementation on this machine.
 
-# Responsive Layout Stress Measurements
+## Responsive Layout Stress Measurements
 
 Run `cargo run --release -p bui_layout --example layout_stress_bench --offline` to measure Flex, ResponsiveGrid, and six-level nested-scroll roots with 1,000 and 10,000 total layout nodes. Each scene is warmed for two updates, then measured for 20 idle frames and 20 frames with one input change per frame (an intrinsic width for Flex/Grid, or the innermost scroll offset). Geometry work is read from `UiLayoutStats`. CPU time is measured in a pass without allocator instrumentation; allocations are counted in a second pass. Allocation count and bytes include the full Bevy `App::update` path, not only `compute_layout`, and report total requested allocation traffic rather than peak live heap.
 
@@ -72,7 +122,7 @@ The measured 10k dirty baseline before the sizing changes was 3.42 ms / 3,316.9 
 
 Idle frames visit zero layout nodes and leave all six scenes at 127 small App-level allocations and 6.9 KB/frame. Idle time grows from about 6.5–6.9 µs at 1k to 25–28 µs at 10k. The change collector still uses Bevy's `Changed` filter, which checks candidate entities even when no value changed; therefore idle detection has entity-count cost even though it skips geometry traversal. A dirty input conservatively recomputes its complete root so descendant hit boxes, scroll clips, and positions remain synchronized. These figures do not include scene creation, GPU work, or allocation live-heap usage.
 
-# Widget Paint Stress Baseline
+## Widget Paint Stress Baseline
 
 Run `cargo run --release -p bui_widgets --example widget_stress_bench --locked` to measure a
 responsive-grid scene containing 1,000 or 10,000 checkboxes. The harness warms the Bevy app and
@@ -136,7 +186,7 @@ GPU submission and scene construction are not included. Group timings are direct
 while whole-app measurements use the scheduled `App::update` path. Measurements are local
 single-run data, not cross-machine performance targets.
 
-# Virtualized Model Stress Measurements
+## Virtualized Model Stress Measurements
 
 Run `cargo run --release -p bui_widgets --example widget_model_stress_bench --locked` to exercise
 large list, table, graph, and animated-style models through a warmed BUI app. The list has 10,000
@@ -164,7 +214,7 @@ update measured 1.02 ms, and a panned graph update measured 1.51 ms. The list an
 remain useful controls for comparing unrelated widget paths. These numbers measure app updates;
 they do not include GPU submission or driver memory.
 
-# Offscreen GPU Stress Measurements
+## Offscreen GPU Stress Measurements
 
 Run `cargo run --release -p bui --example render_gpu_stress_bench --locked` to render 10,000
 rounded rectangles, 4,096 images, and a graph-like scene of 1,000 node bodies plus 4,000 Bezier

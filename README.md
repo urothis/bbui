@@ -52,6 +52,9 @@ cargo run -p bui_render --example world_surface
 cargo run -p bui_media --example media_playback
 cargo run -p bui_render --example render_sync_bench --release --locked
 cargo run -p bui_widgets --example canvas_stress --release --locked
+
+# Statistical CPU benchmarks and HTML report
+cargo bench -p bui --bench performance --locked
 ```
 
 The project intentionally contains no C port, software rasterizer, or other-language bindings. See the feature inventory for the intended full implementation and its completion rule.
