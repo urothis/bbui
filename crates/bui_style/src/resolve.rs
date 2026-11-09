@@ -195,6 +195,13 @@ pub(super) fn role_style_values(
             values.insert(Background, UiStyleValue::Color(theme.background));
             values.insert(CornerRadius, UiStyleValue::Scalar(0.0));
         }
+        "properties-flat-menu" => {
+            values.insert(
+                Background,
+                UiStyleValue::Color(theme.background.mix(Rgba(0.0, 0.0, 0.0, 1.0), 0.5)),
+            );
+            values.insert(CornerRadius, UiStyleValue::Scalar(0.0));
+        }
         "box" => {
             values.insert(Background, UiStyleValue::Color(theme.surface));
             values.insert(BorderColor, UiStyleValue::Color(theme.border));

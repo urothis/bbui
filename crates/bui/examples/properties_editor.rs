@@ -125,8 +125,9 @@ fn setup(world: &mut World) {
         let mut theme = world.resource_mut::<Theme>();
         theme.font_size = 11.5;
         theme.corner_radius = 3.0;
-        theme.background = Rgba(0.12, 0.12, 0.12, 1.0);
-        theme.surface = Rgba(0.22, 0.22, 0.22, 1.0);
+        theme.background = Rgba(48.0 / 255.0, 48.0 / 255.0, 48.0 / 255.0, 1.0);
+        theme.surface = Rgba(61.0 / 255.0, 61.0 / 255.0, 61.0 / 255.0, 1.0);
+        theme.surface_hover = Rgba(84.0 / 255.0, 84.0 / 255.0, 84.0 / 255.0, 1.0);
         theme.spacing.control.padding_x = 6.0;
         theme.spacing.control.padding_y = 2.0;
         theme.spacing.control.checkbox_label_gap = 4.0;
@@ -176,7 +177,7 @@ fn setup(world: &mut World) {
                 MenuEntry::command("save", "Save Scene"),
             ],
         )
-        .with_role("flat-menu")
+        .with_role("properties-flat-menu")
         .with_width(UiLength::Px(43.0))
         .with_height(UiLength::Px(20.0)),
         WidgetNode::menu(
@@ -186,7 +187,7 @@ fn setup(world: &mut World) {
                 MenuEntry::command("redo", "Redo"),
             ],
         )
-        .with_role("flat-menu")
+        .with_role("properties-flat-menu")
         .with_width(UiLength::Px(43.0))
         .with_height(UiLength::Px(20.0)),
         WidgetNode::menu(
@@ -196,11 +197,11 @@ fn setup(world: &mut World) {
                 MenuEntry::command("animation", "Render Animation"),
             ],
         )
-        .with_role("flat-menu")
+        .with_role("properties-flat-menu")
         .with_width(UiLength::Px(60.0))
         .with_height(UiLength::Px(20.0)),
         WidgetNode::menu("Help", [MenuEntry::command("about", "About BUI")])
-            .with_role("flat-menu")
+            .with_role("properties-flat-menu")
             .with_width(UiLength::Px(45.0))
             .with_height(UiLength::Px(20.0)),
         WidgetNode::label("")
@@ -219,10 +220,11 @@ fn setup(world: &mut World) {
                 MenuEntry::command("find-display", "Viewport Display"),
             ],
         )
-        .with_role("flat-menu")
+        .with_role("properties-flat-menu")
         .with_width(UiLength::Px(25.0))
         .with_height(UiLength::Px(20.0)),
     ])
+    .with_role("properties-menu-bar")
     .with_gap(0.0)
     .with_padding(UiEdges::all(4.0))
     .with_width(UiLength::Fill(1.0))
@@ -363,6 +365,7 @@ fn setup(world: &mut World) {
                 .with_key("object-unlink")
                 .with_width(UiLength::Px(20.0)),
         ])
+        .with_role("properties-tab-rail")
         .with_gap(1.0)
         .with_height(UiLength::Px(21.0)),
         transform,
@@ -423,6 +426,7 @@ fn setup(world: &mut World) {
                 WidgetNode::overlay([
                     WidgetNode::progress(0.25)
                         .with_key("render-progress")
+                        .with_role("properties-progress")
                         .with_width(UiLength::Fill(1.0))
                         .with_height(UiLength::Px(18.0)),
                     WidgetNode::label("Rendering 25%")

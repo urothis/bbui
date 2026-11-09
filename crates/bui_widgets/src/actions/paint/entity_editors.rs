@@ -112,7 +112,7 @@ pub(super) fn paint_editor_widgets(paint: &mut PaintEntityContext<'_>) -> bool {
                     color: if checkbox.is_checked() {
                         theme.accent
                     } else {
-                        base_theme.surface_pressed
+                        base_theme.surface_hover
                     },
                 },
             ));

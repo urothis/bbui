@@ -115,10 +115,12 @@ pub(in crate::actions) fn collect_widget_paint_full(
         let Some(layout) = world.get::<UiLayoutResult>(entity).copied() else {
             continue;
         };
-        let is_box = world
-            .get::<UiRole>(entity)
-            .is_some_and(|role| role.0 == "box");
+        let role = world.get::<UiRole>(entity).map(|role| role.0.as_str());
+        let is_box = role == Some("box");
+        let properties_frame =
+            role.is_some_and(|role| matches!(role, "properties-menu-bar" | "properties-tab-rail"));
         if !is_box
+            && !properties_frame
             && world.get::<Checkbox>(entity).is_none()
             && world.get::<Button>(entity).is_none()
             && world.get::<IconButton>(entity).is_none()

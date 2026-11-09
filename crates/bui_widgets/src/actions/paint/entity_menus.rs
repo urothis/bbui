@@ -82,9 +82,9 @@ pub(super) fn paint_buttons_and_menus(paint: &mut PaintEntityContext<'_>) -> boo
                 },
                 color: if enabled {
                     if side_tab_active {
-                        base_theme.surface
-                    } else if side_tab {
                         base_theme.background
+                    } else if side_tab || header_play {
+                        base_theme.background.mix(Rgba(0.0, 0.0, 0.0, 1.0), 0.5)
                     } else if properties_rail {
                         theme.background
                     } else {
@@ -159,7 +159,7 @@ pub(super) fn paint_buttons_and_menus(paint: &mut PaintEntityContext<'_>) -> boo
     if let Some(menu) = world.get::<MenuControl>(entity) {
         let properties_menu = world
             .get::<UiRole>(entity)
-            .is_some_and(|role| role.0 == "flat-menu");
+            .is_some_and(|role| matches!(role.0.as_str(), "flat-menu" | "properties-flat-menu"));
         let background = if menu.session.open {
             theme.color(ThemeColorToken::MenuOpenSurface)
         } else if properties_menu {

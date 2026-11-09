@@ -11,6 +11,24 @@ pub(super) fn paint_misc_controls(paint: &mut PaintEntityContext<'_>) -> bool {
     let base_theme = paint.base_theme;
     let camera_items = &mut *paint.output;
 
+    if world.get::<UiRole>(entity).is_some_and(|role| {
+        matches!(
+            role.0.as_str(),
+            "properties-menu-bar" | "properties-tab-rail"
+        )
+    }) {
+        camera_items.push(item(
+            clip,
+            z,
+            Primitive::RoundedRect {
+                rect: ClipRect::from(rect),
+                radius: 0.0,
+                color: base_theme.background.mix(Rgba(0.0, 0.0, 0.0, 1.0), 0.5),
+            },
+        ));
+        return true;
+    }
+
     if let Some(option) = world.get::<DropdownOptionControl>(entity) {
         let color = if !option.enabled {
             theme.color(ThemeColorToken::MenuDisabledSurface)
@@ -224,7 +242,7 @@ pub(super) fn paint_misc_controls(paint: &mut PaintEntityContext<'_>) -> bool {
                 rect: ClipRect::from(panel_rect),
                 radius: theme.corner_radius,
                 color: if sub_panel {
-                    theme.surface.mix(theme.background, 0.30)
+                    base_theme.surface.mix(base_theme.background, 0.615)
                 } else {
                     theme.surface
                 },
@@ -240,7 +258,7 @@ pub(super) fn paint_misc_controls(paint: &mut PaintEntityContext<'_>) -> bool {
                         ..rect
                     }),
                     radius: 0.0,
-                    color: theme.surface,
+                    color: base_theme.surface,
                 },
             ));
         }
@@ -339,13 +357,20 @@ pub(super) fn paint_misc_controls(paint: &mut PaintEntityContext<'_>) -> bool {
         return true;
     }
     if let Some(progress) = world.get::<Progress>(entity) {
+        let properties_progress = world
+            .get::<UiRole>(entity)
+            .is_some_and(|role| role.0 == "properties-progress");
         camera_items.push(item(
             clip,
             z,
             Primitive::RoundedRect {
                 rect: ClipRect::from(rect),
                 radius: theme.corner_radius,
-                color: theme.surface,
+                color: if properties_progress {
+                    base_theme.background.mix(Rgba(0.0, 0.0, 0.0, 1.0), 0.4)
+                } else {
+                    theme.surface
+                },
             },
         ));
         if progress.value > 0.0 {
