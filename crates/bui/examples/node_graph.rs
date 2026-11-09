@@ -7,26 +7,28 @@
 use bevy::prelude::*;
 use bevy::window::{PrimaryWindow, WindowResolution};
 use bui::prelude::*;
-use bui::widgets::{NodeSocket, SocketType, WidgetEventQueue, WidgetNode};
+use bui::widgets::{NodeCategory, NodeSocket, SocketType, WidgetEventQueue, WidgetNode};
 use bui_layout::{Rect, UiEdges};
 use bui_render::{ClipRect, Primitive, UiPaint};
 
 fn sample_graph() -> NodeGraph {
     let mut graph = NodeGraph::default();
-    let noise = graph.add_node(
+    let noise = graph.add_node_with_category(
         "Noise Texture",
         [30.0, 45.0],
         vec![NodeSocket::output("Factor", SocketType::Float)],
+        NodeCategory::Texture,
     );
-    let color = graph.add_node(
+    let color = graph.add_node_with_category(
         "Color Ramp",
         [30.0, 260.0],
         vec![
             NodeSocket::input("Factor", SocketType::Float),
             NodeSocket::output("Color", SocketType::Color),
         ],
+        NodeCategory::Color,
     );
-    let mix = graph.add_node(
+    let mix = graph.add_node_with_category(
         "Mix",
         [400.0, 150.0],
         vec![
@@ -35,11 +37,13 @@ fn sample_graph() -> NodeGraph {
             NodeSocket::input("Factor", SocketType::Float),
             NodeSocket::output("Color", SocketType::Color),
         ],
+        NodeCategory::Converter,
     );
-    let output = graph.add_node(
+    let output = graph.add_node_with_category(
         "Material Output",
         [810.0, 150.0],
         vec![NodeSocket::input("Surface", SocketType::Color)],
+        NodeCategory::Output,
     );
     graph
         .create_link(noise, 0, color, 0)
@@ -56,6 +60,9 @@ fn sample_graph() -> NodeGraph {
     graph
         .create_link(mix, 3, output, 0)
         .expect("matching Color sockets");
+    // Center the sample network inside the editor viewport while keeping its model coordinates
+    // independent from the current window and layout size.
+    graph.pan = [80.0, 105.0];
     graph
 }
 

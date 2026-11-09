@@ -1,6 +1,6 @@
 //! Declarative widget trees that instantiate real Bevy entities and components.
 
-use bevy_ecs::prelude::{Component, Entity, World};
+use bevy_ecs::prelude::{Component, Entity, With, World};
 use bui_core::{
     UiEnabled, UiFocusable, UiHierarchyError, UiKey, UiNode, UiTabIndex, UiVisible, set_parent,
 };
@@ -160,6 +160,9 @@ pub enum WidgetSpec {
         model: Canvas,
     },
 }
+
+#[derive(Component)]
+struct IntrinsicLabelText;
 
 #[derive(Component, Debug, Clone, PartialEq)]
 pub struct WidgetElement {
@@ -975,6 +978,7 @@ fn layout_for(spec: &WidgetSpec) -> UiLayoutNode {
             gap: if gap.is_finite() { gap.max(0.0) } else { 0.0 },
             ..UiLayoutNode::default()
         },
+        WidgetSpec::Label { .. } => UiLayoutNode::leaf(UiLength::Auto, UiLength::Px(24.0)),
         WidgetSpec::Tooltip { .. } => UiLayoutNode::column(0.0),
         WidgetSpec::Panel { .. } => UiLayoutNode {
             mode: UiLayoutMode::Column,
@@ -1032,7 +1036,16 @@ fn insert_control(
                 .insert(TooltipControl::new(text.clone()));
         }
         WidgetSpec::Label { text } => {
-            world.entity_mut(entity).insert(Label::new(text.clone()));
+            let mut text_layout = UiTextLayout::default();
+            // Labels paint from their layout origin, so intrinsic measurement should not reserve
+            // the editor inset used by text fields.
+            text_layout.inset = [0.0, 0.0];
+            world.entity_mut(entity).insert((
+                Label::new(text.clone()),
+                TextBuffer::new(text.clone()),
+                text_layout,
+                IntrinsicLabelText,
+            ));
         }
         WidgetSpec::Button { label } => {
             world.entity_mut(entity).insert(Button::new(label.clone()));
@@ -1250,6 +1263,18 @@ fn insert_control(
     Ok(())
 }
 
+/// Keep the private measurement buffer for plain labels in sync before TextMeasure.
+/// Label entities are deliberately not focusable, so this buffer only feeds shaping and
+/// intrinsic layout; it does not make labels editable.
+pub(crate) fn sync_intrinsic_label_text(world: &mut World) {
+    let mut query = world.query_filtered::<(&Label, &mut TextBuffer), With<IntrinsicLabelText>>();
+    for (label, mut buffer) in query.iter_mut(world) {
+        if buffer.as_str() != label.text {
+            *buffer = TextBuffer::new(label.text.clone());
+        }
+    }
+}
+
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ColorRampEditorState {
     pub active_channel: ColorChannel,
@@ -1460,8 +1485,48 @@ pub struct CollectionEditorState {
 mod tests {
     use super::*;
     use crate::IconButtonAssetStatus;
+    use bevy_app::App;
     use bevy_ecs::prelude::World;
-    use bui_core::{UiChildren, UiParent};
+    use bui_core::{UiChildren, UiFocusable, UiParent};
+    use bui_layout::UiIntrinsicSize;
+    use bui_style::Theme;
+    use bui_text::TextPlugin;
+
+    #[test]
+    fn label_intrinsic_width_uses_shared_font_and_tracks_theme_size() {
+        let text = "NodeGraph · typed sockets — Ωmega";
+        let mut app = App::new();
+        app.add_plugins((TextPlugin, crate::WidgetPlugin));
+        let entity = WidgetTree::new(WidgetNode::label(text))
+            .spawn(app.world_mut(), None)
+            .unwrap();
+        assert!(app.world().get::<UiFocusable>(entity).is_none());
+        app.update();
+
+        let first_width = app
+            .world()
+            .get::<UiIntrinsicSize>(entity)
+            .expect("TextPlugin measures declarative labels")
+            .0[0];
+        assert!(
+            first_width > 160.0,
+            "the full Unicode title must not be clipped to the old 160px default: {first_width}"
+        );
+
+        app.world_mut().get_mut::<Label>(entity).unwrap().text =
+            "A runtime replacement label with a longer value — Ωmega".to_owned();
+        app.update();
+        let replaced_width = app.world().get::<UiIntrinsicSize>(entity).unwrap().0[0];
+        assert!(replaced_width > first_width);
+
+        app.world_mut().resource_mut::<Theme>().font_size = 24.0;
+        app.update();
+        let larger_width = app.world().get::<UiIntrinsicSize>(entity).unwrap().0[0];
+        assert!(
+            larger_width > replaced_width * 1.4,
+            "intrinsic label width must track the renderer's theme font size: {replaced_width} -> {larger_width}"
+        );
+    }
 
     #[test]
     fn tree_spawns_typed_bevy_controls_and_hierarchy() {

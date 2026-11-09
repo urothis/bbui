@@ -2,9 +2,49 @@
 
 use bevy_asset::{AssetServer, Assets, Handle, LoadState};
 use bevy_ecs::prelude::{Component, Entity, World};
-use bevy_text::{Font, FontSource, TextFont};
+use bevy_text::{Font, FontCx, FontSource, TextFont};
 use bui_core::{UiParent, UiVisible};
 use bui_layout::{UiLayoutResult, UiLayoutRoot, UiViewports};
+
+/// Family name used for BUI's bundled proportional default UI face.
+pub const UI_DEFAULT_FONT_FAMILY: &str = "BUI UI Sans";
+
+const UI_DEFAULT_FONT_DATA: &[u8] = include_bytes!("../../../assets/fonts/Inter[opsz,wght].ttf");
+
+/// Build a theme-sized `TextFont` using BUI's bundled Inter face.
+///
+/// This only chooses the font family and size. Callers can still provide a custom `TextFont`,
+/// while [`resolve_text_font`] lets a ready [`UiFontAsset`] override the family for a subtree.
+pub fn ui_default_text_font(font_size: f32) -> TextFont {
+    TextFont {
+        font: FontSource::Family(UI_DEFAULT_FONT_FAMILY.into()),
+        ..TextFont::from_font_size(font_size)
+    }
+}
+
+/// Register BUI's embedded Inter face in Bevy's shared font database.
+///
+/// The operation is idempotent, so both `TextPlugin` and `BuiRenderPlugin` can call it. It runs
+/// synchronously during plugin setup, before intrinsic measurement or display-list rendering,
+/// and does not depend on the host's asset root or filesystem.
+pub fn register_default_ui_font(world: &mut World) {
+    world.init_resource::<FontCx>();
+    let mut font_cx = world.resource_mut::<FontCx>();
+    if font_cx
+        .collection
+        .family_id(UI_DEFAULT_FONT_FAMILY)
+        .is_none()
+    {
+        let font = Font::from_bytes(UI_DEFAULT_FONT_DATA.to_vec());
+        font_cx.collection.register_fonts(
+            font.data,
+            Some(parley::fontique::FontInfoOverride {
+                family_name: Some(UI_DEFAULT_FONT_FAMILY),
+                ..Default::default()
+            }),
+        );
+    }
+}
 
 /// Loading status for a font requested by [`UiFontAsset`].
 #[derive(Debug, Clone, PartialEq, Eq)]

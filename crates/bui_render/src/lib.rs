@@ -31,9 +31,10 @@ use bevy::{
     shader::ShaderRef,
     ui_render::prelude::{MaterialNode, UiMaterial, UiMaterialPlugin},
 };
-use bui_core::UiSystems;
+use bui_core::{UiParent, UiSystems};
 use bui_layout::{Rect, UiLayoutResult};
 use bui_style::{Rgba, Theme};
+use bui_text::{register_default_ui_font, ui_default_text_font};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ClipRect {
@@ -566,7 +567,14 @@ impl Plugin for BuiRenderPlugin {
             .init_resource::<ImageRegistry>()
             .init_resource::<RenderTargetCamera>()
             .init_resource::<RenderCache>()
+            .add_systems(
+                Update,
+                register_default_ui_font
+                    .in_set(UiSystems::Render)
+                    .before(sync_display_list),
+            )
             .add_systems(Update, sync_display_list.in_set(UiSystems::Render));
+        register_default_ui_font(app.world_mut());
     }
 }
 
@@ -628,13 +636,16 @@ impl RenderKey {
     fn stable_order(self) -> (u8, u64, u64) {
         match self {
             Self::ManualDisplayListIndex(index) => (0, index as u64, 0),
-            Self::WidgetDisplayListIndex(index) => (1, index as u64, 0),
-            Self::OverlayWidgetDisplayListIndex(index) => (2, index as u64, 0),
-            Self::CameraDisplayListIndex(camera, index) => (3, camera.to_bits(), index as u64),
+            // Entity-attached UI paints include root backgrounds. At equal z they must be
+            // created before display-list widget content, otherwise a root-sized background can
+            // cover its same-z labels and controls.
+            Self::LayoutEntity(entity) => (1, entity.to_bits(), 0),
+            Self::WidgetDisplayListIndex(index) => (2, index as u64, 0),
+            Self::OverlayWidgetDisplayListIndex(index) => (3, index as u64, 0),
+            Self::CameraDisplayListIndex(camera, index) => (4, camera.to_bits(), index as u64),
             Self::OverlayCameraDisplayListIndex(camera, index) => {
-                (4, camera.to_bits(), index as u64)
+                (5, camera.to_bits(), index as u64)
             }
-            Self::LayoutEntity(entity) => (5, entity.to_bits(), 0),
         }
     }
 }
@@ -644,6 +655,21 @@ struct DesiredItem {
     key: RenderKey,
     z: i32,
     target_camera: Option<Entity>,
+    hierarchy_depth: u32,
+}
+
+fn hierarchy_depth(entity: Entity, parents: &HashMap<Entity, Entity>) -> u32 {
+    let mut current = entity;
+    let mut depth = 0u32;
+    // The bound also makes this safe if a malformed hierarchy somehow contains a cycle.
+    for _ in 0..=parents.len() {
+        let Some(parent) = parents.get(&current).copied() else {
+            break;
+        };
+        depth = depth.saturating_add(1);
+        current = parent;
+    }
+    depth
 }
 
 #[derive(Default)]
@@ -710,8 +736,8 @@ struct RenderNodeOrder {
 }
 
 struct PrimitiveRenderContext<'a> {
-    text_font_size: f32,
     text_line_height: f32,
+    default_text_font: TextFont,
     hsv_material: Option<&'a Handle<HsvWheelMaterial>>,
     bezier_material: Option<&'a Handle<BezierMaterial>>,
     local_z: i32,
@@ -810,6 +836,7 @@ struct RendererSync<'w, 's> {
             bevy::ecs::change_detection::Ref<'static, UiPaint>,
         ),
     >,
+    hierarchy_query: bevy::ecs::system::Query<'w, 's, (Entity, Option<&'static UiParent>)>,
     removed_paints: RemovedComponents<'w, 's, UiPaint>,
     removed_layouts: RemovedComponents<'w, 's, UiLayoutResult>,
     cache: ResMut<'w, RenderCache>,
@@ -828,6 +855,7 @@ fn sync_display_list(sync: RendererSync) {
         theme,
         camera_query,
         paint_query,
+        hierarchy_query,
         mut removed_paints,
         mut removed_layouts,
         mut cache,
@@ -846,6 +874,7 @@ fn sync_display_list(sync: RendererSync) {
         .map(|theme| theme.line_height)
         .filter(|height| height.is_finite() && *height > 0.0)
         .unwrap_or(1.25);
+    let default_text_font = ui_default_text_font(text_font_size);
     let layouts_changed = paint_query
         .iter()
         .any(|(_, layout, paint)| layout.is_changed() || paint.is_changed());
@@ -865,11 +894,16 @@ fn sync_display_list(sync: RendererSync) {
     let mut desired = std::mem::take(&mut cache.desired);
     desired.clear();
     desired.reserve(display_list.items.len());
+    let hierarchy_parents: HashMap<_, _> = hierarchy_query
+        .iter()
+        .filter_map(|(entity, parent)| parent.map(|parent| (entity, parent.0)))
+        .collect();
     for (index, item) in display_list.manual_items.iter().enumerate() {
         desired.push(DesiredItem {
             key: RenderKey::ManualDisplayListIndex(index),
             z: item.z,
             target_camera: target_camera.0,
+            hierarchy_depth: 0,
         });
     }
     for (index, item) in display_list.widget_items.iter().enumerate() {
@@ -877,6 +911,7 @@ fn sync_display_list(sync: RendererSync) {
             key: RenderKey::WidgetDisplayListIndex(index),
             z: item.z,
             target_camera: None,
+            hierarchy_depth: 0,
         });
     }
     for (index, item) in display_list.overlay_widget_items.iter().enumerate() {
@@ -884,6 +919,7 @@ fn sync_display_list(sync: RendererSync) {
             key: RenderKey::OverlayWidgetDisplayListIndex(index),
             z: item.z,
             target_camera: None,
+            hierarchy_depth: 0,
         });
     }
     for (camera, items) in &display_list.camera_items {
@@ -892,6 +928,7 @@ fn sync_display_list(sync: RendererSync) {
                 key: RenderKey::CameraDisplayListIndex(*camera, index),
                 z: item.z,
                 target_camera: Some(*camera),
+                hierarchy_depth: 0,
             });
         }
     }
@@ -901,6 +938,7 @@ fn sync_display_list(sync: RendererSync) {
                 key: RenderKey::OverlayCameraDisplayListIndex(*camera, index),
                 z: item.z,
                 target_camera: Some(*camera),
+                hierarchy_depth: 0,
             });
         }
     }
@@ -910,13 +948,22 @@ fn sync_display_list(sync: RendererSync) {
             key: RenderKey::LayoutEntity(entity),
             z: layout.z,
             target_camera: camera,
+            hierarchy_depth: hierarchy_depth(entity, &hierarchy_parents),
         });
     }
     desired.sort_unstable_by(|first, second| {
-        first
-            .z
-            .cmp(&second.z)
-            .then_with(|| first.key.stable_order().cmp(&second.key.stable_order()))
+        first.z.cmp(&second.z).then_with(|| {
+            let first_order = first.key.stable_order();
+            let second_order = second.key.stable_order();
+            if first_order.0 == 1 && second_order.0 == 1 {
+                first
+                    .hierarchy_depth
+                    .cmp(&second.hierarchy_depth)
+                    .then_with(|| first_order.cmp(&second_order))
+            } else {
+                first_order.cmp(&second_order)
+            }
+        })
     });
     cache.generation = cache.generation.wrapping_add(1);
     let generation = cache.generation;
@@ -1045,6 +1092,7 @@ fn sync_display_list(sync: RendererSync) {
             key,
             target_camera: target,
             z: _,
+            hierarchy_depth: _,
         } = desired_item;
         if batched_keys.contains(&key) {
             continue;
@@ -1230,8 +1278,8 @@ fn sync_display_list(sync: RendererSync) {
                     item,
                     images.as_ref(),
                     PrimitiveRenderContext {
-                        text_font_size,
                         text_line_height,
+                        default_text_font: default_text_font.clone(),
                         hsv_material: hsv_material.as_ref(),
                         bezier_material: bezier_material.as_ref(),
                         local_z,
@@ -1859,7 +1907,7 @@ fn spawn_primitive(
                         ..Default::default()
                     },
                     Text::new(text.clone()),
-                    TextFont::from_font_size(context.text_font_size),
+                    context.default_text_font.clone(),
                     LineHeight::RelativeToFont(context.text_line_height),
                     TextColor(color_to_bevy(*color)),
                 ),
@@ -1894,7 +1942,7 @@ fn spawn_primitive(
                     style
                         .as_ref()
                         .and_then(|style| style.font.clone())
-                        .unwrap_or_else(|| TextFont::from_font_size(context.text_font_size)),
+                        .unwrap_or_else(|| context.default_text_font.clone()),
                     style
                         .as_ref()
                         .and_then(|style| style.line_height)
@@ -2128,6 +2176,7 @@ fn color_to_bevy(color: Rgba) -> Color {
 mod tests {
     use super::*;
     use bevy::ecs::prelude::With;
+    use bui_text::UI_DEFAULT_FONT_FAMILY;
 
     fn rect_item(z: i32, x: f32) -> DrawItem {
         DrawItem {
@@ -2787,6 +2836,11 @@ mod tests {
         };
         assert_eq!(first_size, bevy::text::FontSize::Px(14.0));
         assert_eq!(first_line_height, LineHeight::RelativeToFont(1.25));
+        let default_font = app.world().get::<TextFont>(first_entity).unwrap();
+        assert!(matches!(
+            default_font.font,
+            bevy::text::FontSource::Family(ref family) if family == UI_DEFAULT_FONT_FAMILY
+        ));
 
         {
             let mut theme = app.world_mut().resource_mut::<Theme>();
@@ -2809,6 +2863,110 @@ mod tests {
         let (third_entity, third_line_height) = query.single(app.world()).unwrap();
         assert_eq!(*third_line_height, LineHeight::RelativeToFont(1.7));
         assert_ne!(second_entity, third_entity);
+    }
+
+    #[test]
+    fn same_z_parent_background_is_ordered_under_nested_widget_text() {
+        let mut app = App::new();
+        app.add_plugins(BuiRenderPlugin);
+        let rect = Rect::new(0.0, 0.0, 180.0, 32.0);
+        let parent = app
+            .world_mut()
+            .spawn((
+                bui_core::UiNode,
+                UiPaint(Primitive::RoundedRect {
+                    rect: ClipRect::from(rect),
+                    radius: 0.0,
+                    color: Rgba(0.02, 0.03, 0.04, 1.0),
+                }),
+                UiLayoutResult {
+                    window: Entity::PLACEHOLDER,
+                    rect,
+                    clip: None,
+                    z: 0,
+                    content_size: [rect.width, rect.height],
+                    dpi_scale: 1.0,
+                },
+            ))
+            .id();
+        let child_rect = Rect::new(8.0, 4.0, 164.0, 24.0);
+        let child = app
+            .world_mut()
+            .spawn((
+                bui_core::UiNode,
+                UiPaint(Primitive::RoundedRect {
+                    rect: ClipRect::from(child_rect),
+                    radius: 2.0,
+                    color: Rgba(0.08, 0.09, 0.10, 1.0),
+                }),
+                UiLayoutResult {
+                    window: Entity::PLACEHOLDER,
+                    rect: child_rect,
+                    clip: None,
+                    z: 0,
+                    content_size: [child_rect.width, child_rect.height],
+                    dpi_scale: 1.0,
+                },
+            ))
+            .id();
+        bui_core::set_parent(app.world_mut(), child, parent)
+            .expect("the label paint belongs to the background container");
+        app.world_mut()
+            .resource_mut::<DisplayList>()
+            .replace_widget_items(vec![DrawItem {
+                clip: ClipRect::from(rect),
+                z: 0,
+                primitive: Primitive::TextWrapped {
+                    origin: [4.0, 4.0],
+                    text: "same layer label".to_owned(),
+                    color: Rgba(0.95, 0.95, 0.95, 1.0),
+                    max_width: rect.width - 8.0,
+                    wrap: false,
+                    style: None,
+                },
+            }]);
+        app.update();
+
+        let cache = app.world().resource::<RenderCache>();
+        let rendered_entity = |key| {
+            let cached = &cache.items[&key];
+            match &cached.nodes {
+                RenderedNodes::Single(entity) => *entity,
+                RenderedNodes::Multiple(entities) => {
+                    *entities.first().expect("rendered item has a Bevy entity")
+                }
+                RenderedNodes::Empty => panic!("rendered item has a Bevy entity"),
+            }
+        };
+        let parent_paint = rendered_entity(RenderKey::LayoutEntity(parent));
+        let child_paint = rendered_entity(RenderKey::LayoutEntity(child));
+        let widget_text = rendered_entity(RenderKey::WidgetDisplayListIndex(0));
+        let parent_z = (
+            *app.world().get::<GlobalZIndex>(parent_paint).unwrap(),
+            *app.world().get::<ZIndex>(parent_paint).unwrap(),
+        );
+        let child_z = (
+            *app.world().get::<GlobalZIndex>(child_paint).unwrap(),
+            *app.world().get::<ZIndex>(child_paint).unwrap(),
+        );
+        let text_z = (
+            *app.world().get::<GlobalZIndex>(widget_text).unwrap(),
+            *app.world().get::<ZIndex>(widget_text).unwrap(),
+        );
+        assert_eq!(parent_z.0, child_z.0);
+        assert_eq!(child_z.0, text_z.0);
+        assert!(
+            parent_z.1.0 < child_z.1.0,
+            "parent paint must precede nested child paint, got parent={:?}, child={:?}",
+            parent_z.1,
+            child_z.1
+        );
+        assert!(
+            child_z.1.0 < text_z.1.0,
+            "nested paint must precede child widget text, got child={:?}, text={:?}",
+            child_z.1,
+            text_z.1
+        );
     }
 
     #[test]

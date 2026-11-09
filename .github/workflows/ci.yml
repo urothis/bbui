@@ -61,6 +61,7 @@ jobs:
       - name: Run offscreen WGPU visual regressions
         env:
           WGPU_BACKEND: vulkan
+          BUI_NODE_GRAPH_CAPTURE_DIR: node-graph-captures
         run: >-
           cargo test -p bui --locked
           --test gpu_readback
@@ -72,3 +73,10 @@ jobs:
           --test icon_asset_gpu_readback
           --test numeric_expression_error_gpu
           --test boxed_controls_gpu
+      - name: Upload NodeGraph GPU review captures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: node-graph-gpu-review-captures
+          path: node-graph-captures/*.png
+          if-no-files-found: warn

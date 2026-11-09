@@ -93,6 +93,7 @@ pub enum ThemeColorToken {
     CurvePlotSurface,
     CurveGridLine,
     CurveAxisLine,
+    NodeGraphSurface,
     NodeGraphSelectedNodeSurface,
     NodeGraphHeaderSurface,
     NodeGraphGridLine,
@@ -113,7 +114,7 @@ pub enum ThemeColorToken {
 impl ThemeColorToken {
     /// Every built-in semantic color token. Keep this list in sync with
     /// [`Theme::color`] so theme completeness can be checked exhaustively.
-    pub const ALL: [Self; 55] = [
+    pub const ALL: [Self; 56] = [
         Self::Background,
         Self::Surface,
         Self::HoverSurface,
@@ -154,6 +155,7 @@ impl ThemeColorToken {
         Self::CurvePlotSurface,
         Self::CurveGridLine,
         Self::CurveAxisLine,
+        Self::NodeGraphSurface,
         Self::NodeGraphSelectedNodeSurface,
         Self::NodeGraphHeaderSurface,
         Self::NodeGraphGridLine,
@@ -966,6 +968,7 @@ impl Theme {
             ThemeColorToken::CurvePlotSurface => self.background.mix(self.surface, 0.25),
             ThemeColorToken::CurveGridLine => self.border.mix(self.background, 0.35),
             ThemeColorToken::CurveAxisLine => self.border.mix(self.text, 0.25),
+            ThemeColorToken::NodeGraphSurface => self.background.mix(self.surface, 0.22),
             ThemeColorToken::NodeGraphSelectedNodeSurface => self.surface.mix(self.selection, 0.55),
             ThemeColorToken::NodeGraphHeaderSurface => self.surface.mix(self.background, 0.22),
             ThemeColorToken::NodeGraphGridLine => self.border.mix(self.background, 0.35),
@@ -2739,6 +2742,9 @@ mod tests {
             assert_eq!(theme.spacing.node_graph.grid_spacing, 40.0);
             assert_eq!(theme.spacing.node_graph.grid_spacing_min, 12.0);
             assert_eq!(theme.spacing.node_graph.grid_spacing_max, 160.0);
+            let graph_surface = theme.color(ThemeColorToken::NodeGraphSurface);
+            assert_eq!(graph_surface, theme.background.mix(theme.surface, 0.22));
+            assert!(graph_surface.0 < theme.surface.0);
             assert_eq!(theme.spacing.file_browser.header_height, 48.0);
             assert_eq!(theme.spacing.file_browser.list_row_height, 22.0);
             assert_eq!(theme.spacing.file_browser.grid_cell_width, 120.0);

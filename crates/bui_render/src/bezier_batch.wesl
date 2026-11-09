@@ -41,7 +41,7 @@ fn composite_curve(
     width: f32,
 ) -> vec4<f32> {
     let half_width = width * 0.5;
-    let antialias = max(fwidth(distance), 0.65);
+    let antialias = clamp(fwidth(distance), 0.65, 1.25);
     let coverage = 1.0 - smoothstep(half_width - antialias, half_width + antialias, distance);
     let source_alpha = clamp(color.a * coverage, 0.0, 1.0);
     if source_alpha <= 0.0 {

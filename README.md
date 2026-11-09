@@ -122,6 +122,8 @@ Run `cargo run -p bui --example canvas` from the workspace root. Left-click sele
 
 Run `cargo run -p bui --example node_graph`. Drag node headers to move them and compatible sockets to create or reconnect links. Drag across empty space for box selection, Alt-drag across links to cut them, and middle-drag to pan. Ctrl+Wheel zooms; Ctrl+A selects nodes; C collapses the selection; N adds a node; arrow keys move selected nodes; Delete removes the selection. Ctrl+Z/Ctrl+Shift+Z undo and redo graph edits. The model rejects incompatible socket links and serializes to validated JSON.
 
+Reviewed Dark/Light offscreen captures of the four-node example are in [docs/visuals](docs/visuals/README.md).
+
 For screen-reader link creation, activate one named socket and then a compatible socket of the opposite direction; either order works. Activating the same socket twice cancels the pending pair. The generated link uses the graph's normal validation and undo path.
 
 ## Themes and layout

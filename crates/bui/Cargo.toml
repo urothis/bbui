@@ -16,3 +16,6 @@ bui_media = { path = "../bui_media" }
 bui_widgets = { path = "../bui_widgets" }
 bui_macros = { path = "../bui_macros" }
 
+[dev-dependencies]
+image.workspace = true
+

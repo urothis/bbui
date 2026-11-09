@@ -14,7 +14,7 @@ use bui_style::{
 };
 use bui_text::{
     BevyTextLayoutConfig, TextBuffer, TextLayout, TextRange, TextRect, UiTextLayout,
-    measure_text_intrinsics, update_text_layouts,
+    measure_text_intrinsics, ui_default_text_font, update_text_layouts,
 };
 use std::time::Duration;
 
@@ -646,7 +646,7 @@ fn text_metrics_follow_interpolated_computed_font_and_line_height() {
     assert!((font_size - 20.0).abs() < 0.001);
     assert!((line_height - 1.5).abs() < 0.001);
     assert!(caret_height > initial_height);
-    let expected_font = TextFont::from_font_size(font_size);
+    let expected_font = ui_default_text_font(font_size);
     let mut shape_state = SystemState::<(
         ResMut<TextPipeline>,
         Res<Assets<Font>>,

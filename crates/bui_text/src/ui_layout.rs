@@ -457,7 +457,7 @@ impl UiTextLayout {
             let size = computed
                 .and_then(|style| style.scalar(UiStyleProperty::FontSize))
                 .unwrap_or(theme.font_size);
-            TextFont::from_font_size(positive(size, 14.0))
+            crate::ui_default_text_font(positive(size, 14.0))
         })
     }
 

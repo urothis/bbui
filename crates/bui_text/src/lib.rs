@@ -16,7 +16,8 @@ pub mod text_buffer;
 pub mod ui_layout;
 
 pub use font_assets::{
-    UiFontAsset, UiFontAssetState, UiFontAssetStatus, resolve_text_font, sync_ui_font_assets,
+    UI_DEFAULT_FONT_FAMILY, UiFontAsset, UiFontAssetState, UiFontAssetStatus,
+    register_default_ui_font, resolve_text_font, sync_ui_font_assets, ui_default_text_font,
 };
 pub use formatting::format_float;
 pub use layout::{
@@ -63,6 +64,12 @@ impl Plugin for TextPlugin {
             )
             .add_systems(
                 Update,
+                register_default_ui_font
+                    .in_set(UiSystems::TextMeasure)
+                    .before(measure_text_intrinsics),
+            )
+            .add_systems(
+                Update,
                 measure_text_intrinsics.in_set(UiSystems::TextMeasure),
             )
             .add_systems(
@@ -71,6 +78,7 @@ impl Plugin for TextPlugin {
                     .chain()
                     .in_set(UiSystems::Text),
             );
+        register_default_ui_font(app.world_mut());
     }
 }
 

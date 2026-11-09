@@ -1752,6 +1752,7 @@ dependencies = [
  "bui_style",
  "bui_text",
  "bui_widgets",
+ "image",
 ]
 
 [[package]]
@@ -1802,6 +1803,7 @@ dependencies = [
  "bui_core",
  "bui_layout",
  "bui_style",
+ "bui_text",
 ]
 
 [[package]]

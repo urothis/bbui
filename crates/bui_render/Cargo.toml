@@ -9,4 +9,5 @@ bevy.workspace = true
 bui_core = { path = "../bui_core" }
 bui_layout = { path = "../bui_layout" }
 bui_style = { path = "../bui_style" }
+bui_text = { path = "../bui_text" }
 

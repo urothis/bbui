@@ -1078,10 +1078,29 @@ impl NodeSocket {
     }
 }
 
+/// Visual node-header grouping. Categories are explicit model data so painter colors do not
+/// depend on localized or user-editable node titles.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NodeCategory {
+    #[default]
+    General,
+    Input,
+    Texture,
+    Color,
+    Geometry,
+    Converter,
+    Output,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct NodeModel {
     pub id: NodeId,
     pub title: String,
+    /// Category palette used for the node header. Missing in older serialized graphs, defaults to
+    /// `General` when deserialized.
+    #[serde(default)]
+    pub category: NodeCategory,
     pub position: [f32; 2],
     pub size: [f32; 2],
     pub sockets: Vec<NodeSocket>,
@@ -1095,11 +1114,22 @@ impl NodeModel {
         position: [f32; 2],
         sockets: Vec<NodeSocket>,
     ) -> Self {
+        Self::new_with_category(id, title, position, sockets, NodeCategory::General)
+    }
+
+    pub fn new_with_category(
+        id: NodeId,
+        title: impl Into<String>,
+        position: [f32; 2],
+        sockets: Vec<NodeSocket>,
+        category: NodeCategory,
+    ) -> Self {
         Self {
             id,
             title: title.into(),
+            category,
             position,
-            size: [180.0, 120.0],
+            size: [180.0, 58.0],
             sockets,
             collapsed: false,
         }
@@ -1166,10 +1196,21 @@ impl NodeGraph {
         position: [f32; 2],
         sockets: Vec<NodeSocket>,
     ) -> NodeId {
+        self.add_node_with_category(title, position, sockets, NodeCategory::General)
+    }
+
+    pub fn add_node_with_category(
+        &mut self,
+        title: impl Into<String>,
+        position: [f32; 2],
+        sockets: Vec<NodeSocket>,
+        category: NodeCategory,
+    ) -> NodeId {
         let id = NodeId(self.next_node);
         self.next_node = self.next_node.saturating_add(1);
-        self.nodes
-            .push(NodeModel::new(id, title, position, sockets));
+        self.nodes.push(NodeModel::new_with_category(
+            id, title, position, sockets, category,
+        ));
         id
     }
 

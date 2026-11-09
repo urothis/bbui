@@ -14,7 +14,9 @@ use bui::widgets::WidgetNode;
 use bui_core::UiChildren;
 use bui_layout::{Rect, UiLayoutResult, UiLayoutRoot};
 use bui_render::{DisplayList, Primitive};
-use bui_text::{TextPlugin, UiFontAsset, UiFontAssetStatus, sync_ui_font_assets};
+use bui_text::{
+    TextPlugin, UI_DEFAULT_FONT_FAMILY, UiFontAsset, UiFontAssetStatus, sync_ui_font_assets,
+};
 use bui_widgets::{WidgetPlugin, WidgetTree, actions::collect_widget_paint};
 
 const FONT_BYTES: &[u8] =
@@ -156,6 +158,10 @@ fn ready_inherited_font_reaches_generic_label_and_hidden_state_falls_back() {
     );
     collect_widget_paint(app.world_mut());
     let fallback_font = generic_label_font(&app, label);
+    assert!(matches!(
+        fallback_font.font,
+        FontSource::Family(ref family) if family == UI_DEFAULT_FONT_FAMILY
+    ));
     assert!(!matches!(
         fallback_font.font,
         FontSource::Handle(ref painted) if painted.id() == handle.id()

@@ -3,7 +3,7 @@
 
 use std::{
     collections::HashMap,
-    thread,
+    fs, thread,
     time::{Duration, Instant},
 };
 
@@ -56,6 +56,17 @@ fn pixel_at(pixels: &[u8], x: usize, y: usize) -> &[u8] {
     let bytes_per_row = (TARGET_WIDTH as usize * 4).div_ceil(256) * 256;
     let offset = y * bytes_per_row + x * 4;
     &pixels[offset..offset + 4]
+}
+
+fn write_capture_ppm(path: &std::path::Path, pixels: &[u8]) {
+    let mut ppm = format!("P6\n{TARGET_WIDTH} {TARGET_HEIGHT}\n255\n").into_bytes();
+    ppm.reserve(TARGET_WIDTH as usize * TARGET_HEIGHT as usize * 3);
+    for y in 0..TARGET_HEIGHT as usize {
+        for x in 0..TARGET_WIDTH as usize {
+            ppm.extend_from_slice(&pixel_at(pixels, x, y)[..3]);
+        }
+    }
+    fs::write(path, ppm).expect("write optional widget visual capture");
 }
 
 fn assert_color(pixel: &[u8], color: Rgba, what: &str) {
@@ -809,6 +820,16 @@ fn widget_menu_editors_and_collections_render_in_dark_light_and_dpi_variants() {
                 app.world_mut().entity_mut(readback).despawn();
                 (captured.bytes, latency)
             };
+            if mode_index == 0
+                && let Some(directory) = std::env::var_os("BUI_WIDGET_CAPTURE_DIR")
+            {
+                let directory = std::path::PathBuf::from(directory);
+                fs::create_dir_all(&directory).expect("create widget capture directory");
+                write_capture_ppm(
+                    &directory.join(format!("{kind:?}-dpi{}.ppm", dpi_scale as u32)),
+                    &pixels,
+                );
+            }
 
             let popup = *app
                 .world()

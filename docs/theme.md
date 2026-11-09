@@ -32,6 +32,17 @@ background `(0.86, 0.86, 0.86)`, surface `(0.94, 0.94, 0.94)`, text
 `(0.67, 0.67, 0.67)`. Derived semantic tokens blend these base values; socket
 type and preview placeholder tokens have explicit palette values.
 
+## Default typeface
+
+BUI text defaults to a bundled variable Inter face for proportional UI text. The
+font is shipped at `assets/fonts/Inter[opsz,wght].ttf` with its SIL Open Font
+License notice in `assets/fonts/Inter-OFL.txt`; the source file comes from the
+official `google/fonts` Inter family. BUI registers the unchanged font bytes in
+Bevy's shared font database as `BUI UI Sans`, a private family alias that keeps
+rendering independent of host-installed fonts. Both Bevy renderer text and BUI
+text shaping use this family before the first layout pass. A ready `UiFontAsset`
+on a widget or ancestor overrides the default face for that subtree.
+
 ## Spacing and motion values
 
 `Theme.spacing` contains logical-pixel values shared by both built-in palettes,

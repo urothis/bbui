@@ -8,10 +8,10 @@ use crate::{
     Button, Canvas, Checkbox, CheckboxValue, ColorChannel, ColorRamp, CurveEditor, DataTable,
     Dropdown, DropdownOptionControl, DropdownPopupState, FileBrowser, FileSort, FileView,
     HsvColorEditor, HsvColorEditorState, HsvColorField, IconButton, IconButtonAsset, Interpolation,
-    Label, LinkEndpoint, ListModel, MenuControl, MenuDisplay, MenuItemControl, NodeGraph,
-    NodeGraphError, NodeId, NodeSocket, NumericExpressionVariables, NumericField, NumericFieldKind,
-    Panel, PanelGroup, PreviewGrid, Progress, RadioGroup, Slider, SocketDirection, TextArea,
-    TextField, Tooltip, TreeModel,
+    Label, LinkEndpoint, ListModel, MenuControl, MenuDisplay, MenuItemControl, NodeCategory,
+    NodeGraph, NodeGraphError, NodeId, NodeSocket, NumericExpressionVariables, NumericField,
+    NumericFieldKind, Panel, PanelGroup, PreviewGrid, Progress, RadioGroup, Slider,
+    SocketDirection, TextArea, TextField, Tooltip, TreeModel,
     declarative::{
         CollectionEditorState, CollectionItemControl, CollectionItemKind, ColorRampEditorState,
         DataTableCellControl, DataTableHeaderControl, FileBrowserItem, FileBrowserViewState,
@@ -22,8 +22,10 @@ use crate::{
     menus::{PopupSide, PopupState},
 };
 use bevy_app::{App, Update};
+use bevy_asset::Assets;
+use bevy_ecs::change_detection::Mut;
 use bevy_ecs::prelude::*;
-use bevy_text::{FontSize, LineBreak, LineHeight, TextFont};
+use bevy_text::{Font, FontCx, FontSize, LayoutCx, LineBreak, LineHeight, TextFont, TextPipeline};
 use bui_core::{
     TextSelection, UiEnabled, UiFocus, UiFocusable, UiHitBox, UiKey, UiKeyCode, UiModifiers,
     UiNode, UiParent, UiPointerButton, UiRect, UiRoutedEvent, UiRoutedEvents, UiSystems, UiVisible,
@@ -32,10 +34,13 @@ use bui_core::{
 use bui_layout::{Rect, UiLayoutNode, UiLayoutResult, UiLayoutRoot, UiWheelHandled};
 use bui_render::{ClipRect, DisplayList, DrawItem, Primitive, TextRenderStyle};
 use bui_style::{
-    Rgba, Theme, ThemeColorToken, ThemeMotionToken, UiComputedStyle, UiRole, UiStyleProperty,
-    UiStyleState, set_ui_style_state,
+    Rgba, Theme, ThemeColorToken, ThemeMotionToken, UiClasses, UiComputedStyle, UiInlineStyle,
+    UiRole, UiStyleProperty, UiStyleSheet, UiStyleState, UiStyleValue, set_ui_style_state,
 };
-use bui_text::{TextBuffer, UiReadOnly, UiTextBuffer, UiTextLayout, resolve_text_font};
+use bui_text::{
+    TextBuffer, TextLayout, UiReadOnly, UiTextBuffer, UiTextLayout, resolve_text_font,
+    ui_default_text_font,
+};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum WidgetActionKind {
@@ -11025,7 +11030,7 @@ pub fn collect_widget_paint(world: &mut World) {
         return;
     }
 
-    let theme = world.resource::<Theme>().clone();
+    let base_theme = world.resource::<Theme>().clone();
     let mut entity_query = world.query_filtered::<Entity, With<UiLayoutResult>>();
     let entities: Vec<_> = entity_query.iter(world).collect();
     let mut draw_items: HashMap<Option<Entity>, Vec<DrawItem>> = HashMap::new();
@@ -11086,7 +11091,7 @@ pub fn collect_widget_paint(world: &mut World) {
         let clip = ClipRect::from(clip_rect);
         let rect = layout.rect;
         let z = layout.z;
-        let entity_theme = styled_theme(world, entity, &theme);
+        let entity_theme = styled_theme(world, entity, &base_theme);
         let theme = &entity_theme;
         let camera = world
             .get::<bevy_camera::Camera>(layout.window)
@@ -11209,14 +11214,20 @@ pub fn collect_widget_paint(world: &mut World) {
             );
             continue;
         }
-        if let Some(graph) = world.get::<NodeGraph>(entity) {
+        if let Some(graph) = world.get::<NodeGraph>(entity).cloned() {
+            let font = resolve_text_font(world, entity, ui_default_text_font(theme.font_size));
+            let output_label_widths =
+                measure_node_graph_output_label_widths(world, &graph, &font, theme);
+            let canvas_surface = node_graph_canvas_surface(world, entity, &base_theme);
             paint_node_graph(
                 NodeGraphPaint {
-                    graph,
+                    graph: &graph,
                     state: world
                         .get::<NodeGraphEditorState>(entity)
                         .cloned()
                         .unwrap_or_default(),
+                    output_label_widths,
+                    canvas_surface,
                     label: world
                         .get::<Label>(entity)
                         .map_or("Node graph", |label| label.text.as_str()),
@@ -11224,6 +11235,7 @@ pub fn collect_widget_paint(world: &mut World) {
                     clip,
                     z,
                     theme,
+                    font,
                 },
                 camera_items,
             );
@@ -12514,7 +12526,7 @@ fn paint_text_editor(
                     text_layout
                         .font
                         .clone()
-                        .unwrap_or_else(|| TextFont::from_font_size(theme.font_size)),
+                        .unwrap_or_else(|| ui_default_text_font(theme.font_size)),
                 )),
                 line_height: text_layout
                     .line_height
@@ -13315,11 +13327,14 @@ struct CurveEditorPaint<'a> {
 struct NodeGraphPaint<'a> {
     graph: &'a NodeGraph,
     state: NodeGraphEditorState,
+    output_label_widths: HashMap<(NodeId, usize), f32>,
+    canvas_surface: Rgba,
     label: &'a str,
     rect: Rect,
     clip: ClipRect,
     z: i32,
     theme: &'a Theme,
+    font: TextFont,
 }
 
 fn paint_hsv_color_editor(paint: HsvColorPaint<'_>, output: &mut Vec<DrawItem>) {
@@ -13873,11 +13888,14 @@ fn paint_node_graph(paint: NodeGraphPaint<'_>, output: &mut Vec<DrawItem>) {
     let NodeGraphPaint {
         graph,
         state,
+        output_label_widths,
+        canvas_surface,
         label,
         rect,
         clip,
         z,
         theme,
+        font,
     } = paint;
     let spacing = &theme.spacing.node_graph;
     output.push(item(
@@ -13886,98 +13904,124 @@ fn paint_node_graph(paint: NodeGraphPaint<'_>, output: &mut Vec<DrawItem>) {
         Primitive::RoundedRect {
             rect: ClipRect::from(rect),
             radius: theme.corner_radius,
-            color: theme.background,
+            color: canvas_surface,
         },
     ));
     let header = Rect {
         height: spacing.header_height.min(rect.height),
         ..rect
     };
-    output.push(item(
-        clip,
-        z.saturating_add(1),
-        Primitive::RoundedRect {
-            rect: ClipRect::from(header),
-            radius: theme.corner_radius,
-            color: theme.color(ThemeColorToken::NodeGraphHeaderSurface),
-        },
-    ));
-    output.push(item(
-        clip,
-        z.saturating_add(2),
-        styled_text_primitive(
-            clip,
-            [
-                rect.x + spacing.title_padding_x,
-                rect.y + spacing.title_padding_y,
-            ],
-            format!(
-                "{label}  ·  {} nodes  {} links",
-                graph.nodes.len(),
-                graph.links.len()
+    if let Some(header_clip) = intersect_clip_rect(clip, header) {
+        output.push(item(
+            header_clip,
+            z.saturating_add(1),
+            Primitive::RoundedRect {
+                rect: ClipRect::from(header),
+                radius: theme.corner_radius,
+                color: theme.color(ThemeColorToken::NodeGraphHeaderSurface),
+            },
+        ));
+        let inset = theme.spacing.control.padding_x.min(rect.width * 0.08);
+        let summary_width = spacing.header_hint_width.min(rect.width * 0.44).max(1.0);
+        let summary_right = rect.x + rect.width - inset;
+        let summary_left = (summary_right - summary_width).max(rect.x + inset);
+        let title_x = rect.x + inset;
+        let title_width = (summary_left - title_x - inset).max(1.0);
+        let summary = format!(
+            "{} {} · {} {}",
+            graph.nodes.len(),
+            if graph.nodes.len() == 1 {
+                "node"
+            } else {
+                "nodes"
+            },
+            graph.links.len(),
+            if graph.links.len() == 1 {
+                "link"
+            } else {
+                "links"
+            },
+        );
+        let text_y = rect.y
+            + spacing
+                .title_padding_y
+                .min((header.height - theme.font_size).max(0.0));
+        output.push(item(
+            header_clip,
+            z.saturating_add(2),
+            node_graph_text_primitive(
+                TextPlacement {
+                    origin: [title_x, text_y],
+                    text: label.to_owned(),
+                },
+                theme.text,
+                title_width,
+                bevy_text::Justify::Left,
+                &font,
+                theme,
+                1.0,
             ),
-            theme.text,
-            theme,
-            false,
-        ),
-    ));
-    output.push(item(
-        clip,
-        z.saturating_add(2),
-        styled_text_primitive(
-            clip,
-            [
-                rect.x + rect.width - spacing.header_hint_width - theme.spacing.control.padding_x,
-                rect.y + spacing.title_padding_y,
-            ],
-            "Drag · sockets link · Alt-drag cuts · C collapse".to_owned(),
-            theme.text_muted,
-            theme,
-            false,
-        ),
-    ));
+        ));
+        output.push(item(
+            header_clip,
+            z.saturating_add(2),
+            node_graph_text_primitive(
+                TextPlacement {
+                    origin: [summary_left, text_y],
+                    text: summary,
+                },
+                theme.text_muted,
+                summary_right - summary_left,
+                bevy_text::Justify::Right,
+                &font,
+                theme,
+                1.0,
+            ),
+        ));
+    }
 
     let viewport = Rect {
         y: rect.y + header.height,
         height: (rect.height - header.height).max(0.0),
         ..rect
     };
+    let Some(viewport_clip) = intersect_clip_rect(clip, viewport) else {
+        return;
+    };
     let grid_spacing = (spacing.grid_spacing * graph.zoom)
         .clamp(spacing.grid_spacing_min, spacing.grid_spacing_max);
-    let grid = theme.color(ThemeColorToken::NodeGraphGridLine);
-    let start_x = rect.x + graph.pan[0].rem_euclid(grid_spacing);
-    let mut x = start_x;
-    let mut grid_lines = 0;
-    while x <= rect.x + rect.width && grid_lines < 48 {
-        output.push(item(
-            clip,
-            z.saturating_add(1),
-            Primitive::Line {
-                from: [x, viewport.y],
-                to: [x, viewport.y + viewport.height],
-                width: 1.0,
-                color: grid,
-            },
-        ));
-        x += grid_spacing;
-        grid_lines += 1;
-    }
+    let grid = theme
+        .color(ThemeColorToken::NodeGraphGridLine)
+        .mix(canvas_surface, 0.6);
+    let dot_size = (2.0 * graph.zoom.sqrt()).clamp(1.5, 2.6);
+    let start_x = viewport.x + graph.pan[0].rem_euclid(grid_spacing);
     let start_y = viewport.y + graph.pan[1].rem_euclid(grid_spacing);
-    let mut y = start_y;
-    grid_lines = 0;
-    while y <= rect.y + rect.height && grid_lines < 48 {
-        output.push(item(
-            clip,
-            z.saturating_add(1),
-            Primitive::Line {
-                from: [viewport.x, y],
-                to: [viewport.x + viewport.width, y],
-                width: 1.0,
-                color: grid,
-            },
-        ));
-        y += grid_spacing;
-        grid_lines += 1;
+    let mut dot_x = start_x;
+    let mut columns = 0;
+    let mut dot_count = 0;
+    while dot_x <= viewport.x + viewport.width && columns < 48 && dot_count < 1024 {
+        let mut dot_y = start_y;
+        let mut rows = 0;
+        while dot_y <= viewport.y + viewport.height && rows < 48 && dot_count < 1024 {
+            output.push(item(
+                viewport_clip,
+                z.saturating_add(1),
+                Primitive::Ellipse {
+                    rect: ClipRect {
+                        x: dot_x - dot_size * 0.5,
+                        y: dot_y - dot_size * 0.5,
+                        width: dot_size,
+                        height: dot_size,
+                    },
+                    color: grid,
+                },
+            ));
+            dot_y += grid_spacing;
+            rows += 1;
+            dot_count += 1;
+        }
+        dot_x += grid_spacing;
+        columns += 1;
     }
 
     for link in &graph.links {
@@ -13986,7 +14030,7 @@ fn paint_node_graph(paint: NodeGraphPaint<'_>, output: &mut Vec<DrawItem>) {
         };
         let selected = graph.selected_link == Some(link.id);
         output.push(item(
-            clip,
+            viewport_clip,
             z.saturating_add(3),
             Primitive::Bezier {
                 points,
@@ -14002,68 +14046,75 @@ fn paint_node_graph(paint: NodeGraphPaint<'_>, output: &mut Vec<DrawItem>) {
 
     for node in &graph.nodes {
         let node_rect = node_graph_node_rect(graph, rect, node, spacing);
-        if node_rect.intersection(viewport).is_none() {
+        let Some(node_clip) = intersect_clip_rect(viewport_clip, node_rect) else {
             continue;
-        }
+        };
         let selected = graph.selected.contains(&node.id);
         output.push(item(
-            clip,
+            node_clip,
             z.saturating_add(4),
             Primitive::RoundedRect {
                 rect: ClipRect::from(node_rect),
                 radius: spacing.node_radius,
                 color: if selected {
-                    theme.color(ThemeColorToken::NodeGraphSelectedNodeSurface)
+                    theme.surface.mix(theme.accent, 0.08)
                 } else {
                     theme.surface
                 },
             },
         ));
         let title_height = (spacing.header_height * graph.zoom).min(node_rect.height);
+        let node_header = Rect {
+            height: title_height,
+            ..node_rect
+        };
+        let title_clip = intersect_clip_rect(node_clip, node_header).unwrap_or(node_clip);
         output.push(item(
-            clip,
+            title_clip,
             z.saturating_add(5),
             Primitive::RoundedRect {
-                rect: ClipRect {
-                    height: title_height,
-                    ..ClipRect::from(node_rect)
-                },
+                rect: ClipRect::from(node_header),
                 radius: spacing.node_radius,
-                color: if selected {
-                    theme.accent
-                } else {
-                    theme.color(ThemeColorToken::NodeGraphHeaderSurface)
-                },
+                color: node_graph_category_color(node.category, theme),
             },
         ));
+        let zoom = graph.zoom.max(0.01);
+        let title_x = node_rect.x + (spacing.title_padding_x + 8.0) * zoom;
+        let title_width =
+            (node_rect.x + node_rect.width - spacing.body_padding * zoom - title_x).max(1.0);
         output.push(item(
-            clip,
+            title_clip,
             z.saturating_add(6),
-            styled_text_primitive(
-                clip,
-                [
-                    node_rect.x + spacing.title_padding_x * graph.zoom,
-                    node_rect.y + spacing.title_padding_y * graph.zoom,
-                ],
-                node.title.clone(),
+            node_graph_text_primitive(
+                TextPlacement {
+                    origin: [title_x, node_rect.y + spacing.title_padding_y * zoom],
+                    text: node.title.clone(),
+                },
                 theme.text,
+                title_width,
+                bevy_text::Justify::Left,
+                &font,
                 theme,
-                false,
+                zoom,
             ),
         ));
         output.push(item(
-            clip,
+            title_clip,
             z.saturating_add(6),
-            styled_text_primitive(
-                clip,
-                [
-                    node_rect.x + spacing.collapse_toggle_inset_x * graph.zoom,
-                    node_rect.y + spacing.title_padding_y * graph.zoom,
-                ],
-                if node.collapsed { "▸" } else { "▾" }.to_owned(),
+            node_graph_text_primitive(
+                TextPlacement {
+                    origin: [
+                        node_rect.x + spacing.collapse_toggle_inset_x * zoom,
+                        node_rect.y + spacing.title_padding_y * zoom,
+                    ],
+                    text: if node.collapsed { "▸" } else { "▾" }.to_owned(),
+                },
                 theme.text,
+                (spacing.title_padding_x - spacing.collapse_toggle_inset_x).max(1.0) * zoom,
+                bevy_text::Justify::Left,
+                &font,
                 theme,
-                false,
+                zoom,
             ),
         ));
 
@@ -14075,8 +14126,8 @@ fn paint_node_graph(paint: NodeGraphPaint<'_>, output: &mut Vec<DrawItem>) {
             let color = socket_type_color(socket.socket_type, theme);
             let radius = (spacing.socket_radius * graph.zoom).max(0.0);
             output.push(item(
-                clip,
-                z.saturating_add(7),
+                viewport_clip,
+                z.saturating_add(8),
                 Primitive::RoundedRect {
                     rect: ClipRect {
                         x: center[0] - radius,
@@ -14088,44 +14139,90 @@ fn paint_node_graph(paint: NodeGraphPaint<'_>, output: &mut Vec<DrawItem>) {
                     color,
                 },
             ));
-            let text_x = if socket.direction == SocketDirection::Input {
-                node_rect.x + spacing.socket_label_inset_x * graph.zoom
-            } else {
-                node_rect.x + node_rect.width
-                    - (socket.name.chars().count() as f32 * 7.0
-                        + spacing.socket_label_inset_x
+            let label_row = node.sockets[..socket_index]
+                .iter()
+                .filter(|previous| previous.direction == socket.direction)
+                .count();
+            let opposite_direction = match socket.direction {
+                SocketDirection::Input => SocketDirection::Output,
+                SocketDirection::Output => SocketDirection::Input,
+            };
+            let has_counterpart = node
+                .sockets
+                .iter()
+                .filter(|candidate| candidate.direction == opposite_direction)
+                .nth(label_row)
+                .is_some();
+            let content_left = node_rect.x + spacing.socket_label_inset_x * zoom;
+            let content_right = node_rect.x + node_rect.width - spacing.socket_label_inset_x * zoom;
+            let content_width = (content_right - content_left).max(1.0);
+            let split = content_left + content_width * 0.5;
+            let (text_x, max_width, text_clip) = match socket.direction {
+                SocketDirection::Input if has_counterpart => (
+                    content_left,
+                    (split - content_left).max(1.0),
+                    intersect_clip_rect(
+                        node_clip,
+                        Rect::new(
+                            content_left,
+                            node_rect.y,
+                            split - content_left,
+                            node_rect.height,
+                        ),
+                    )
+                    .unwrap_or(node_clip),
+                ),
+                SocketDirection::Input => (content_left, content_width, node_clip),
+                SocketDirection::Output => {
+                    let lane_left = if has_counterpart { split } else { content_left };
+                    let lane_width = (content_right - lane_left).max(1.0);
+                    let label_width = (output_label_widths
+                        .get(&(node.id, socket_index))
+                        .copied()
+                        .unwrap_or(lane_width)
                         + 1.0)
-                        * graph.zoom
+                        .clamp(1.0, lane_width);
+                    let clip = if has_counterpart {
+                        intersect_clip_rect(
+                            node_clip,
+                            Rect::new(lane_left, node_rect.y, lane_width, node_rect.height),
+                        )
+                        .unwrap_or(node_clip)
+                    } else {
+                        node_clip
+                    };
+                    (content_right - label_width, label_width, clip)
+                }
             };
             output.push(item(
-                clip,
-                z.saturating_add(7),
-                styled_text_primitive(
-                    clip,
-                    [
-                        text_x.max(node_rect.x + spacing.body_padding * graph.zoom),
-                        center[1] - spacing.socket_label_inset_y * graph.zoom,
-                    ],
-                    socket.name.clone(),
+                text_clip,
+                z.saturating_add(8),
+                node_graph_text_primitive(
+                    TextPlacement {
+                        origin: [text_x, center[1] - spacing.socket_label_inset_y * zoom],
+                        text: socket.name.clone(),
+                    },
                     theme.text_muted,
+                    max_width,
+                    bevy_text::Justify::Left,
+                    &font,
                     theme,
-                    false,
+                    zoom,
                 ),
             ));
         }
-        output.push(item(
-            clip,
-            z.saturating_add(8),
-            Primitive::Line {
-                from: [node_rect.x, node_rect.y + node_rect.height],
-                to: [
-                    node_rect.x + node_rect.width,
-                    node_rect.y + node_rect.height,
-                ],
-                width: 1.0,
-                color: if selected { theme.focus } else { theme.border },
+        push_rect_outline_with_width(
+            node_rect,
+            if selected {
+                theme.accent
+            } else {
+                theme.border.mix(theme.surface, 0.2)
             },
-        ));
+            node_clip,
+            z.saturating_add(7),
+            if selected { 2.0 } else { 1.0 },
+            output,
+        );
     }
 
     if let Some(gesture) = state.gesture {
@@ -14149,7 +14246,7 @@ fn paint_node_graph(paint: NodeGraphPaint<'_>, output: &mut Vec<DrawItem>) {
                         -1.0
                     };
                     output.push(item(
-                        clip,
+                        viewport_clip,
                         z.saturating_add(9),
                         Primitive::Bezier {
                             points: [
@@ -14177,7 +14274,7 @@ fn paint_node_graph(paint: NodeGraphPaint<'_>, output: &mut Vec<DrawItem>) {
                 );
                 let outline = theme.accent;
                 output.push(item(
-                    clip,
+                    viewport_clip,
                     z.saturating_add(9),
                     Primitive::RoundedRect {
                         rect: ClipRect::from(selection),
@@ -14185,12 +14282,18 @@ fn paint_node_graph(paint: NodeGraphPaint<'_>, output: &mut Vec<DrawItem>) {
                         color: theme.color(ThemeColorToken::NodeGraphSelectionOverlay),
                     },
                 ));
-                push_rect_outline(selection, outline, clip, z.saturating_add(10), output);
+                push_rect_outline(
+                    selection,
+                    outline,
+                    viewport_clip,
+                    z.saturating_add(10),
+                    output,
+                );
             }
             NodeGraphGesture::CutLinks { points, .. } => {
                 for pair in points.windows(2) {
                     output.push(item(
-                        clip,
+                        viewport_clip,
                         z.saturating_add(10),
                         Primitive::Line {
                             from: pair[0],
@@ -14207,6 +14310,167 @@ fn paint_node_graph(paint: NodeGraphPaint<'_>, output: &mut Vec<DrawItem>) {
             | NodeGraphGesture::SelectLink { .. } => {}
         }
     }
+}
+
+fn node_graph_text_primitive(
+    placement: TextPlacement,
+    color: Rgba,
+    max_width: f32,
+    justify: bevy_text::Justify,
+    font: &TextFont,
+    theme: &Theme,
+    zoom: f32,
+) -> Primitive {
+    Primitive::TextWrapped {
+        origin: placement.origin,
+        text: placement.text,
+        color,
+        max_width: max_width.max(1.0),
+        wrap: false,
+        style: Some(TextRenderStyle {
+            font: Some(font.clone().with_font_size(theme.font_size * zoom)),
+            line_height: Some(LineHeight::RelativeToFont(theme.line_height)),
+            letter_spacing: bevy_text::LetterSpacing::default(),
+            justify,
+            line_break: LineBreak::NoWrap,
+        }),
+    }
+}
+
+fn node_graph_category_color(category: NodeCategory, theme: &Theme) -> Rgba {
+    let surface = theme.color(ThemeColorToken::NodeGraphHeaderSurface);
+    let hue = match category {
+        NodeCategory::General => return surface,
+        NodeCategory::Input | NodeCategory::Converter => {
+            theme.color(ThemeColorToken::NodeGraphTextSocket)
+        }
+        NodeCategory::Texture => theme.color(ThemeColorToken::NodeGraphFloatSocket),
+        NodeCategory::Color | NodeCategory::Output => {
+            theme.color(ThemeColorToken::NodeGraphColorSocket)
+        }
+        NodeCategory::Geometry => theme.color(ThemeColorToken::NodeGraphVectorSocket),
+    };
+    surface.mix(hue, 0.5)
+}
+
+fn node_graph_canvas_surface(world: &World, entity: Entity, theme: &Theme) -> Rgba {
+    let token_surface = theme.color(ThemeColorToken::NodeGraphSurface);
+    let inline_background = world
+        .get::<UiInlineStyle>(entity)
+        .and_then(|style| style.0.get(&UiStyleProperty::Background));
+    let inline_override = inline_background.is_some();
+
+    let role = world.get::<UiRole>(entity);
+    let classes = world.get::<UiClasses>(entity);
+    let mut state = world
+        .get::<UiStyleState>(entity)
+        .copied()
+        .unwrap_or_default();
+    if world
+        .get::<UiEnabled>(entity)
+        .is_some_and(|enabled| !enabled.0)
+    {
+        state = state.union(UiStyleState::DISABLED);
+    }
+    if let Some(focus) = world.get_resource::<UiFocus>() {
+        for window_state in focus.windows.values() {
+            if window_state.hovered == Some(entity) {
+                state = state.union(UiStyleState::HOVERED);
+            }
+            if window_state.captured == Some(entity) {
+                state = state.union(UiStyleState::PRESSED);
+            }
+            if window_state.focused == Some(entity) {
+                state = state.union(UiStyleState::FOCUSED);
+            }
+        }
+    }
+    let stylesheet_override = world.get_resource::<UiStyleSheet>().is_some_and(|sheet| {
+        sheet.rules.iter().any(|rule| {
+            let selector = &rule.selector;
+            rule.declaration
+                .0
+                .contains_key(&UiStyleProperty::Background)
+                && selector
+                    .role
+                    .as_ref()
+                    .is_none_or(|wanted| role.is_some_and(|actual| &actual.0 == wanted))
+                && selector
+                    .class
+                    .as_ref()
+                    .is_none_or(|wanted| classes.is_some_and(|actual| actual.contains(wanted)))
+                && state.contains(selector.required_state)
+                && !state.intersects(selector.forbidden_state)
+        })
+    });
+    if !inline_override && !stylesheet_override {
+        return token_surface;
+    }
+
+    world
+        .get::<UiComputedStyle>(entity)
+        .and_then(|style| style.color(UiStyleProperty::Background))
+        .or_else(|| match inline_background {
+            Some(UiStyleValue::Color(color)) => Some(*color),
+            Some(UiStyleValue::ColorToken(token)) => Some(theme.color(*token)),
+            Some(_) | None => None,
+        })
+        .unwrap_or(token_surface)
+}
+
+fn measure_node_graph_output_label_widths(
+    world: &mut World,
+    graph: &NodeGraph,
+    font: &TextFont,
+    theme: &Theme,
+) -> HashMap<(NodeId, usize), f32> {
+    let labels = graph
+        .nodes
+        .iter()
+        .flat_map(|node| {
+            node.sockets
+                .iter()
+                .enumerate()
+                .filter(|(_, socket)| socket.direction == SocketDirection::Output)
+                .map(|(index, socket)| ((node.id, index), socket.name.clone()))
+        })
+        .collect::<Vec<_>>();
+    if labels.is_empty()
+        || !world.contains_resource::<TextPipeline>()
+        || !world.contains_resource::<Assets<Font>>()
+        || !world.contains_resource::<FontCx>()
+        || !world.contains_resource::<LayoutCx>()
+    {
+        return HashMap::new();
+    }
+
+    let font = font
+        .clone()
+        .with_font_size(theme.font_size * graph.zoom.max(0.01));
+    world.resource_scope(|world, mut pipeline: Mut<TextPipeline>| {
+        world.resource_scope(|world, fonts: Mut<Assets<Font>>| {
+            world.resource_scope(|world, mut font_cx: Mut<FontCx>| {
+                world.resource_scope(|_, mut layout_cx: Mut<LayoutCx>| {
+                    labels
+                        .into_iter()
+                        .filter_map(|(key, text)| {
+                            let layout = TextLayout::shape_with_bevy(
+                                &text,
+                                f32::INFINITY,
+                                &font,
+                                &mut pipeline,
+                                &fonts,
+                                &mut font_cx,
+                                &mut layout_cx,
+                            )
+                            .ok()?;
+                            Some((key, layout.bounds().width.max(0.0)))
+                        })
+                        .collect()
+                })
+            })
+        })
+    })
 }
 
 fn node_socket_color(
@@ -14596,7 +14860,7 @@ fn styled_text_primitive(
         max_width: (clip.width - (origin[0] - clip.x)).max(1.0),
         wrap,
         style: Some(TextRenderStyle {
-            font: Some(TextFont::from_font_size(theme.font_size)),
+            font: Some(ui_default_text_font(theme.font_size)),
             line_height: Some(LineHeight::RelativeToFont(theme.line_height)),
             letter_spacing: bevy_text::LetterSpacing::default(),
             justify: bevy_text::Justify::default(),
@@ -14661,6 +14925,7 @@ mod tests {
         CorePlugin, UiChildren, UiFocusable, UiHitBox, UiInputEvent, UiInputQueue, UiKey,
         UiKeyCode, UiModifiers, UiNode, UiRect, UiRoutedEvent, UiRoutedEvents, UiTabIndex,
     };
+    use bui_style::{UiStyleDeclaration, UiStyleRule, UiStyleSelector};
 
     fn browser_items(world: &mut World, owner: Entity) -> Vec<(Entity, FileBrowserItem)> {
         let mut query = world.query::<(Entity, &FileBrowserItem)>();
@@ -15914,21 +16179,48 @@ mod tests {
             NodeGraphPaint {
                 graph: &graph,
                 state: NodeGraphEditorState::default(),
+                output_label_widths: HashMap::new(),
+                canvas_surface: theme.color(ThemeColorToken::NodeGraphSurface),
                 label: "Graph",
                 rect,
                 clip,
                 z: 1,
                 theme: &theme,
+                font: ui_default_text_font(theme.font_size),
             },
             &mut graph_items,
         );
-        let hint_x = rect.x + rect.width - 244.0 - theme.spacing.control.padding_x;
-        assert!(graph_items.iter().any(|item| matches!(
-            &item.primitive,
-            Primitive::TextWrapped { text, origin, .. }
-                if text == "Drag · sockets link · Alt-drag cuts · C collapse"
-                    && (origin[0] - hint_x).abs() < 0.01
-        )));
+        let header_text = graph_items
+            .iter()
+            .filter_map(|item| match &item.primitive {
+                Primitive::TextWrapped {
+                    text,
+                    origin,
+                    max_width,
+                    ..
+                } if item.z == 3 => Some((text.as_str(), origin[0], *max_width)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(header_text.len(), 2);
+        assert!(header_text.iter().any(|(text, _, _)| *text == "Graph"));
+        assert!(
+            header_text
+                .iter()
+                .any(|(text, _, _)| *text == "0 nodes · 0 links")
+        );
+        assert!(!header_text.iter().any(|(text, _, _)| text.contains("Drag")));
+        let title = header_text
+            .iter()
+            .find(|(text, _, _)| *text == "Graph")
+            .unwrap();
+        let summary = header_text
+            .iter()
+            .find(|(text, _, _)| *text == "0 nodes · 0 links")
+            .unwrap();
+        let title_right = title.1 + title.2;
+        let summary_left = summary.1;
+        assert!(summary_left - title_right >= 8.0);
     }
 
     #[test]
@@ -20233,18 +20525,21 @@ mod tests {
                             before: String::new(),
                         }),
                     },
+                    output_label_widths: HashMap::new(),
+                    canvas_surface: theme.color(ThemeColorToken::NodeGraphSurface),
                     label: "Graph",
                     rect,
                     clip,
                     z: 1,
                     theme: &theme,
+                    font: ui_default_text_font(theme.font_size),
                 },
                 &mut graph_paint,
             );
             assert!(graph_paint.iter().any(|item| matches!(
                 item.primitive,
-                Primitive::Line { color, .. }
-                    if color == theme.color(ThemeColorToken::NodeGraphGridLine)
+                Primitive::Ellipse { color, .. }
+                    if color == theme.color(ThemeColorToken::NodeGraphGridLine).mix(theme.color(ThemeColorToken::NodeGraphSurface), 0.6)
             )));
             assert!(graph_paint.iter().any(|item| matches!(
                 item.primitive,
@@ -20287,6 +20582,196 @@ mod tests {
                     Primitive::Line { color, .. } if color == theme.color(ThemeColorToken::MenuBorder)
                 )));
         }
+    }
+
+    #[test]
+    fn node_graph_painter_keeps_category_headers_and_clips_zoomed_text() {
+        let theme = Theme::new(bui_style::ThemeKind::Dark);
+        let mut graph = NodeGraph::default();
+        let node_id = graph.add_node_with_category(
+            "A deliberately long texture node title",
+            [18.0, 20.0],
+            vec![
+                NodeSocket::input("A deliberately long input label", crate::SocketType::Float),
+                NodeSocket::output("A deliberately long output label", crate::SocketType::Color),
+            ],
+            NodeCategory::Texture,
+        );
+        graph.zoom = 1.5;
+        graph.selected.insert(node_id);
+        let rect = Rect::new(20.0, 16.0, 360.0, 240.0);
+        let clip = ClipRect::from(rect);
+        let node = graph.nodes.iter().find(|node| node.id == node_id).unwrap();
+        let node_rect = node_graph_node_rect(&graph, rect, node, &theme.spacing.node_graph);
+        let mut items = Vec::new();
+        paint_node_graph(
+            NodeGraphPaint {
+                graph: &graph,
+                state: NodeGraphEditorState::default(),
+                output_label_widths: HashMap::from([((node_id, 1), 44.0)]),
+                canvas_surface: theme.color(ThemeColorToken::NodeGraphSurface),
+                label: "Texture graph",
+                rect,
+                clip,
+                z: 1,
+                theme: &theme,
+                font: ui_default_text_font(theme.font_size),
+            },
+            &mut items,
+        );
+
+        let category_header = node_graph_category_color(NodeCategory::Texture, &theme);
+        assert!(items.iter().any(|item| matches!(
+            item.primitive,
+            Primitive::RoundedRect { rect: header, color, .. }
+                if (header.x - node_rect.x).abs() < 0.01
+                    && (header.y - node_rect.y).abs() < 0.01
+                    && (header.height - theme.spacing.node_graph.header_height * graph.zoom).abs() < 0.01
+                    && color == category_header
+        )));
+        assert!(items.iter().any(|item| matches!(
+            item.primitive,
+            Primitive::Line { color, width, .. }
+                if color == theme.accent && (width - 2.0).abs() < 0.01
+        )));
+
+        for text in [
+            "A deliberately long texture node title",
+            "A deliberately long input label",
+            "A deliberately long output label",
+        ] {
+            let draw = items
+                .iter()
+                .find(|item| matches!(&item.primitive, Primitive::TextWrapped { text: candidate, .. } if candidate == text))
+                .unwrap_or_else(|| panic!("missing node graph label {text:?}"));
+            assert!(draw.clip.x >= node_rect.x - 0.01);
+            assert!(draw.clip.x + draw.clip.width <= node_rect.x + node_rect.width + 0.01);
+            assert!(draw.clip.y >= node_rect.y - 0.01);
+            assert!(draw.clip.y + draw.clip.height <= node_rect.y + node_rect.height + 0.01);
+            let Primitive::TextWrapped {
+                max_width, style, ..
+            } = &draw.primitive
+            else {
+                unreachable!();
+            };
+            assert!(*max_width <= node_rect.width);
+            let font_size = style.as_ref().unwrap().font.as_ref().unwrap().font_size;
+            assert!(
+                matches!(font_size, FontSize::Px(size) if (size - theme.font_size * graph.zoom).abs() < 0.01)
+            );
+        }
+        let output = items
+            .iter()
+            .find(|item| {
+                matches!(&item.primitive, Primitive::TextWrapped { text, .. } if text == "A deliberately long output label")
+            })
+            .unwrap();
+        let Primitive::TextWrapped {
+            origin, max_width, ..
+        } = &output.primitive
+        else {
+            unreachable!();
+        };
+        let content_right = node_rect.x + node_rect.width
+            - theme.spacing.node_graph.socket_label_inset_x * graph.zoom;
+        assert!((origin[0] - (content_right - 45.0)).abs() < 0.01);
+        assert!((*max_width - 45.0).abs() < 0.01);
+        assert!(output.clip.x >= node_rect.x + node_rect.width * 0.49);
+    }
+
+    #[test]
+    fn node_graph_default_height_tracks_socket_rows_and_preserves_explicit_size() {
+        let theme = Theme::new(bui_style::ThemeKind::Dark);
+        let mut graph = NodeGraph::default();
+        let one_row = graph.add_node(
+            "One row",
+            [10.0, 10.0],
+            vec![NodeSocket::input("Input", crate::SocketType::Float)],
+        );
+        let two_rows = graph.add_node(
+            "Two rows",
+            [220.0, 10.0],
+            vec![
+                NodeSocket::input("First", crate::SocketType::Float),
+                NodeSocket::input("Second", crate::SocketType::Float),
+            ],
+        );
+        let rect = Rect::new(0.0, 0.0, 500.0, 300.0);
+        let node = graph.nodes.iter().find(|node| node.id == one_row).unwrap();
+        assert_eq!(node.size[1], 58.0);
+        assert_eq!(
+            node_graph_node_rect(&graph, rect, node, &theme.spacing.node_graph).height,
+            58.0
+        );
+        let node = graph.nodes.iter().find(|node| node.id == two_rows).unwrap();
+        assert_eq!(
+            node_graph_node_rect(&graph, rect, node, &theme.spacing.node_graph).height,
+            80.0
+        );
+        graph.nodes[0].collapsed = true;
+        assert_eq!(
+            node_graph_node_rect(&graph, rect, &graph.nodes[0], &theme.spacing.node_graph).height,
+            theme.spacing.node_graph.header_height
+        );
+        graph.nodes[1].size[1] = 126.0;
+        assert_eq!(
+            node_graph_node_rect(&graph, rect, &graph.nodes[1], &theme.spacing.node_graph).height,
+            126.0
+        );
+    }
+
+    #[test]
+    fn node_graph_canvas_uses_its_token_and_respects_explicit_background_styles() {
+        let theme = Theme::new(bui_style::ThemeKind::Dark);
+        let mut world = World::new();
+        let entity = world.spawn((UiNode, UiRole::new("node-graph"))).id();
+        let token_surface = theme.color(ThemeColorToken::NodeGraphSurface);
+        assert_eq!(
+            node_graph_canvas_surface(&world, entity, &theme),
+            token_surface
+        );
+        assert_ne!(token_surface, theme.surface);
+
+        let custom_color = Rgba(0.36, 0.12, 0.18, 1.0);
+        let mut inline = UiInlineStyle::default();
+        inline.set(
+            UiStyleProperty::Background,
+            UiStyleValue::Color(custom_color),
+        );
+        world.entity_mut(entity).insert((
+            inline,
+            UiComputedStyle {
+                properties: HashMap::from([(
+                    UiStyleProperty::Background,
+                    UiStyleValue::Color(custom_color),
+                )]),
+            },
+        ));
+        assert_eq!(
+            node_graph_canvas_surface(&world, entity, &theme),
+            custom_color
+        );
+
+        world.entity_mut(entity).remove::<UiInlineStyle>();
+        let mut declaration = UiStyleDeclaration::default();
+        declaration.set(
+            UiStyleProperty::Background,
+            UiStyleValue::Color(custom_color),
+        );
+        world.insert_resource(UiStyleSheet {
+            rules: vec![UiStyleRule {
+                selector: UiStyleSelector {
+                    role: Some("node-graph".to_owned()),
+                    ..Default::default()
+                },
+                declaration,
+                priority: 0,
+            }],
+        });
+        assert_eq!(
+            node_graph_canvas_surface(&world, entity, &theme),
+            custom_color
+        );
     }
 
     #[test]

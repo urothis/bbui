@@ -46,9 +46,9 @@ pub use declarative::{
 };
 pub use editors::{
     ColorChannel, ColorRamp, ColorStop, CurveEditor, CurvePoint, HsvColorEditor,
-    HsvColorEditorState, HsvColorField, Interpolation, LinkEndpoint, NodeGraph, NodeGraphError,
-    NodeId, NodeLink, NodeModel, NodeSocket, SocketDirection, SocketType, hsv_to_rgb,
-    parse_hex_color, rgb_to_hsv,
+    HsvColorEditorState, HsvColorField, Interpolation, LinkEndpoint, NodeCategory, NodeGraph,
+    NodeGraphError, NodeId, NodeLink, NodeModel, NodeSocket, SocketDirection, SocketType,
+    hsv_to_rgb, parse_hex_color, rgb_to_hsv,
 };
 pub use file_browser::{
     Breadcrumb, FileBrowser, FileBrowserError, FileEntry, FileSort, FileView, PreviewKind,
@@ -68,9 +68,9 @@ pub mod prelude {
         Button, Canvas, Checkbox, ColorRamp, CurveEditor, DataTable, Dropdown,
         DropdownOptionControl, DropdownPopupState, HsvColorEditor, HsvColorField, IconButton,
         IconButtonAsset, IconButtonAssetState, IconButtonAssetStatus, LinkEndpoint, ListModel,
-        MenuSession, NodeGraph, NodeGraphNodeControl, NodeGraphSocketControl, NodeId, NodeLink,
-        NodeModel, NodeSocket, NumberField, NumericExpressionVariables, NumericField, Panel,
-        PanelGroup, PanelOrderStore, PreviewGrid, RadioGroup, RadioOptionControl, Slider,
+        MenuSession, NodeCategory, NodeGraph, NodeGraphNodeControl, NodeGraphSocketControl, NodeId,
+        NodeLink, NodeModel, NodeSocket, NumberField, NumericExpressionVariables, NumericField,
+        Panel, PanelGroup, PanelOrderStore, PreviewGrid, RadioGroup, RadioOptionControl, Slider,
         SocketDirection, SocketType, TextArea, TextField, TreeModel, WidgetActionQueue,
         WidgetEventQueue, WidgetPlugin, WidgetTree,
     };
@@ -85,6 +85,12 @@ impl Plugin for WidgetPlugin {
         file_previews::install(app);
         icon_assets::install(app);
         panels::install_panel_persistence(app);
+        app.add_systems(
+            Update,
+            declarative::sync_intrinsic_label_text
+                .in_set(bui_core::UiSystems::TextMeasure)
+                .before(bui_text::measure_text_intrinsics),
+        );
         app.init_resource::<canvas::CanvasInputState>()
             .init_resource::<canvas::CanvasImageAssets>()
             .init_resource::<canvas::CanvasObjectItems>()

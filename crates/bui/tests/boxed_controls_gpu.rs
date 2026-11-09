@@ -3,14 +3,15 @@
 
 use std::{
     collections::HashMap,
-    thread,
+    fs, thread,
     time::{Duration, Instant},
 };
 
 use bevy::{
     app::PluginGroup,
     asset::Assets,
-    camera::RenderTarget,
+    camera::{ClearColor, RenderTarget},
+    color::Color,
     image::Image,
     prelude::{App, Camera2d, DefaultPlugins, Entity, ResMut, Resource, WindowPlugin},
     render::{
@@ -48,6 +49,17 @@ fn pixel_at(pixels: &[u8], x: usize, y: usize) -> &[u8] {
     let bytes_per_row = (TARGET_WIDTH as usize * 4).div_ceil(256) * 256;
     let offset = y * bytes_per_row + x * 4;
     &pixels[offset..offset + 4]
+}
+
+fn write_capture_ppm(path: &std::path::Path, pixels: &[u8]) {
+    let mut ppm = format!("P6\n{TARGET_WIDTH} {TARGET_HEIGHT}\n255\n").into_bytes();
+    ppm.reserve(TARGET_WIDTH as usize * TARGET_HEIGHT as usize * 3);
+    for y in 0..TARGET_HEIGHT as usize {
+        for x in 0..TARGET_WIDTH as usize {
+            ppm.extend_from_slice(&pixel_at(pixels, x, y)[..3]);
+        }
+    }
+    fs::write(path, ppm).expect("write optional controls visual capture");
 }
 
 fn assert_rgba_near(pixel: &[u8], color: Rgba, tolerance: u8, what: &str) {
@@ -256,6 +268,12 @@ fn boxed_slider_radio_icon_menu_render_dark_light_at_two_dpi_scales() {
         for dpi in [1.0, 2.0] {
             let theme = Theme::new(kind);
             *app.world_mut().resource_mut::<Theme>() = theme.clone();
+            *app.world_mut().resource_mut::<ClearColor>() = ClearColor(Color::srgba(
+                theme.background.0,
+                theme.background.1,
+                theme.background.2,
+                theme.background.3,
+            ));
             app.world_mut()
                 .get_mut::<UiLayoutRoot>(root)
                 .unwrap()
@@ -314,6 +332,20 @@ fn boxed_slider_radio_icon_menu_render_dark_light_at_two_dpi_scales() {
                 .cloned()
                 .expect("boxed controls GPU readback did not complete");
             app.world_mut().entity_mut(readback).despawn();
+            assert_rgba_near(
+                pixel_at(&pixels, 8, 8),
+                theme.background,
+                5,
+                "theme-matched offscreen scene background",
+            );
+            if let Some(directory) = std::env::var_os("BUI_CONTROLS_CAPTURE_DIR") {
+                let directory = std::path::PathBuf::from(directory);
+                fs::create_dir_all(&directory).expect("create controls capture directory");
+                write_capture_ppm(
+                    &directory.join(format!("{kind:?}-dpi{}.ppm", dpi as u32)),
+                    &pixels,
+                );
+            }
 
             let box_sample = [
                 (box_rect.x + box_rect.width - 18.0).round() as usize,

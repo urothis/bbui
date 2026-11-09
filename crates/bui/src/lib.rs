@@ -106,14 +106,14 @@ pub mod prelude {
         UiTransitions, set_ui_style_state,
     };
     pub use bui_text::{
-        TextBuffer, UiFontAsset, UiFontAssetState, UiFontAssetStatus, UiTextLayout,
-        resolve_text_font,
+        TextBuffer, UI_DEFAULT_FONT_FAMILY, UiFontAsset, UiFontAssetState, UiFontAssetStatus,
+        UiTextLayout, resolve_text_font, ui_default_text_font,
     };
     pub use bui_widgets::icon_assets::IconButtonAssetCache;
     pub use bui_widgets::{
         Button, Canvas, Checkbox, ColorRamp, CurveEditor, DataTable, Dropdown, FileBrowser,
         HsvColorEditor, HsvColorField, IconButton, IconButtonAsset, IconButtonAssetState,
-        IconButtonAssetStatus, Label, ListItem, ListModel, NodeGraph, NumberField,
+        IconButtonAssetStatus, Label, ListItem, ListModel, NodeCategory, NodeGraph, NumberField,
         NumericExpressionVariables, NumericField, Panel, PanelExpansionStore, PanelGroup,
         PanelOrderStore, PreviewGrid, PreviewGridItem, Progress, RadioGroup, Slider, TableColumn,
         TableRow, TextArea, TextField, Tooltip, TreeModel, WidgetContainer, WidgetNode, WidgetTree,
