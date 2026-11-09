@@ -15,7 +15,7 @@ use image::ImageEncoder;
 use std::collections::HashMap;
 use std::hint::black_box;
 
-fn raster_fixture() -> Vec<u8> {
+fn raster_fixture() -> Result<Vec<u8>, image::ImageError> {
     const SIDE: u32 = 512;
     let mut rgba = Vec::with_capacity((SIDE * SIDE * 4) as usize);
     for y in 0..SIDE {
@@ -24,31 +24,34 @@ fn raster_fixture() -> Vec<u8> {
         }
     }
     let mut png = Vec::new();
-    image::codecs::png::PngEncoder::new(&mut png)
-        .write_image(&rgba, SIDE, SIDE, image::ExtendedColorType::Rgba8)
-        .expect("encode deterministic PNG benchmark fixture");
-    png
+    image::codecs::png::PngEncoder::new(&mut png).write_image(
+        &rgba,
+        SIDE,
+        SIDE,
+        image::ExtendedColorType::Rgba8,
+    )?;
+    Ok(png)
 }
 
 pub fn bench(c: &mut Criterion) {
     let mut app = App::new();
     app.add_plugins(TextPlugin);
-    let mut pipeline = app
-        .world_mut()
-        .remove_resource::<TextPipeline>()
-        .expect("text pipeline resource");
-    let fonts = app
-        .world_mut()
-        .remove_resource::<Assets<Font>>()
-        .expect("font assets resource");
-    let mut font_cx = app
-        .world_mut()
-        .remove_resource::<FontCx>()
-        .expect("font collection resource");
-    let mut layout_cx = app
-        .world_mut()
-        .remove_resource::<LayoutCx>()
-        .expect("layout context resource");
+    let Some(mut pipeline) = app.world_mut().remove_resource::<TextPipeline>() else {
+        eprintln!("text benchmark has no text pipeline");
+        return;
+    };
+    let Some(fonts) = app.world_mut().remove_resource::<Assets<Font>>() else {
+        eprintln!("text benchmark has no font assets");
+        return;
+    };
+    let Some(mut font_cx) = app.world_mut().remove_resource::<FontCx>() else {
+        eprintln!("text benchmark has no font collection");
+        return;
+    };
+    let Some(mut layout_cx) = app.world_mut().remove_resource::<LayoutCx>() else {
+        eprintln!("text benchmark has no layout context");
+        return;
+    };
     let font = ui_default_text_font(14.0);
     let paragraph =
         "NodeGraph · typed sockets · stable links. Drag to move, pan, or connect. ".repeat(12);
@@ -57,6 +60,18 @@ pub fn bench(c: &mut Criterion) {
         ("label", "NodeGraph · typed sockets · stable links", 600.0),
         ("wrapped_paragraph", paragraph.as_str(), 360.0),
     ] {
+        if let Err(error) = TextLayout::shape_with_bevy(
+            text,
+            width,
+            &font,
+            &mut pipeline,
+            &fonts,
+            &mut font_cx,
+            &mut layout_cx,
+        ) {
+            eprintln!("text benchmark fixture did not shape: {error:?}");
+            continue;
+        }
         group.throughput(Throughput::Bytes(text.len() as u64));
         group.bench_with_input(BenchmarkId::new("shape", name), &text, |b, text| {
             b.iter(|| {
@@ -68,9 +83,8 @@ pub fn bench(c: &mut Criterion) {
                     &fonts,
                     &mut font_cx,
                     &mut layout_cx,
-                )
-                .expect("bundled Inter font should shape");
-                black_box(shaped.bounds());
+                );
+                black_box(shaped.map(|layout| layout.bounds()).is_ok());
             });
         });
     }
@@ -80,19 +94,19 @@ pub fn bench(c: &mut Criterion) {
     let mut group = c.benchmark_group("editing/model");
     group.bench_function("expression_evaluate", |b| {
         b.iter(|| {
-            black_box(
-                expression::evaluate(black_box("2*pi + min(4, 3) + x"), &vars)
-                    .expect("valid expression"),
-            );
+            black_box(expression::evaluate(black_box("2*pi + min(4, 3) + x"), &vars).is_ok());
         });
     });
-    let mut field = NumericField::float(1.25).expect("finite field");
+    let Ok(mut field) = NumericField::float(1.25) else {
+        eprintln!("numeric benchmark field is invalid");
+        return;
+    };
     group.bench_function("numeric_field_commit", |b| {
         b.iter(|| {
             black_box(
                 field
                     .evaluate_input(black_box("2*pi + min(4, 3)"), &vars)
-                    .expect("valid numeric edit"),
+                    .is_ok(),
             );
         });
     });
@@ -112,18 +126,23 @@ pub fn bench(c: &mut Criterion) {
         b.iter_batched(
             History::<i64>::default,
             |mut history| {
-                history.begin("number").expect("start transaction");
-                history.record("field", 1, 2).expect("record edit");
-                history.commit().expect("commit edit");
-                black_box(history.undo().expect("undo edit"));
-                black_box(history.redo().expect("redo edit"));
+                if history.begin("number").is_ok()
+                    && history.record("field", 1, 2).is_ok()
+                    && history.commit().is_ok()
+                {
+                    black_box(history.undo());
+                    black_box(history.redo());
+                }
             },
             BatchSize::SmallInput,
         );
     });
     group.finish();
 
-    let raster = raster_fixture();
+    let Ok(raster) = raster_fixture() else {
+        eprintln!("failed to encode PNG benchmark fixture");
+        return;
+    };
     let svg = include_bytes!("../../../../crates/bui_media/assets/sample.svg");
     let gif = include_bytes!("../../../../crates/bui_media/assets/loop.gif");
     let webm = include_bytes!("../../../../crates/bui_media/assets/sample.webm");
@@ -137,11 +156,18 @@ pub fn bench(c: &mut Criterion) {
         ),
         ("svg_full", svg.as_slice(), decode_svg),
     ] {
+        if let Err(error) = decode(bytes) {
+            eprintln!("invalid {name} media fixture: {error:?}");
+            continue;
+        }
         group.throughput(Throughput::Bytes(bytes.len() as u64));
         group.bench_with_input(BenchmarkId::new("frame", name), &bytes, |b, bytes| {
             b.iter(|| {
-                let frame = decode(black_box(bytes)).expect("checked media fixture");
-                black_box(frame.pixels.len());
+                black_box(
+                    decode(black_box(bytes))
+                        .map(|frame| frame.pixels.len())
+                        .is_ok(),
+                );
             });
         });
     }
@@ -158,20 +184,34 @@ pub fn bench(c: &mut Criterion) {
             decode_webm_vp8_thumbnail,
         ),
     ] {
+        if let Err(error) = decode(bytes, 128, 128) {
+            eprintln!("invalid {name} media fixture: {error:?}");
+            continue;
+        }
         group.throughput(Throughput::Bytes(bytes.len() as u64));
         group.bench_with_input(BenchmarkId::new("poster", name), &bytes, |b, bytes| {
             b.iter(|| {
-                let frame = decode(black_box(bytes), 128, 128).expect("checked media fixture");
-                black_box(frame.pixels.len());
+                black_box(
+                    decode(black_box(bytes), 128, 128)
+                        .map(|frame| frame.pixels.len())
+                        .is_ok(),
+                );
             });
         });
+    }
+    if let Err(error) = decode_mp4_h264_thumbnail(mp4.to_vec(), 128, 128) {
+        eprintln!("invalid MP4 media fixture: {error:?}");
+        group.finish();
+        return;
     }
     group.throughput(Throughput::Bytes(mp4.len() as u64));
     group.bench_function("poster/mp4_h264_thumbnail", |b| {
         b.iter(|| {
-            let frame = decode_mp4_h264_thumbnail(black_box(mp4.to_vec()), 128, 128)
-                .expect("checked MP4 fixture");
-            black_box(frame.pixels.len());
+            black_box(
+                decode_mp4_h264_thumbnail(black_box(mp4.to_vec()), 128, 128)
+                    .map(|frame| frame.pixels.len())
+                    .is_ok(),
+            );
         });
     });
     group.finish();

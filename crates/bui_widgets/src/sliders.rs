@@ -67,10 +67,9 @@ impl Slider {
     }
 
     pub fn range(&self) -> [f64; 2] {
-        [
-            self.field.min.expect("Slider invariant: finite min"),
-            self.field.max.expect("Slider invariant: finite max"),
-        ]
+        let min = self.field.min.unwrap_or(self.field.value);
+        let max = self.field.max.unwrap_or(min);
+        [min, max]
     }
 
     /// Returns the current position in the closed interval `[0, 1]`.

@@ -37,6 +37,7 @@ const ROOT_RECT: Rect = Rect::new(16.0, 16.0, 480.0, 440.0);
 #[derive(Resource, Default)]
 struct CapturedFrames(HashMap<usize, Vec<u8>>);
 
+#[cfg(test)]
 fn find_key(world: &mut bevy::prelude::World, expected: &str) -> Entity {
     let mut query = world.query::<(Entity, &UiKey)>();
     query
@@ -51,6 +52,7 @@ fn pixel_at(pixels: &[u8], x: usize, y: usize) -> &[u8] {
     &pixels[offset..offset + 4]
 }
 
+#[cfg(test)]
 fn write_capture_ppm(path: &std::path::Path, pixels: &[u8]) {
     let mut ppm = format!("P6\n{TARGET_WIDTH} {TARGET_HEIGHT}\n255\n").into_bytes();
     ppm.reserve(TARGET_WIDTH as usize * TARGET_HEIGHT as usize * 3);

@@ -142,10 +142,10 @@ fn report(
     popup: bevy_ecs::entity::Entity,
     label: &str,
 ) {
-    let style = app
-        .world()
-        .get::<UiComputedStyle>(entity)
-        .expect("StylePlugin resolves every UiNode");
+    let Some(style) = app.world().get::<UiComputedStyle>(entity) else {
+        eprintln!("StylePlugin did not resolve the example node");
+        return;
+    };
     let height = app
         .world()
         .get::<UiLayoutNode>(entity)

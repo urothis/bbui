@@ -6,7 +6,7 @@ use bevy_app::App;
 use bui_core::{CorePlugin, UiNode, set_parent};
 use bui_layout::{LayoutPlugin, Rect, UiIntrinsicSize, UiLayoutNode, UiLayoutRoot, UiLayoutStats};
 
-fn main() {
+fn main() -> Result<(), bui_core::UiHierarchyError> {
     const NODE_COUNT: usize = 2_000;
     const FRAMES: usize = 120;
 
@@ -31,7 +31,7 @@ fn main() {
                 UiLayoutNode::leaf(bui_layout::UiLength::Auto, bui_layout::UiLength::Auto),
             ))
             .id();
-        set_parent(app.world_mut(), leaf, root).expect("valid benchmark hierarchy");
+        set_parent(app.world_mut(), leaf, root)?;
         leaves.push(leaf);
     }
 
@@ -69,4 +69,5 @@ fn main() {
         change_elapsed,
         change_elapsed.as_secs_f64() * 1_000_000.0 / FRAMES as f64,
     );
+    Ok(())
 }

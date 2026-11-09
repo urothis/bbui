@@ -30,6 +30,7 @@ fn parent(app: &mut App) -> bevy::prelude::Entity {
     app.world_mut().spawn((UiNode, UiChildren::default())).id()
 }
 
+#[cfg(test)]
 fn button(
     app: &mut App,
     parent: bevy::prelude::Entity,

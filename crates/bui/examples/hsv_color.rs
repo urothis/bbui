@@ -11,10 +11,13 @@ use bui_style::Rgba;
 fn setup(world: &mut World) {
     let background = world.resource::<Theme>().background;
     world.spawn(Camera2d);
-    let window = world
+    let Ok(window) = world
         .query_filtered::<Entity, With<PrimaryWindow>>()
         .single(world)
-        .expect("HSV color example requires a primary window");
+    else {
+        eprintln!("HSV color example requires a primary window");
+        return;
+    };
     let root = world
         .spawn((
             UiNode,
@@ -54,8 +57,9 @@ fn setup(world: &mut World) {
             hsv_color_default("Accent"),
         }
     };
-    tree.spawn(world, Some(root))
-        .expect("valid HSV color widget tree");
+    if let Err(error) = tree.spawn(world, Some(root)) {
+        eprintln!("widget tree setup: {error:?}");
+    }
 }
 
 fn log_widget_events(mut events: ResMut<WidgetEventQueue>) {

@@ -20,7 +20,7 @@ struct Scene {
     changed_control: bevy::ecs::entity::Entity,
 }
 
-fn scene_with_tree(tree: WidgetTree) -> Scene {
+fn scene_with_tree(tree: WidgetTree) -> Result<Scene, String> {
     let mut app = App::new();
     app.add_plugins(MinimalPlugins)
         .add_plugins(AssetPlugin::default())
@@ -35,7 +35,7 @@ fn scene_with_tree(tree: WidgetTree) -> Scene {
     let window = app.world_mut().spawn(window).id();
     let root = tree
         .spawn(app.world_mut(), None)
-        .expect("valid integrated benchmark widget tree");
+        .map_err(|error| format!("integrated benchmark widget tree: {error:?}"))?;
     app.world_mut().entity_mut(root).insert((
         UiLayoutRoot::new(window, Rect::new(0.0, 0.0, 1280.0, 720.0), 1.0),
         UiPaint(Primitive::RoundedRect {
@@ -52,24 +52,25 @@ fn scene_with_tree(tree: WidgetTree) -> Scene {
     let changed_control = app
         .world()
         .get::<UiChildren>(root)
-        .expect("root has controls")
-        .0[0];
+        .and_then(|children| children.0.first())
+        .copied()
+        .ok_or_else(|| "integrated benchmark has no controls".to_owned())?;
     for _ in 0..3 {
         app.update();
     }
-    Scene {
+    Ok(Scene {
         app,
         changed_control,
-    }
+    })
 }
 
-fn scene(controls: usize) -> Scene {
+fn scene(controls: usize) -> Result<Scene, String> {
     scene_with_tree(WidgetTree::new(WidgetNode::column((0..controls).map(
         |index| WidgetNode::checkbox(format!("Control {index:04}"), false),
     ))))
 }
 
-fn text_scene(controls: usize) -> Scene {
+fn text_scene(controls: usize) -> Result<Scene, String> {
     scene_with_tree(WidgetTree::new(WidgetNode::column((0..controls).map(
         |index| WidgetNode::text_field(format!("Field {index:04}"), "alpha"),
     ))))
@@ -79,25 +80,41 @@ pub fn bench(c: &mut Criterion) {
     let mut group = c.benchmark_group("bui_plugin/headless_cpu_update");
     for controls in [200, 1_000, 10_000] {
         group.throughput(Throughput::Elements(controls as u64));
-        let mut idle = scene(controls);
+        let Ok(mut idle) = scene(controls) else {
+            eprintln!("failed to create integrated idle benchmark scene");
+            continue;
+        };
         group.bench_with_input(BenchmarkId::new("idle", controls), &controls, |b, _| {
             b.iter(|| {
                 idle.app.update();
                 black_box(idle.app.world().resource::<DisplayList>().item_count());
             });
         });
-        let mut dirty = scene(controls);
+        let Ok(mut dirty) = scene(controls) else {
+            eprintln!("failed to create integrated dirty benchmark scene");
+            continue;
+        };
+        if dirty
+            .app
+            .world()
+            .get::<Checkbox>(dirty.changed_control)
+            .is_none()
+        {
+            eprintln!("integrated benchmark checkbox is missing");
+            continue;
+        }
         group.bench_with_input(
             BenchmarkId::new("toggle_checkbox", controls),
             &controls,
             |b, _| {
                 b.iter(|| {
-                    dirty
+                    if let Some(mut checkbox) = dirty
                         .app
                         .world_mut()
                         .get_mut::<Checkbox>(dirty.changed_control)
-                        .expect("checkbox is mounted")
-                        .toggle();
+                    {
+                        checkbox.toggle();
+                    }
                     dirty.app.update();
                     black_box(dirty.app.world().resource::<DisplayList>().item_count());
                 });
@@ -109,14 +126,20 @@ pub fn bench(c: &mut Criterion) {
     let mut text_group = c.benchmark_group("bui_plugin/text_field_update");
     for controls in [200, 1_000] {
         text_group.throughput(Throughput::Elements(controls as u64));
-        let mut idle = text_scene(controls);
+        let Ok(mut idle) = text_scene(controls) else {
+            eprintln!("failed to create text idle benchmark scene");
+            continue;
+        };
         text_group.bench_with_input(BenchmarkId::new("idle", controls), &controls, |b, _| {
             b.iter(|| {
                 idle.app.update();
                 black_box(idle.app.world().resource::<DisplayList>().item_count());
             });
         });
-        let mut changed = text_scene(controls);
+        let Ok(mut changed) = text_scene(controls) else {
+            eprintln!("failed to create text edit benchmark scene");
+            continue;
+        };
         let mut phase = false;
         text_group.bench_with_input(BenchmarkId::new("edit_one", controls), &controls, |b, _| {
             b.iter(|| {

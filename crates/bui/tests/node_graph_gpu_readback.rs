@@ -53,6 +53,7 @@ fn pixel_at_width(pixels: &[u8], width: u32, x: usize, y: usize) -> &[u8] {
     &pixels[offset..offset + 4]
 }
 
+#[cfg(test)]
 fn write_capture(path: &Path, pixels: &[u8], width: u32, height: u32) {
     let mut rgb = Vec::with_capacity(width as usize * height as usize * 3);
     for y in 0..height as usize {
@@ -252,6 +253,7 @@ fn assert_color_near_position_sized(
     );
 }
 
+#[cfg(test)]
 fn sample_graph() -> (NodeGraph, bui::widgets::NodeId, bui::widgets::NodeId) {
     let mut graph = NodeGraph::default();
     let source = graph.add_node_with_category(
@@ -277,6 +279,7 @@ fn sample_graph() -> (NodeGraph, bui::widgets::NodeId, bui::widgets::NodeId) {
     (graph, source, output)
 }
 
+#[cfg(test)]
 fn example_graph() -> NodeGraph {
     let mut graph = NodeGraph::default();
     let noise = graph.add_node_with_category(

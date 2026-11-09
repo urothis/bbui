@@ -11,10 +11,13 @@ use bui_render::{ClipRect, Primitive, UiPaint};
 
 fn setup(world: &mut World) {
     world.spawn(Camera2d);
-    let window = world
+    let Ok(window) = world
         .query_filtered::<Entity, With<PrimaryWindow>>()
         .single(world)
-        .expect("collections example requires a primary window");
+    else {
+        eprintln!("collections example requires a primary window");
+        return;
+    };
     let background = world.resource::<Theme>().background;
     let root = world
         .spawn((
@@ -151,9 +154,9 @@ fn setup(world: &mut World) {
             label("Arrow keys navigate · tree Left/Right collapses or expands · Enter activates · Ctrl+Z/Y undo and redo"),
         }
     };
-    widgets
-        .spawn(world, Some(root))
-        .expect("valid collection widget tree");
+    if let Err(error) = widgets.spawn(world, Some(root)) {
+        eprintln!("collection widget tree: {error:?}");
+    }
 }
 
 fn log_widget_events(mut events: ResMut<WidgetEventQueue>) {

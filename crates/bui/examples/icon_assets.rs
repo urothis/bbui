@@ -12,10 +12,13 @@ use bui_render::{ClipRect, Primitive, UiPaint};
 
 fn setup(world: &mut World) {
     world.spawn(Camera2d);
-    let window = world
+    let Ok(window) = world
         .query_filtered::<Entity, With<PrimaryWindow>>()
         .single(world)
-        .expect("icon assets example requires a primary window");
+    else {
+        eprintln!("icon assets example requires a primary window");
+        return;
+    };
     let root = world
         .spawn((
             UiNode,
@@ -49,8 +52,9 @@ fn setup(world: &mut World) {
             label("The missing path reports an error in IconButtonAssetState. Call retry() after installing the file."),
         }
     };
-    tree.spawn(world, Some(root))
-        .expect("valid icon asset example widget tree");
+    if let Err(error) = tree.spawn(world, Some(root)) {
+        eprintln!("icon asset widget tree: {error:?}");
+    }
 }
 
 fn log_asset_state_changes(

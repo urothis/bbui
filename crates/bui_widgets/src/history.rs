@@ -750,8 +750,9 @@ fn capture_context(world: &World) -> UiEditContext {
         focused_key: focused_key.clone(),
         selections: Default::default(),
     };
-    if let Some(entity) = focused {
-        let key = focused_key.expect("focused entity has a key");
+    if let Some(entity) = focused
+        && let Some(key) = focused_key
+    {
         let selection = if let Some(buffer) = world.get::<TextBuffer>(entity) {
             Some(TextSelection {
                 anchor: buffer.anchor(),

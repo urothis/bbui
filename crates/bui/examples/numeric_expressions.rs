@@ -11,10 +11,13 @@ use bui_render::{ClipRect, Primitive, UiPaint};
 
 fn setup(world: &mut World) {
     world.spawn(Camera2d);
-    let window = world
+    let Ok(window) = world
         .query_filtered::<Entity, With<PrimaryWindow>>()
         .single(world)
-        .expect("numeric expression example requires a primary window");
+    else {
+        eprintln!("numeric expression example requires a primary window");
+        return;
+    };
     let root = world
         .spawn((
             UiNode,
@@ -36,7 +39,7 @@ fn setup(world: &mut World) {
             }),
         ))
         .id();
-    WidgetTree::new(WidgetNode::column([
+    if let Err(error) = WidgetTree::new(WidgetNode::column([
         WidgetNode::label("Numeric expressions"),
         WidgetNode::number("Result", 3.0, -1_000.0, 1_000.0, 0.1).with_key("result"),
         WidgetNode::number("Tiny value", 0.000_000_42, -1.0, 1.0, 0.000_000_01),
@@ -45,12 +48,18 @@ fn setup(world: &mut World) {
         WidgetNode::label("Here c = 0 and y = 7; Escape cancels an edit."),
     ]))
     .spawn(world, Some(root))
-    .expect("valid numeric expression declaration");
-    let field = world
+    {
+        eprintln!("numeric expression widget tree: {error:?}");
+        return;
+    }
+    let Some(field) = world
         .query::<(Entity, &UiKey)>()
         .iter(world)
         .find_map(|(entity, key)| (key.0 == "result").then_some(entity))
-        .expect("result field is present");
+    else {
+        eprintln!("numeric expression result field is missing");
+        return;
+    };
     world
         .entity_mut(field)
         .insert(NumericExpressionVariables(HashMap::from([

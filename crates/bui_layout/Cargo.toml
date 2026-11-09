@@ -9,4 +9,8 @@ bevy_app.workspace = true
 bevy_ecs.workspace = true
 bui_core = { path = "../bui_core" }
 
+[dev-dependencies]
+stats_alloc.workspace = true
 
+[lints]
+workspace = true

@@ -11,10 +11,13 @@ use bui_render::{ClipRect, Primitive, UiPaint};
 
 fn setup(world: &mut World) {
     world.spawn(Camera2d);
-    let window = world
+    let Ok(window) = world
         .query_filtered::<Entity, With<PrimaryWindow>>()
         .single(world)
-        .expect("slider example requires a primary window");
+    else {
+        eprintln!("slider example requires a primary window");
+        return;
+    };
     let root = world
         .spawn((
             UiNode,
@@ -37,7 +40,11 @@ fn setup(world: &mut World) {
         ))
         .id();
 
-    let opacity = Slider::new(0.72, 0.0, 1.0, 0.01).unwrap().with_unit("%");
+    let Ok(opacity) = Slider::new(0.72, 0.0, 1.0, 0.01) else {
+        eprintln!("invalid opacity slider range");
+        return;
+    };
+    let opacity = opacity.with_unit("%");
     let tree = bui! {
         column {
             label("Sliders · arrows adjust, Home/End jump to range ends"),
@@ -46,8 +53,9 @@ fn setup(world: &mut World) {
             label("Drag the handle or track; Escape cancels a drag. Ctrl+Wheel steps the focused slider."),
         }
     };
-    tree.spawn(world, Some(root))
-        .expect("valid bounded slider declarations");
+    if let Err(error) = tree.spawn(world, Some(root)) {
+        eprintln!("widget tree setup: {error:?}");
+    }
 }
 
 fn log_widget_events(mut events: ResMut<WidgetEventQueue>) {

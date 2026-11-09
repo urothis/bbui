@@ -15,40 +15,34 @@ use bui_render::{ClipRect, Primitive, UiPaint};
 use bui_style::{UiEasing, UiReducedMotion, UiStyleProperty, UiTransitionSpec, UiTransitions};
 use std::time::Duration;
 
-fn sample_canvas() -> Canvas {
+fn sample_canvas() -> Option<Canvas> {
     let mut canvas = Canvas::default();
-    canvas
-        .add(
-            [32.0, 48.0],
-            CanvasShape::Rectangle {
-                size: [180.0, 120.0],
-            },
-            [0.21, 0.44, 0.75, 1.0],
-        )
-        .expect("valid canvas rectangle");
-    canvas
-        .add(
-            [240.0, 92.0],
-            CanvasShape::Ellipse {
-                size: [170.0, 125.0],
-            },
-            [0.86, 0.36, 0.22, 0.9],
-        )
-        .expect("valid canvas ellipse");
-    canvas
-        .add(
-            [470.0, 45.0],
-            CanvasShape::Image {
-                size: [150.0, 150.0],
-                asset: "canvas/checker.svg".into(),
-            },
-            [1.0; 4],
-        )
-        .expect("valid canvas image");
-    canvas
+    canvas.add(
+        [32.0, 48.0],
+        CanvasShape::Rectangle {
+            size: [180.0, 120.0],
+        },
+        [0.21, 0.44, 0.75, 1.0],
+    )?;
+    canvas.add(
+        [240.0, 92.0],
+        CanvasShape::Ellipse {
+            size: [170.0, 125.0],
+        },
+        [0.86, 0.36, 0.22, 0.9],
+    )?;
+    canvas.add(
+        [470.0, 45.0],
+        CanvasShape::Image {
+            size: [150.0, 150.0],
+            asset: "canvas/checker.svg".into(),
+        },
+        [1.0; 4],
+    )?;
+    Some(canvas)
 }
 
-fn sample_graph() -> NodeGraph {
+fn sample_graph() -> Result<NodeGraph, String> {
     let mut graph = NodeGraph::default();
     let source = graph.add_node(
         "Value",
@@ -62,17 +56,20 @@ fn sample_graph() -> NodeGraph {
     );
     graph
         .create_link(source, 0, output, 0)
-        .expect("matching sample sockets");
-    graph
+        .map_err(|error| format!("sample graph link: {error:?}"))?;
+    Ok(graph)
 }
 
 fn setup(world: &mut World) {
     let background = world.resource::<Theme>().background;
     world.spawn(Camera2d);
-    let window = world
+    let Ok(window) = world
         .query_filtered::<Entity, With<PrimaryWindow>>()
         .single(world)
-        .expect("showcase requires a primary window");
+    else {
+        eprintln!("showcase requires a primary window");
+        return;
+    };
     let root = world
         .spawn((
             UiNode,
@@ -216,7 +213,18 @@ fn setup(world: &mut World) {
         ],
         ..DataTable::default()
     };
-    let browser_directory = std::env::current_dir().expect("showcase needs a working directory");
+    let Ok(browser_directory) = std::env::current_dir() else {
+        eprintln!("showcase needs a working directory");
+        return;
+    };
+    let Some(canvas) = sample_canvas() else {
+        eprintln!("showcase canvas geometry is invalid");
+        return;
+    };
+    let Ok(graph) = sample_graph() else {
+        eprintln!("showcase graph links are invalid");
+        return;
+    };
     tree.root.children.extend([
         WidgetNode::boxed([
             WidgetNode::label("Controls, assets, and layout"),
@@ -278,8 +286,8 @@ fn setup(world: &mut World) {
         ]),
         WidgetNode::boxed([
             WidgetNode::label("Canvas and node graph"),
-            WidgetNode::canvas("Canvas", sample_canvas()).with_height(UiLength::Px(300.0)),
-            WidgetNode::node_graph("Nodes", sample_graph()).with_height(UiLength::Px(300.0)),
+            WidgetNode::canvas("Canvas", canvas).with_height(UiLength::Px(300.0)),
+            WidgetNode::node_graph("Nodes", graph).with_height(UiLength::Px(300.0)),
         ]),
         WidgetNode::boxed([
             WidgetNode::label("File browser"),
@@ -289,21 +297,29 @@ fn setup(world: &mut World) {
     tree.root = WidgetNode::scroll([tree.root])
         .with_width(UiLength::Px(900.0))
         .with_height(UiLength::Fill(1.0));
-    tree.spawn(world, Some(root))
-        .expect("valid showcase widget tree");
-    let group = world
+    if let Err(error) = tree.spawn(world, Some(root)) {
+        eprintln!("widget tree setup: {error:?}");
+        return;
+    }
+    let Some(group) = world
         .query::<(Entity, &UiKey)>()
         .iter(world)
         .find_map(|(entity, key)| (key.0 == "showcase-panels").then_some(entity))
-        .expect("showcase panel group exists");
+    else {
+        eprintln!("showcase panel group is missing");
+        return;
+    };
     world.entity_mut(group).insert(
         PanelGroup::with_panels(["transform", "material"]).with_reordering("showcase-panels"),
     );
-    let font_label = world
+    let Some(font_label) = world
         .query::<(Entity, &UiKey)>()
         .iter(world)
         .find_map(|(entity, key)| (key.0 == "showcase-font").then_some(entity))
-        .expect("showcase font label exists");
+    else {
+        eprintln!("showcase font label is missing");
+        return;
+    };
     world
         .entity_mut(font_label)
         .insert(UiFontAsset::new("fonts/NotoSansSymbols2-U+1F7D5.ttf"));

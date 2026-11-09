@@ -20,10 +20,13 @@ struct LiveDemoControls {
 fn setup(world: &mut World) {
     let background = world.resource::<Theme>().background;
     world.spawn(Camera2d);
-    let window = world
+    let Ok(window) = world
         .query_filtered::<Entity, With<PrimaryWindow>>()
         .single(world)
-        .expect("accessibility live example requires a primary window");
+    else {
+        eprintln!("accessibility live example requires a primary window");
+        return;
+    };
     let root = world
         .spawn((
             UiNode,
@@ -51,12 +54,18 @@ fn setup(world: &mut World) {
         WidgetNode::label("Waiting for a change").with_key("status"),
         WidgetNode::button("Announce status").with_key("announce"),
     ]);
-    let tree_root = bui::widgets::WidgetTree::new(tree)
-        .spawn(world, Some(root))
-        .expect("valid live region example tree");
-    let children = world.get::<UiChildren>(tree_root).unwrap().0.clone();
-    let status = children[2];
-    let button = children[3];
+    let Ok(tree_root) = bui::widgets::WidgetTree::new(tree).spawn(world, Some(root)) else {
+        eprintln!("failed to spawn accessibility example tree");
+        return;
+    };
+    let Some(children) = world.get::<UiChildren>(tree_root) else {
+        eprintln!("accessibility example children are missing");
+        return;
+    };
+    let (Some(&status), Some(&button)) = (children.0.get(2), children.0.get(3)) else {
+        eprintln!("accessibility example controls are missing");
+        return;
+    };
     world
         .entity_mut(status)
         .insert(UiLiveRegion::polite().atomic());

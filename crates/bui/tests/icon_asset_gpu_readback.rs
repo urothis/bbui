@@ -39,6 +39,7 @@ const CHECKER_SVG: &[u8] = include_bytes!("../../../assets/canvas/checker.svg");
 #[derive(Resource, Default)]
 struct CapturedFrames(HashMap<usize, Vec<u8>>);
 
+#[cfg(test)]
 fn temp_directory() -> std::path::PathBuf {
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -134,6 +135,7 @@ fn await_failed_state(app: &mut App, entity: bevy::prelude::Entity) {
     }
 }
 
+#[cfg(test)]
 fn expected_readback(app: &mut App, target: &Handle<Image>, frame: usize) -> Vec<u8> {
     let readback = app
         .world_mut()

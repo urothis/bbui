@@ -79,10 +79,13 @@ fn scene_rows() -> Vec<TableRow> {
 
 fn setup(world: &mut World) {
     world.spawn(Camera2d);
-    let window = world
+    let Ok(window) = world
         .query_filtered::<Entity, With<PrimaryWindow>>()
         .single(world)
-        .expect("data table example requires a primary window");
+    else {
+        eprintln!("data table example requires a primary window");
+        return;
+    };
     let theme = world.resource::<Theme>();
     let background = theme.background;
     let title = title_style(theme.text, 24.0);
@@ -157,8 +160,9 @@ fn setup(world: &mut World) {
         ])
         .with_gap(0.0),
     ]));
-    tree.spawn(world, Some(root))
-        .expect("valid data table declaration");
+    if let Err(error) = tree.spawn(world, Some(root)) {
+        eprintln!("data table widget tree: {error:?}");
+    }
 }
 
 fn log_widget_events(mut events: ResMut<WidgetEventQueue>) {

@@ -5937,8 +5937,14 @@ fn update_numeric_scrub(
                     scrub.target_specs.push(target);
                     scrub.starts.push(target.start);
                     scrub.last_values.push(target.start);
-                    scrub.gesture = NumericGesture::begin(scrub.target_specs.clone())
-                        .expect("eligible numeric fields have validated gesture targets");
+                    if let Ok(gesture) = NumericGesture::begin(scrub.target_specs.clone()) {
+                        scrub.gesture = gesture;
+                    } else {
+                        scrub.targets.pop();
+                        scrub.target_specs.pop();
+                        scrub.starts.pop();
+                        scrub.last_values.pop();
+                    }
                 }
             }
         }
@@ -8424,7 +8430,9 @@ fn begin_node_graph_gesture(
                 node_graph_hit(&graph, layout.rect, position, spacing),
                 NodeGraphHit::NodeHeader(_)
             ) {
-                let node = graph.nodes.iter().find(|node| node.id == id).unwrap();
+                let Some(node) = graph.nodes.iter().find(|node| node.id == id) else {
+                    return;
+                };
                 let node_rect = node_graph_node_rect(&graph, layout.rect, node, spacing);
                 if position[0] <= node_rect.x + 22.0 * graph.zoom {
                     if let Some(mut current) = world.get_mut::<NodeGraph>(target)
@@ -9007,7 +9015,7 @@ fn node_graph_key(
                 let factor = match key {
                     UiKeyCode::ArrowUp | UiKeyCode::ArrowLeft => 1.15,
                     UiKeyCode::ArrowDown | UiKeyCode::ArrowRight => 1.0 / 1.15,
-                    _ => unreachable!(),
+                    _ => return,
                 };
                 apply_action(
                     world,
@@ -9021,7 +9029,7 @@ fn node_graph_key(
                     UiKeyCode::ArrowRight => [step, 0.0],
                     UiKeyCode::ArrowUp => [0.0, -step],
                     UiKeyCode::ArrowDown => [0.0, step],
-                    _ => unreachable!(),
+                    _ => return,
                 };
                 apply_action(
                     world,
@@ -10726,7 +10734,7 @@ fn resize_dropdown_option_entities(
     count: usize,
 ) {
     while items.len() > count {
-        let entity = items.pop().expect("length was checked");
+        let Some(entity) = items.pop() else { break };
         if world.get_entity(entity).is_ok() {
             detach_from_parent(world, entity);
             world.despawn(entity);
@@ -10754,7 +10762,7 @@ fn resize_radio_option_entities(
     count: usize,
 ) {
     while items.len() > count {
-        let entity = items.pop().expect("length was checked");
+        let Some(entity) = items.pop() else { break };
         if world.get_entity(entity).is_ok() {
             detach_from_parent(world, entity);
             world.despawn(entity);
@@ -11977,25 +11985,22 @@ pub fn sync_node_graph_views(world: &mut World) {
         let Some(graph) = world.get::<NodeGraph>(owner) else {
             continue;
         };
-        if let Some(moved_nodes) = partial_update {
+        if let Some(moved_nodes) = partial_update
+            && let (Some(node_indices), Some(link_indices), Some(incident_links)) = (
+                cache.node_indices.get(&owner),
+                cache.link_indices.get(&owner),
+                cache.incident_links.get(&owner),
+            )
+        {
             let (items, replaced_keys) = node_graph_delta_view_items(
                 NodeGraphViewContext {
                     owner,
                     graph,
                     layout,
                     spacing,
-                    node_indices: cache
-                        .node_indices
-                        .get(&owner)
-                        .expect("delta has node indices"),
-                    link_indices: cache
-                        .link_indices
-                        .get(&owner)
-                        .expect("delta has link indices"),
-                    incident_links: cache
-                        .incident_links
-                        .get(&owner)
-                        .expect("delta has incident links"),
+                    node_indices,
+                    link_indices,
+                    incident_links,
                 },
                 moved_nodes,
                 None,
@@ -12065,21 +12070,17 @@ pub fn sync_node_graph_views(world: &mut World) {
                 && previous.key_changed == stamp.key_changed
         }) && cache.transforms.get(&owner)
             == Some(&signature_snapshot.transform);
-        if unchanged_structure && unchanged_context {
-            let changed_nodes = changed_signature_ids(
-                cache
-                    .node_signatures
-                    .get(&owner)
-                    .expect("stable graph views have node signatures"),
-                &signature_snapshot.node_signatures,
-            );
-            let changed_links = changed_signature_ids(
-                cache
-                    .link_signatures
-                    .get(&owner)
-                    .expect("stable graph views have link signatures"),
-                &signature_snapshot.link_signatures,
-            );
+        if unchanged_structure
+            && unchanged_context
+            && let (Some(previous_nodes), Some(previous_links)) = (
+                cache.node_signatures.get(&owner),
+                cache.link_signatures.get(&owner),
+            )
+        {
+            let changed_nodes =
+                changed_signature_ids(previous_nodes, &signature_snapshot.node_signatures);
+            let changed_links =
+                changed_signature_ids(previous_links, &signature_snapshot.link_signatures);
             if changed_nodes.is_empty() && changed_links.is_empty() {
                 store_node_graph_signature_snapshot(owner, signature_snapshot, &mut cache);
                 continue;
@@ -13523,11 +13524,9 @@ fn assign_widget_rank_block(
 
     loop {
         let needed = left_selected.len() + subtree.len() + right_selected.len();
-        let gap = (ceiling as u128)
-            .checked_sub(floor as u128)
-            .unwrap_or_else(|| {
-                panic!("invalid widget order interval: lower={floor}, upper={ceiling}")
-            });
+        let Some(gap) = (ceiling as u128).checked_sub(floor as u128) else {
+            return HashSet::new();
+        };
         if gap > needed as u128 {
             break;
         }
@@ -13546,7 +13545,7 @@ fn assign_widget_rank_block(
                 .map(|(rank, entity)| (*rank, *entity));
             ceiling = right.map_or(u64::MAX, |(rank, _)| rank);
         } else {
-            unreachable!("u64 rank interval can always fit a finite widget set");
+            return HashSet::new();
         }
     }
 
@@ -13722,22 +13721,30 @@ fn move_widget_paint_subtree(
             }
         }
     };
-    assert!(
-        lower <= upper,
-        "widget rank interval reversed for {root:?} under {parent:?}: {lower}..{upper}; ui_parent={:?}; ui_children={:?}; ranks={:?}",
-        world.get::<UiParent>(root),
-        parent
-            .and_then(|parent| world.get::<UiChildren>(parent))
-            .map(|children| &children.0),
-        parent
-            .and_then(|parent| world.get::<UiChildren>(parent))
-            .map(|children| children
-                .0
-                .iter()
-                .map(|sibling| (*sibling, widget_subtree_rank_bounds(world, *sibling, ranks)))
-                .collect::<Vec<_>>())
-    );
-    assign_widget_rank_block(&subtree, &previous_ranks, lower, upper, ranks, order_keys)
+    let changed = if lower <= upper {
+        assign_widget_rank_block(&subtree, &previous_ranks, lower, upper, ranks, order_keys)
+    } else {
+        HashSet::new()
+    };
+    if subtree.iter().all(|entity| ranks.contains_key(entity)) {
+        return changed;
+    }
+
+    // A stale or exhausted local interval must not leave a subtree without paint ranks.
+    // Rebuild the complete order only for this exceptional cache recovery path.
+    let mut old_ranks = ranks.clone();
+    old_ranks.extend(previous_ranks);
+    let order: Vec<_> = roots
+        .values()
+        .flat_map(|root| widget_subtree_paint_order(world, *root))
+        .collect();
+    *ranks = assign_even_paint_ranks(&order);
+    order_keys.clear();
+    order_keys.extend(ranks.iter().map(|(entity, rank)| (*rank, *entity)));
+    order
+        .into_iter()
+        .filter(|entity| old_ranks.get(entity) != ranks.get(entity))
+        .collect()
 }
 
 fn changed_sibling_roots(old: &[Entity], current: &[Entity]) -> HashSet<Entity> {
@@ -14196,11 +14203,10 @@ fn collect_widget_paint_full(
                 items: Vec::new(),
             }),
         };
-        let camera_items = &mut fragment_guard
-            .fragment
-            .as_mut()
-            .expect("paint fragment is initialized")
-            .items;
+        let Some(fragment) = fragment_guard.fragment.as_mut() else {
+            continue;
+        };
+        let camera_items = &mut fragment.items;
         repainted_entities += 1;
         let enabled = is_interactable(world, entity);
 
@@ -19579,7 +19585,7 @@ mod tests {
             let actual = match kind {
                 HsvColorDragKind::Value => editor.value,
                 HsvColorDragKind::Alpha => editor.alpha,
-                HsvColorDragKind::Wheel => unreachable!(),
+                HsvColorDragKind::Wheel => panic!(),
             };
             assert!((actual - value).abs() < 0.01);
         }
@@ -22125,7 +22131,7 @@ mod tests {
                 "apply" => 0.0,
                 "visible" => 30.0,
                 "scale" => 60.0,
-                _ => unreachable!(),
+                _ => panic!(),
             };
             app.world_mut().entity_mut(*entity).insert(UiLayoutResult {
                 window,
@@ -22191,7 +22197,7 @@ mod tests {
                         "apply" => 0.0,
                         "visible" => 30.0,
                         "scale" => 60.0,
-                        _ => unreachable!(),
+                        _ => panic!(),
                     },
                     180.0,
                     24.0,
@@ -25421,7 +25427,7 @@ mod tests {
                 max_width, style, ..
             } = &draw.primitive
             else {
-                unreachable!();
+                panic!();
             };
             assert!(*max_width <= node_rect.width);
             let font_size = style.as_ref().unwrap().font.as_ref().unwrap().font_size;
@@ -25439,7 +25445,7 @@ mod tests {
             origin, max_width, ..
         } = &output.primitive
         else {
-            unreachable!();
+            panic!();
         };
         let content_right = node_rect.x + node_rect.width
             - theme.spacing.node_graph.socket_label_inset_x * graph.zoom;

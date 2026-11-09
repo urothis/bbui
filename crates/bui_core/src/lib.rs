@@ -304,10 +304,9 @@ pub fn set_parent(
     if !parent_entity.contains::<UiChildren>() {
         parent_entity.insert(UiChildren::default());
     }
-    let mut children = parent_entity
-        .get_mut::<UiChildren>()
-        .expect("inserted above");
-    if !children.0.contains(&child) {
+    if let Some(mut children) = parent_entity.get_mut::<UiChildren>()
+        && !children.0.contains(&child)
+    {
         children.0.push(child);
     }
     Ok(())

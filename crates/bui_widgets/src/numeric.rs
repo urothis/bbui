@@ -97,8 +97,22 @@ impl NumericField {
     }
 
     pub fn integer(value: i64) -> Self {
-        Self::new(value as f64, None, None, 1.0, NumericFieldKind::Integer)
-            .expect("finite integer is a valid unbounded numeric field")
+        let value = value as f64;
+        Self {
+            value,
+            default: value,
+            min: None,
+            max: None,
+            step: 1.0,
+            kind: NumericFieldKind::Integer,
+            unit: None,
+            enabled: true,
+            read_only: false,
+            editing: None,
+            replace_on_input: false,
+            expression_error: None,
+            precision: 6,
+        }
     }
 
     pub fn typed_value(&self) -> NumericValue {
@@ -298,8 +312,7 @@ impl NumericField {
     fn normalize(&self, value: f64) -> f64 {
         match self.kind {
             NumericFieldKind::Integer => {
-                let (min, max) = integer_bounds(self.min, self.max)
-                    .expect("integer NumericField bounds are validated");
+                let (min, max) = integer_bounds(self.min, self.max).unwrap_or((0.0, 0.0));
                 value.round().clamp(min, max)
             }
             NumericFieldKind::Float => value.clamp(

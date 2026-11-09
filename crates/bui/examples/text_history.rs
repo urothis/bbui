@@ -14,10 +14,13 @@ use bui_render::{ClipRect, Primitive, UiPaint};
 
 fn setup(world: &mut World) {
     world.spawn(Camera2d);
-    let window = world
+    let Ok(window) = world
         .query_filtered::<Entity, With<PrimaryWindow>>()
         .single(world)
-        .expect("text history example requires a primary window");
+    else {
+        eprintln!("text history example requires a primary window");
+        return;
+    };
     let root = world
         .spawn((
             UiNode,
@@ -40,7 +43,7 @@ fn setup(world: &mut World) {
         ))
         .id();
 
-    WidgetTree::new(WidgetNode::column([
+    let _ = WidgetTree::new(WidgetNode::column([
         WidgetNode::label("Text editing and shared undo"),
         WidgetNode::label(
             "Type in either editor. Ctrl+Z stays local while focused; leave the field to commit.",
@@ -60,7 +63,7 @@ fn setup(world: &mut World) {
         ),
     ]))
     .spawn(world, Some(root))
-    .expect("valid text history example tree");
+    .map_err(|error| eprintln!("text history widget tree: {error:?}"));
 }
 
 fn report_text_commits(mut events: ResMut<WidgetEventQueue>) {

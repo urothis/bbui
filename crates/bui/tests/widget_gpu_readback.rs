@@ -58,6 +58,7 @@ fn pixel_at(pixels: &[u8], x: usize, y: usize) -> &[u8] {
     &pixels[offset..offset + 4]
 }
 
+#[cfg(test)]
 fn write_capture_ppm(path: &std::path::Path, pixels: &[u8]) {
     let mut ppm = format!("P6\n{TARGET_WIDTH} {TARGET_HEIGHT}\n255\n").into_bytes();
     ppm.reserve(TARGET_WIDTH as usize * TARGET_HEIGHT as usize * 3);
@@ -69,6 +70,7 @@ fn write_capture_ppm(path: &std::path::Path, pixels: &[u8]) {
     fs::write(path, ppm).expect("write optional widget visual capture");
 }
 
+#[cfg(test)]
 fn capture_frame(
     app: &mut App,
     target: &bevy::prelude::Handle<Image>,
@@ -213,6 +215,7 @@ fn curve_screen_position(plot: Rect, position: [f32; 2]) -> [f32; 2] {
     ]
 }
 
+#[cfg(test)]
 fn collection_item(
     world: &bevy::prelude::World,
     owner: Entity,
@@ -237,6 +240,7 @@ fn collection_item(
     (entity, rect, control)
 }
 
+#[cfg(test)]
 fn table_header(world: &bevy::prelude::World, owner: Entity, column: usize) -> (Entity, Rect) {
     let children = world.get::<UiChildren>(owner).unwrap();
     let entity = children
@@ -256,6 +260,7 @@ fn table_header(world: &bevy::prelude::World, owner: Entity, column: usize) -> (
     (entity, rect)
 }
 
+#[cfg(test)]
 fn table_cell(
     world: &bevy::prelude::World,
     owner: Entity,
@@ -281,6 +286,7 @@ fn table_cell(
     (entity, rect, cell)
 }
 
+#[cfg(test)]
 fn dropdown_option(
     world: &bevy::prelude::World,
     owner: Entity,

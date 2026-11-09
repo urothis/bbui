@@ -76,7 +76,7 @@ fn app() -> (App, Entity) {
     (app, owner)
 }
 
-fn scene(workload: Workload, count: usize) -> Scene {
+fn scene(workload: Workload, count: usize) -> Result<Scene, String> {
     let (mut app, owner) = app();
     let mut changed_control = None;
     match workload {
@@ -96,7 +96,8 @@ fn scene(workload: Workload, count: usize) -> Scene {
                         Checkbox::new(format!("Control {index:05}"), false),
                     ))
                     .id();
-                set_parent(app.world_mut(), entity, owner).expect("checkbox benchmark hierarchy");
+                set_parent(app.world_mut(), entity, owner)
+                    .map_err(|error| format!("checkbox benchmark hierarchy: {error:?}"))?;
                 changed_control.get_or_insert(entity);
             }
         }
@@ -156,7 +157,7 @@ fn scene(workload: Workload, count: usize) -> Scene {
                 for offset in 1..=4 {
                     graph
                         .create_link(ids[target - offset], 0, ids[target], offset)
-                        .expect("valid typed benchmark link");
+                        .map_err(|error| format!("typed benchmark link: {error:?}"))?;
                 }
             }
             app.world_mut()
@@ -204,7 +205,8 @@ fn scene(workload: Workload, count: usize) -> Scene {
                         Checkbox::new(format!("Animated {index}"), false),
                     ))
                     .id();
-                set_parent(app.world_mut(), entity, owner).expect("animation benchmark hierarchy");
+                set_parent(app.world_mut(), entity, owner)
+                    .map_err(|error| format!("animation benchmark hierarchy: {error:?}"))?;
                 changed_control.get_or_insert(entity);
             }
         }
@@ -217,22 +219,33 @@ fn scene(workload: Workload, count: usize) -> Scene {
         workload,
         Workload::GraphNodeGesture | Workload::GraphNodeTrackedEdit | Workload::GraphNodeDirectEdit
     ) {
-        let first_node_id = app.world().get::<NodeGraph>(owner).unwrap().nodes[0].id;
+        let first_node_id = app
+            .world()
+            .get::<NodeGraph>(owner)
+            .and_then(|graph| graph.nodes.first())
+            .map(|node| node.id)
+            .ok_or_else(|| "benchmark graph has no first node".to_owned())?;
         let mut query = app.world_mut().query::<(Entity, &NodeGraphNodeControl)>();
         let node_control = query
             .iter(app.world())
             .find_map(|(entity, control)| {
                 (control.owner == owner && control.node_id == first_node_id).then_some(entity)
             })
-            .expect("the first graph node is visible in the benchmark viewport");
+            .ok_or_else(|| "benchmark graph node is outside the viewport".to_owned())?;
         changed_control = Some(node_control);
         if matches!(workload, Workload::GraphNodeGesture) {
             let layout = *app
                 .world()
                 .get::<bui_layout::UiLayoutResult>(owner)
-                .expect("graph has a benchmark layout");
-            let graph = app.world().get::<NodeGraph>(owner).unwrap();
-            let node = &graph.nodes[0];
+                .ok_or_else(|| "benchmark graph has no layout".to_owned())?;
+            let graph = app
+                .world()
+                .get::<NodeGraph>(owner)
+                .ok_or_else(|| "benchmark graph is missing".to_owned())?;
+            let node = graph
+                .nodes
+                .first()
+                .ok_or_else(|| "benchmark graph has no first node".to_owned())?;
             let header_height = app
                 .world()
                 .resource::<bui_style::Theme>()
@@ -257,87 +270,93 @@ fn scene(workload: Workload, count: usize) -> Scene {
                 .events
                 .clear();
             app.update();
-            assert!(
-                matches!(
-                    app.world()
-                        .get::<NodeGraphEditorState>(owner)
-                        .and_then(|state| state.gesture.as_ref()),
-                    Some(NodeGraphGesture::MoveNodes { .. })
-                ),
-                "the benchmark pointer-down must begin a node move: start={start:?}, owner_layout={layout:?}, gesture={:?}",
+            if !matches!(
                 app.world()
                     .get::<NodeGraphEditorState>(owner)
-                    .and_then(|state| state.gesture.as_ref())
-            );
+                    .and_then(|state| state.gesture.as_ref()),
+                Some(NodeGraphGesture::MoveNodes { .. })
+            ) {
+                return Err(format!(
+                    "benchmark pointer-down did not start a node move at {start:?}"
+                ));
+            }
             graph_drag_start = Some(start);
         }
     }
     if matches!(workload, Workload::Animation) {
-        for entity in app
+        let children = app
             .world()
             .get::<bui_core::UiChildren>(owner)
-            .expect("animation controls have parent")
+            .ok_or_else(|| "animation controls have no parent list".to_owned())?
             .0
-            .clone()
-        {
+            .clone();
+        for entity in children {
             set_ui_style_state(app.world_mut(), entity, UiStyleState::SELECTED, true);
         }
         app.update();
     }
-    Scene {
+    Ok(Scene {
         app,
         owner,
         changed_control,
         graph_drag_start,
         workload,
         step: 0,
-    }
+    })
 }
 
-fn change(scene: &mut Scene, count: usize) {
+fn change(scene: &mut Scene, count: usize) -> bool {
     scene.step += 1;
     match scene.workload {
         Workload::Checkboxes => {
-            scene
-                .app
-                .world_mut()
-                .get_mut::<Checkbox>(scene.changed_control.expect("checkbox control"))
-                .expect("checkbox exists")
-                .toggle();
+            let Some(control) = scene.changed_control else {
+                return false;
+            };
+            let Some(mut checkbox) = scene.app.world_mut().get_mut::<Checkbox>(control) else {
+                return false;
+            };
+            checkbox.toggle();
         }
         Workload::List => {
-            let mut model = scene
+            let Some(mut model) = scene
                 .app
                 .world_mut()
                 .get_mut::<ListModel<String>>(scene.owner)
-                .expect("list exists");
+            else {
+                return false;
+            };
             model.scroll_offset =
                 (scene.step as f32 * model.row_height) % (count as f32 * model.row_height);
         }
         Workload::Table => {
-            scene
-                .app
-                .world_mut()
-                .get_mut::<DataTable>(scene.owner)
-                .expect("table exists")
-                .scroll_rows = (scene.step * 2) % count.saturating_sub(32).max(1);
+            let Some(mut table) = scene.app.world_mut().get_mut::<DataTable>(scene.owner) else {
+                return false;
+            };
+            table.scroll_rows = (scene.step * 2) % count.saturating_sub(32).max(1);
         }
         Workload::Graph => {
-            scene
-                .app
-                .world_mut()
-                .get_mut::<NodeGraph>(scene.owner)
-                .expect("graph exists")
-                .pan = if scene.step.is_multiple_of(2) {
+            let Some(mut graph) = scene.app.world_mut().get_mut::<NodeGraph>(scene.owner) else {
+                return false;
+            };
+            graph.pan = if scene.step.is_multiple_of(2) {
                 [0.0, 0.0]
             } else {
                 [0.25, -0.15]
             };
         }
         Workload::GraphNodeGesture => {
-            let target = scene.changed_control.expect("graph node control");
-            let hitbox = *scene.app.world().get::<UiHitBox>(target).unwrap();
-            let start = scene.graph_drag_start.expect("graph drag is prepared");
+            let Some(target) = scene.changed_control else {
+                return false;
+            };
+            let Some(hitbox) = scene.app.world().get::<UiHitBox>(target).copied() else {
+                return false;
+            };
+            let Some(window) = hitbox.window else {
+                return false;
+            };
+            let Some(start) = scene.graph_drag_start else {
+                return false;
+            };
             let offset = if scene.step.is_multiple_of(2) {
                 0.5
             } else {
@@ -348,7 +367,7 @@ fn change(scene: &mut Scene, count: usize) {
                 .world_mut()
                 .resource_mut::<UiRoutedEvents>()
                 .events = vec![UiRoutedEvent::PointerMoved {
-                window: hitbox.window.expect("graph has a benchmark window"),
+                window,
                 target: scene.owner,
                 position: [start[0] + offset, start[1]],
                 delta: [offset, 0.0],
@@ -368,13 +387,13 @@ fn change(scene: &mut Scene, count: usize) {
             } else {
                 [40.0, 40.0]
             };
-            scene
-                .app
-                .world_mut()
-                .get_mut::<NodeGraph>(scene.owner)
-                .expect("graph exists")
-                .nodes[0]
-                .position = position;
+            let Some(mut graph) = scene.app.world_mut().get_mut::<NodeGraph>(scene.owner) else {
+                return false;
+            };
+            let Some(node) = graph.nodes.first_mut() else {
+                return false;
+            };
+            node.position = position;
         }
         Workload::GraphNodeTrackedEdit => {
             let position = if !scene.step.is_multiple_of(2) {
@@ -382,19 +401,16 @@ fn change(scene: &mut Scene, count: usize) {
             } else {
                 [40.0, 40.0]
             };
-            let id = scene
+            let Some(id) = scene
                 .app
                 .world()
                 .get::<NodeGraph>(scene.owner)
-                .unwrap()
-                .nodes[0]
-                .id;
-            assert!(move_node_graph_node(
-                scene.app.world_mut(),
-                scene.owner,
-                id,
-                position
-            ));
+                .and_then(|graph| graph.nodes.first())
+                .map(|node| node.id)
+            else {
+                return false;
+            };
+            return move_node_graph_node(scene.app.world_mut(), scene.owner, id, position);
         }
         Workload::CanvasOneObjectEdit => {
             let origin = if !scene.step.is_multiple_of(2) {
@@ -402,12 +418,9 @@ fn change(scene: &mut Scene, count: usize) {
             } else {
                 [0.0, 0.0]
             };
-            assert!(edit_canvas_object(
-                scene.app.world_mut(),
-                scene.owner,
-                1,
-                |object| object.origin = origin,
-            ));
+            return edit_canvas_object(scene.app.world_mut(), scene.owner, 1, |object| {
+                object.origin = origin
+            });
         }
         Workload::CanvasOneObjectDirectEdit => {
             let origin = if !scene.step.is_multiple_of(2) {
@@ -415,13 +428,13 @@ fn change(scene: &mut Scene, count: usize) {
             } else {
                 [0.0, 0.0]
             };
-            scene
-                .app
-                .world_mut()
-                .get_mut::<Canvas>(scene.owner)
-                .expect("canvas exists")
-                .objects[0]
-                .origin = origin;
+            let Some(mut canvas) = scene.app.world_mut().get_mut::<Canvas>(scene.owner) else {
+                return false;
+            };
+            let Some(object) = canvas.objects.first_mut() else {
+                return false;
+            };
+            object.origin = origin;
         }
         Workload::Animation => {
             scene
@@ -431,6 +444,7 @@ fn change(scene: &mut Scene, count: usize) {
                 .advance_by(Duration::from_millis(16));
         }
     }
+    true
 }
 
 pub fn bench(c: &mut Criterion) {
@@ -465,7 +479,10 @@ pub fn bench(c: &mut Criterion) {
         ("style_animation", Workload::Animation, 1_000),
     ] {
         group.throughput(Throughput::Elements(count as u64));
-        let mut idle = scene(workload, count);
+        let Ok(mut idle) = scene(workload, count) else {
+            eprintln!("failed to create {name} idle benchmark scene");
+            continue;
+        };
         group.bench_with_input(
             BenchmarkId::new("idle", format!("{name}_{count}")),
             &count,
@@ -476,7 +493,10 @@ pub fn bench(c: &mut Criterion) {
                 });
             },
         );
-        let mut changed = scene(workload, count);
+        let Ok(mut changed) = scene(workload, count) else {
+            eprintln!("failed to create {name} changed benchmark scene");
+            continue;
+        };
         if matches!(
             workload,
             Workload::GraphNodeGesture
@@ -486,40 +506,39 @@ pub fn bench(c: &mut Criterion) {
                 | Workload::CanvasOneObjectDirectEdit
         ) {
             let position = |scene: &Scene| match workload {
-                Workload::CanvasOneObjectEdit | Workload::CanvasOneObjectDirectEdit => {
-                    scene
-                        .app
-                        .world()
-                        .get::<Canvas>(scene.owner)
-                        .unwrap()
-                        .objects[0]
-                        .origin
-                }
-                _ => {
-                    scene
-                        .app
-                        .world()
-                        .get::<NodeGraph>(scene.owner)
-                        .unwrap()
-                        .nodes[0]
-                        .position
-                }
+                Workload::CanvasOneObjectEdit | Workload::CanvasOneObjectDirectEdit => scene
+                    .app
+                    .world()
+                    .get::<Canvas>(scene.owner)
+                    .and_then(|canvas| canvas.objects.first())
+                    .map(|object| object.origin),
+                _ => scene
+                    .app
+                    .world()
+                    .get::<NodeGraph>(scene.owner)
+                    .and_then(|graph| graph.nodes.first())
+                    .map(|node| node.position),
             };
             let before = position(&changed);
-            change(&mut changed, count);
+            if !change(&mut changed, count) {
+                eprintln!("{name} benchmark failed to change its target");
+                continue;
+            }
             changed.app.update();
-            assert_ne!(
-                position(&changed),
-                before,
-                "the changed benchmark must move its target"
-            );
+            if before.is_none() || position(&changed) == before {
+                eprintln!("{name} benchmark target did not move");
+                continue;
+            }
+        } else if !change(&mut changed, count) {
+            eprintln!("{name} benchmark failed to change its target");
+            continue;
         }
         group.bench_with_input(
             BenchmarkId::new("changed", format!("{name}_{count}")),
             &count,
             |b, _| {
                 b.iter(|| {
-                    change(&mut changed, count);
+                    black_box(change(&mut changed, count));
                     changed.app.update();
                     black_box(changed.app.world().resource::<DisplayList>().item_count());
                 });

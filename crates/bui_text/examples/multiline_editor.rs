@@ -11,7 +11,7 @@ use bui_text::{
     process_text_events, update_text_layouts,
 };
 
-fn main() {
+fn main() -> Result<(), &'static str> {
     let mut app = App::new();
     app.add_plugins((CorePlugin, TextPlugin));
     app.add_systems(
@@ -57,16 +57,16 @@ fn main() {
     let start = app
         .world()
         .get::<TextBuffer>(editor)
-        .unwrap()
+        .ok_or("text buffer is missing")?
         .as_str()
         .find("wrapped")
-        .expect("example text contains the visual navigation target");
+        .ok_or("example text lacks the navigation target")?;
     app.world_mut()
         .get_mut::<TextBuffer>(editor)
-        .unwrap()
+        .ok_or("text buffer is missing")?
         .collapse_to(start);
     update_text_layouts(app.world_mut());
-    print_editor_state(&app, editor, "before Down");
+    print_editor_state(&app, editor, "before Down")?;
 
     route_key(
         &mut app,
@@ -75,7 +75,7 @@ fn main() {
         UiKeyCode::ArrowDown,
         UiModifiers::default(),
     );
-    print_editor_state(&app, editor, "after visual Down");
+    print_editor_state(&app, editor, "after visual Down")?;
     route_key(
         &mut app,
         window,
@@ -86,7 +86,11 @@ fn main() {
             ..UiModifiers::default()
         },
     );
-    let selection = app.world().get::<TextBuffer>(editor).unwrap().selection();
+    let selection = app
+        .world()
+        .get::<TextBuffer>(editor)
+        .ok_or("text buffer is missing")?
+        .selection();
     println!(
         "shifted selection bytes: {}..{}",
         selection.start, selection.end
@@ -100,7 +104,10 @@ fn main() {
     }];
     process_text_events(app.world_mut());
     update_text_layouts(app.world_mut());
-    let layout = app.world().get::<UiTextLayout>(editor).unwrap();
+    let layout = app
+        .world()
+        .get::<UiTextLayout>(editor)
+        .ok_or("text layout is missing")?;
     println!(
         "IME preedit display={:?}, underline rects={}",
         layout.display_text().unwrap_or_default(),
@@ -126,8 +133,12 @@ fn main() {
     );
     println!(
         "after local undo: {:?}",
-        app.world().get::<TextBuffer>(editor).unwrap().as_str()
+        app.world()
+            .get::<TextBuffer>(editor)
+            .ok_or("text buffer is missing")?
+            .as_str()
     );
+    Ok(())
 }
 
 fn route_key(
@@ -149,16 +160,32 @@ fn route_key(
     update_text_layouts(app.world_mut());
 }
 
-fn print_editor_state(app: &App, editor: bevy_ecs::entity::Entity, label: &str) {
-    let buffer = app.world().get::<TextBuffer>(editor).unwrap();
-    let layout = app.world().get::<UiTextLayout>(editor).unwrap();
-    let caret = layout.caret_rect(buffer).unwrap();
+fn print_editor_state(
+    app: &App,
+    editor: bevy_ecs::entity::Entity,
+    label: &str,
+) -> Result<(), &'static str> {
+    let buffer = app
+        .world()
+        .get::<TextBuffer>(editor)
+        .ok_or("text buffer is missing")?;
+    let layout = app
+        .world()
+        .get::<UiTextLayout>(editor)
+        .ok_or("text layout is missing")?;
+    let caret = layout
+        .caret_rect(buffer)
+        .ok_or("caret rectangle is missing")?;
     println!(
         "{label}: caret={} affinity={:?} at ({:.1}, {:.1}), visual lines={}",
         buffer.caret(),
         buffer.caret_affinity(),
         caret.x,
         caret.y,
-        layout.layout().unwrap().line_count()
+        layout
+            .layout()
+            .ok_or("shaped layout is missing")?
+            .line_count()
     );
+    Ok(())
 }

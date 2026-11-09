@@ -29,6 +29,12 @@ heap, GPU time, or frame pacing. The standalone harnesses below retain allocator
 and the offscreen GPU stress harness retains real GPU timestamp queries.
 Proc-macro expansion (`bui_macros`) and filesystem I/O are outside this runtime suite.
 
+Standalone allocation counters use `stats_alloc` snapshots without workspace unsafe code.
+Allocation counts include reallocations; allocated-byte counts cover direct allocations.
+Where a harness reports peak live heap, it samples once per frame, so short-lived peaks
+between samples are not included. Compare allocation figures collected with the same
+instrumentation; earlier custom-allocator baselines may count reallocations differently.
+
 Initial release baseline on the local aarch64 development machine (2026-11-09, Rust 1.99,
 30 samples per case; mean estimates rounded):
 

@@ -321,8 +321,8 @@ impl MenuSession {
             if entries[at as usize].selectable() {
                 if self.path.is_empty() {
                     self.path.push(at as usize);
-                } else {
-                    *self.path.last_mut().unwrap() = at as usize;
+                } else if let Some(last) = self.path.last_mut() {
+                    *last = at as usize;
                 }
                 return Some(at as usize);
             }

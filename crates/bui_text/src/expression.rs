@@ -362,7 +362,7 @@ impl Parser<'_> {
                 Token::GreaterEq => CompareOperation::GreaterEq,
                 Token::Eq => CompareOperation::Equal,
                 Token::NotEq => CompareOperation::NotEqual,
-                _ => unreachable!(),
+                _ => return Err(Error::UnexpectedToken),
             };
             value = Expression::Compare {
                 operation,

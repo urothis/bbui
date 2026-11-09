@@ -8,7 +8,7 @@ use bui_layout::{
     UiLength, UiScroll, UiSize,
 };
 
-fn main() {
+fn main() -> Result<(), bui_core::UiHierarchyError> {
     let mut app = App::new();
     app.add_plugins((CorePlugin, LayoutPlugin));
 
@@ -42,7 +42,7 @@ fn main() {
             },
         ))
         .id();
-    set_parent(app.world_mut(), viewport, root).expect("valid viewport parent");
+    set_parent(app.world_mut(), viewport, root)?;
 
     let mut rows = Vec::new();
     for _ in 0..8 {
@@ -53,15 +53,19 @@ fn main() {
                 UiLayoutNode::leaf(UiLength::Px(180.0), UiLength::Px(28.0)),
             ))
             .id();
-        set_parent(app.world_mut(), row, viewport).expect("valid row parent");
+        set_parent(app.world_mut(), row, viewport)?;
         rows.push(row);
     }
 
     app.update();
     println!(
         "initial: viewport={:?}, row 3={:?}",
-        app.world().get::<UiLayoutResult>(viewport).unwrap().rect,
-        app.world().get::<UiLayoutResult>(rows[3]).unwrap().rect,
+        app.world()
+            .get::<UiLayoutResult>(viewport)
+            .map(|layout| layout.rect),
+        app.world()
+            .get::<UiLayoutResult>(rows[3])
+            .map(|layout| layout.rect),
     );
 
     app.world_mut()
@@ -76,9 +80,15 @@ fn main() {
     app.update();
     println!(
         "wheel: offset={:?}, row 3={:?}, clip={:?}",
-        app.world().get::<UiScroll>(viewport).unwrap().offset,
-        app.world().get::<UiLayoutResult>(rows[3]).unwrap().rect,
-        app.world().get::<UiLayoutResult>(rows[3]).unwrap().clip,
+        app.world()
+            .get::<UiScroll>(viewport)
+            .map(|scroll| scroll.offset),
+        app.world()
+            .get::<UiLayoutResult>(rows[3])
+            .map(|layout| layout.rect),
+        app.world()
+            .get::<UiLayoutResult>(rows[3])
+            .and_then(|layout| layout.clip),
     );
 
     app.world_mut()
@@ -97,7 +107,12 @@ fn main() {
     app.update();
     println!(
         "PageDown: offset={:?}, row 3={:?}",
-        app.world().get::<UiScroll>(viewport).unwrap().offset,
-        app.world().get::<UiLayoutResult>(rows[3]).unwrap().rect,
+        app.world()
+            .get::<UiScroll>(viewport)
+            .map(|scroll| scroll.offset),
+        app.world()
+            .get::<UiLayoutResult>(rows[3])
+            .map(|layout| layout.rect),
     );
+    Ok(())
 }

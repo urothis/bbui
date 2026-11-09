@@ -448,7 +448,8 @@ pub struct BuiMediaPlugin;
 impl Plugin for BuiMediaPlugin {
     fn build(&self, app: &mut App) {
         if !app.world().contains_resource::<AssetServer>() {
-            panic!("BuiMediaPlugin requires Bevy's AssetPlugin");
+            bevy::log::error!("BuiMediaPlugin requires Bevy's AssetPlugin");
+            return;
         }
         app.init_resource::<BuiMediaLimits>()
             .init_resource::<BuiMediaDecodedBudget>()
@@ -926,13 +927,15 @@ fn update_media_players(update: MediaPlayerUpdate, mut players: MediaPlayerQuery
             restart_video_players.insert(entity);
             continue;
         }
-        let selected = stream
+        let Some(selected) = stream
             .frames
             .iter()
             .rev()
             .find(|frame| frame.timestamp.as_nanos() <= u128::from(desired_ns))
             .or_else(|| stream.frames.front())
-            .expect("non-empty video frame cache was checked above");
+        else {
+            continue;
+        };
         player.current_frame = selected.index;
         stream.display_index = selected.index;
         if image_node.image != selected.image {
@@ -965,6 +968,7 @@ fn start_source_media_stream(
     now: Duration,
 ) -> StreamingVideo {
     let (sender, receiver) = sync_channel(STREAMED_VIDEO_CHANNEL_FRAMES);
+    let failure_sender = sender.clone();
     let cancellation = Arc::new(AtomicBool::new(false));
     let task_cancellation = Arc::clone(&cancellation);
     let task = std::thread::Builder::new()
@@ -1006,12 +1010,20 @@ fn start_source_media_stream(
                 .map(|_| ())
                 .map_err(|error| configured_decode_error(error).to_string());
             let _ = sender.send(VideoStreamMessage::Finished(completion));
-        })
-        .expect("failed to spawn H.264 decode worker");
+        });
+    let task = match task {
+        Ok(task) => Some(task),
+        Err(error) => {
+            let _ = failure_sender.send(VideoStreamMessage::Finished(Err(format!(
+                "failed to spawn media decode worker: {error}"
+            ))));
+            None
+        }
+    };
     StreamingVideo {
         sequence_id,
         receiver: Mutex::new(receiver),
-        task: Some(task),
+        task,
         cancellation,
         frames: VecDeque::new(),
         pending_frame: None,

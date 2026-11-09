@@ -58,6 +58,7 @@ fn thumbnail_pixel_at(frame: &media::RgbaFrame, rect: ClipRect, x: usize, y: usi
     &frame.pixels[offset..offset + 4]
 }
 
+#[cfg(test)]
 fn temp_directory() -> std::path::PathBuf {
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)

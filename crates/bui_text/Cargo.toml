@@ -20,3 +20,5 @@ bui_style = { path = "../bui_style" }
 [dev-dependencies]
 bevy.workspace = true
 
+[lints]
+workspace = true

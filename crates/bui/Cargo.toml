@@ -19,8 +19,11 @@ bui_macros = { path = "../bui_macros" }
 [dev-dependencies]
 image.workspace = true
 criterion.workspace = true
+stats_alloc.workspace = true
 
 [[bench]]
 name = "performance"
 harness = false
 
+[lints]
+workspace = true

@@ -11,10 +11,13 @@ use bui_render::{ClipRect, Primitive, UiPaint};
 
 fn setup(world: &mut World) {
     world.spawn(Camera2d);
-    let window = world
+    let Ok(window) = world
         .query_filtered::<Entity, With<PrimaryWindow>>()
         .single(world)
-        .expect("curve editor example requires a primary window");
+    else {
+        eprintln!("curve editor example requires a primary window");
+        return;
+    };
     let background = world.resource::<Theme>().background;
     let root = world
         .spawn((
@@ -39,7 +42,10 @@ fn setup(world: &mut World) {
         .id();
 
     let mut curve = CurveEditor::default();
-    let middle = curve.add_point(0.48, 0.82).expect("insert middle point");
+    let Some(middle) = curve.add_point(0.48, 0.82) else {
+        eprintln!("failed to insert middle curve point");
+        return;
+    };
     curve.interpolation = Interpolation::Smooth;
     curve.set_handles(middle, [-0.16, -0.1], [0.2, 0.14]);
     curve.select_point(middle);
@@ -53,8 +59,9 @@ fn setup(world: &mut World) {
             label("Ctrl+Left/Right selects points. Arrow keys move the selected point. Ctrl+Z undoes edits."),
         }
     };
-    tree.spawn(world, Some(root))
-        .expect("valid curve editor widget tree");
+    if let Err(error) = tree.spawn(world, Some(root)) {
+        eprintln!("curve editor widget tree: {error:?}");
+    }
 }
 
 fn log_widget_events(mut events: ResMut<WidgetEventQueue>) {

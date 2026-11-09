@@ -6,8 +6,8 @@
 
 #[cfg(target_os = "linux")]
 mod linux {
-    use std::alloc::{GlobalAlloc, Layout, System};
-    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use stats_alloc::{Stats, StatsAlloc};
+    use std::alloc::System;
     use std::thread;
     use std::time::{Duration, Instant};
 
@@ -39,81 +39,13 @@ mod linux {
     const FRAMES: usize = 24;
     const GPU_UI_TIME: DiagnosticPath = DiagnosticPath::const_new("render/ui/elapsed_gpu");
 
-    struct TrackingAllocator;
-
-    static TRACK_ALLOCATIONS: AtomicBool = AtomicBool::new(false);
-    static ALLOCATION_COUNT: AtomicU64 = AtomicU64::new(0);
-    static ALLOCATED_BYTES: AtomicU64 = AtomicU64::new(0);
-    static LIVE_BYTES: AtomicU64 = AtomicU64::new(0);
-    static PEAK_LIVE_BYTES: AtomicU64 = AtomicU64::new(0);
-
     #[global_allocator]
-    static ALLOCATOR: TrackingAllocator = TrackingAllocator;
+    static ALLOCATOR: StatsAlloc<System> = StatsAlloc::system();
 
-    // SAFETY: All pointers and layouts are forwarded unchanged to System. Atomics only observe sizes.
-    unsafe impl GlobalAlloc for TrackingAllocator {
-        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-            let pointer = unsafe { System.alloc(layout) };
-            if !pointer.is_null() {
-                record_allocation(layout.size());
-            }
-            pointer
-        }
-
-        unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
-            let pointer = unsafe { System.alloc_zeroed(layout) };
-            if !pointer.is_null() {
-                record_allocation(layout.size());
-            }
-            pointer
-        }
-
-        unsafe fn realloc(&self, pointer: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-            let new_pointer = unsafe { System.realloc(pointer, layout, new_size) };
-            if !new_pointer.is_null() {
-                if TRACK_ALLOCATIONS.load(Ordering::Relaxed) {
-                    ALLOCATION_COUNT.fetch_add(1, Ordering::Relaxed);
-                    ALLOCATED_BYTES.fetch_add(new_size as u64, Ordering::Relaxed);
-                }
-                update_live(new_size, layout.size());
-            }
-            new_pointer
-        }
-
-        unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
-            unsafe { System.dealloc(pointer, layout) };
-            update_live(0, layout.size());
-        }
-    }
-
-    fn record_allocation(bytes: usize) {
-        if TRACK_ALLOCATIONS.load(Ordering::Relaxed) {
-            ALLOCATION_COUNT.fetch_add(1, Ordering::Relaxed);
-            ALLOCATED_BYTES.fetch_add(bytes as u64, Ordering::Relaxed);
-        }
-        update_live(bytes, 0);
-    }
-
-    fn update_live(add: usize, remove: usize) {
-        let live = if add > remove {
-            LIVE_BYTES.fetch_add((add - remove) as u64, Ordering::Relaxed) + (add - remove) as u64
-        } else if remove > add {
-            LIVE_BYTES.fetch_sub((remove - add) as u64, Ordering::Relaxed) - (remove - add) as u64
-        } else {
-            LIVE_BYTES.load(Ordering::Relaxed)
-        };
-        let mut peak = PEAK_LIVE_BYTES.load(Ordering::Relaxed);
-        while live > peak {
-            match PEAK_LIVE_BYTES.compare_exchange_weak(
-                peak,
-                live,
-                Ordering::Relaxed,
-                Ordering::Relaxed,
-            ) {
-                Ok(_) => break,
-                Err(actual) => peak = actual,
-            }
-        }
+    fn live_bytes(stats: Stats) -> usize {
+        let live = stats.bytes_allocated as i128 - stats.bytes_deallocated as i128
+            + stats.bytes_reallocated as i128;
+        usize::try_from(live.max(0)).unwrap_or(usize::MAX)
     }
 
     struct AppHarness {
@@ -239,11 +171,9 @@ mod linux {
     ) -> (CpuStats, Vec<f64>) {
         let mut samples = FrameSamples::default();
         let mut elapsed = Duration::ZERO;
-        let baseline_live = LIVE_BYTES.load(Ordering::Relaxed);
-        PEAK_LIVE_BYTES.store(baseline_live, Ordering::Relaxed);
-        ALLOCATION_COUNT.store(0, Ordering::Relaxed);
-        ALLOCATED_BYTES.store(0, Ordering::Relaxed);
-        TRACK_ALLOCATIONS.store(true, Ordering::Relaxed);
+        let before = ALLOCATOR.stats();
+        let baseline_live = live_bytes(before);
+        let mut peak_live = baseline_live;
 
         for frame in 0..frames {
             let started = Instant::now();
@@ -253,17 +183,15 @@ mod linux {
                     .replace_camera_items(Some(camera), variant_items(items, frame));
             }
             app.update();
+            peak_live = peak_live.max(live_bytes(ALLOCATOR.stats()));
             elapsed += started.elapsed();
             record_gpu_sample(app, &mut samples);
             thread::sleep(Duration::from_millis(2));
         }
-        TRACK_ALLOCATIONS.store(false, Ordering::Relaxed);
-
-        let count = ALLOCATION_COUNT.load(Ordering::Relaxed);
-        let bytes = ALLOCATED_BYTES.load(Ordering::Relaxed);
-        let peak = PEAK_LIVE_BYTES
-            .load(Ordering::Relaxed)
-            .saturating_sub(baseline_live);
+        let delta = ALLOCATOR.stats() - before;
+        let count = delta.allocations + delta.reallocations;
+        let bytes = delta.bytes_allocated;
+        let peak = peak_live.saturating_sub(baseline_live);
         let cpu = CpuStats {
             micros_per_frame: elapsed.as_secs_f64() * 1_000_000.0 / frames as f64,
             allocations_per_frame: count as f64 / frames as f64,
@@ -298,7 +226,7 @@ mod linux {
             format!("gpu_ui={mean:.3}ms avg [{min:.3},{max:.3}] n={}", gpu.len())
         };
         format!(
-            "cpu_update={:.2}us/frame {gpu}; {:.1}allocs/{:.1}KB peak_live+{:.1}KB",
+            "cpu_update={:.2}us/frame {gpu}; {:.1}allocs/{:.1}KB sampled_peak_live+{:.1}KB",
             cpu.micros_per_frame, cpu.allocations_per_frame, cpu.kb_per_frame, cpu.peak_live_kb,
         )
     }

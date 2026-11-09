@@ -5,9 +5,9 @@
 //! checkbox. Allocation totals include the full `App::update` path. Draw-item counts come from
 //! `DisplayList`; GPU submission is not included.
 
-use std::alloc::{GlobalAlloc, Layout, System};
+use stats_alloc::{Stats, StatsAlloc};
+use std::alloc::System;
 use std::hint::black_box;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use bevy_app::App;
@@ -28,50 +28,15 @@ use bui_widgets::{
     },
 };
 
-struct TrackingAllocator;
-
-static TRACK_ALLOCATIONS: AtomicBool = AtomicBool::new(false);
-static ALLOCATION_COUNT: AtomicU64 = AtomicU64::new(0);
-static ALLOCATED_BYTES: AtomicU64 = AtomicU64::new(0);
-
 #[global_allocator]
-static ALLOCATOR: TrackingAllocator = TrackingAllocator;
+static ALLOCATOR: StatsAlloc<System> = StatsAlloc::system();
 
-// SAFETY: Allocation operations delegate to the system allocator unchanged. The optional
-// counters only observe allocation sizes and do not retain or dereference allocation pointers.
-unsafe impl GlobalAlloc for TrackingAllocator {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        let pointer = unsafe { System.alloc(layout) };
-        if !pointer.is_null() && TRACK_ALLOCATIONS.load(Ordering::Relaxed) {
-            record_allocation(layout.size());
-        }
-        pointer
+fn allocation_delta(before: Stats) -> AllocationStats {
+    let delta = ALLOCATOR.stats() - before;
+    AllocationStats {
+        count: (delta.allocations + delta.reallocations) as u64,
+        bytes: delta.bytes_allocated as u64,
     }
-
-    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
-        let pointer = unsafe { System.alloc_zeroed(layout) };
-        if !pointer.is_null() && TRACK_ALLOCATIONS.load(Ordering::Relaxed) {
-            record_allocation(layout.size());
-        }
-        pointer
-    }
-
-    unsafe fn realloc(&self, pointer: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        let new_pointer = unsafe { System.realloc(pointer, layout, new_size) };
-        if !new_pointer.is_null() && TRACK_ALLOCATIONS.load(Ordering::Relaxed) {
-            record_allocation(new_size);
-        }
-        new_pointer
-    }
-
-    unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
-        unsafe { System.dealloc(pointer, layout) };
-    }
-}
-
-fn record_allocation(bytes: usize) {
-    ALLOCATION_COUNT.fetch_add(1, Ordering::Relaxed);
-    ALLOCATED_BYTES.fetch_add(bytes as u64, Ordering::Relaxed);
 }
 
 struct Scene {
@@ -86,10 +51,10 @@ struct AllocationStats {
     bytes: u64,
 }
 
-fn main() {
+fn main() -> Result<(), String> {
     const FRAMES: usize = 30;
     for controls in [1_000, 10_000] {
-        let mut scene = make_scene(controls);
+        let mut scene = make_scene(controls)?;
         scene.app.update();
         scene.app.update();
 
@@ -143,9 +108,10 @@ fn main() {
             subsystem_profile.paint,
         );
     }
+    Ok(())
 }
 
-fn make_scene(controls: usize) -> Scene {
+fn make_scene(controls: usize) -> Result<Scene, String> {
     let mut app = App::new();
     app.add_plugins((
         CorePlugin,
@@ -183,17 +149,18 @@ fn make_scene(controls: usize) -> Scene {
                 Checkbox::new(format!("Control {index:05}"), false),
             ))
             .id();
-        set_parent(app.world_mut(), control, root).expect("benchmark hierarchy is valid");
+        set_parent(app.world_mut(), control, root)
+            .map_err(|error| format!("benchmark hierarchy: {error:?}"))?;
         if index == 0 {
             changed_control = Some(control);
         }
     }
 
-    Scene {
+    Ok(Scene {
         app,
-        changed_control: changed_control.expect("benchmark has controls"),
+        changed_control: changed_control.ok_or_else(|| "benchmark has no controls".to_owned())?,
         controls,
-    }
+    })
 }
 
 fn measure_time(scene: &mut Scene, frames: usize, dirty: bool) -> Duration {
@@ -216,9 +183,7 @@ fn measure_time(scene: &mut Scene, frames: usize, dirty: bool) -> Duration {
 }
 
 fn measure_allocations(scene: &mut Scene, frames: usize, dirty: bool) -> AllocationStats {
-    ALLOCATION_COUNT.store(0, Ordering::Relaxed);
-    ALLOCATED_BYTES.store(0, Ordering::Relaxed);
-    TRACK_ALLOCATIONS.store(true, Ordering::Relaxed);
+    let before = ALLOCATOR.stats();
     for _ in 0..frames {
         if dirty {
             toggle_one_control(scene);
@@ -233,11 +198,7 @@ fn measure_allocations(scene: &mut Scene, frames: usize, dirty: bool) -> Allocat
                 .len(),
         );
     }
-    TRACK_ALLOCATIONS.store(false, Ordering::Relaxed);
-    AllocationStats {
-        count: ALLOCATION_COUNT.load(Ordering::Relaxed),
-        bytes: ALLOCATED_BYTES.load(Ordering::Relaxed),
-    }
+    allocation_delta(before)
 }
 
 fn measure_paint_time(scene: &mut Scene, frames: usize, dirty: bool) -> Duration {
@@ -261,9 +222,7 @@ fn measure_paint_time(scene: &mut Scene, frames: usize, dirty: bool) -> Duration
 }
 
 fn measure_paint_allocations(scene: &mut Scene, frames: usize, dirty: bool) -> AllocationStats {
-    ALLOCATION_COUNT.store(0, Ordering::Relaxed);
-    ALLOCATED_BYTES.store(0, Ordering::Relaxed);
-    TRACK_ALLOCATIONS.store(true, Ordering::Relaxed);
+    let before = ALLOCATOR.stats();
     for _ in 0..frames {
         if dirty {
             scene.app.world_mut().increment_change_tick();
@@ -279,11 +238,7 @@ fn measure_paint_allocations(scene: &mut Scene, frames: usize, dirty: bool) -> A
                 .len(),
         );
     }
-    TRACK_ALLOCATIONS.store(false, Ordering::Relaxed);
-    AllocationStats {
-        count: ALLOCATION_COUNT.load(Ordering::Relaxed),
-        bytes: ALLOCATED_BYTES.load(Ordering::Relaxed),
-    }
+    allocation_delta(before)
 }
 
 fn toggle_one_control(scene: &mut Scene) {
@@ -340,20 +295,11 @@ fn profile_idle_subsystems(scene: &mut Scene, frames: usize) -> SubsystemProfile
             run(scene.app.world_mut());
         }
         let elapsed = started.elapsed().as_secs_f64() * 1_000_000.0 / frames as f64;
-        ALLOCATION_COUNT.store(0, Ordering::Relaxed);
-        ALLOCATED_BYTES.store(0, Ordering::Relaxed);
-        TRACK_ALLOCATIONS.store(true, Ordering::Relaxed);
+        let before = ALLOCATOR.stats();
         for _ in 0..frames {
             run(scene.app.world_mut());
         }
-        TRACK_ALLOCATIONS.store(false, Ordering::Relaxed);
-        (
-            elapsed,
-            AllocationStats {
-                count: ALLOCATION_COUNT.load(Ordering::Relaxed),
-                bytes: ALLOCATED_BYTES.load(Ordering::Relaxed),
-            },
-        )
+        (elapsed, allocation_delta(before))
     }
 
     let (core, _) = measure(scene, frames, bui_core::process_ui_input);

@@ -481,7 +481,9 @@ fn decode_mp4_h264_thumbnail_inner(
             reorder_depth = reorder.max(1);
         }
     }
-    let color_info = color_info.expect("the avcC SPS set was checked as non-empty");
+    let color_info = color_info.ok_or_else(|| {
+        MediaDecodeError::Video("H.264 stream has no usable SPS color information".to_owned())
+    })?;
 
     let mut decoder = OrderedDecoder::<bool>::with_max_depth(reorder_depth as usize);
     for parameter_set in avcc.sps_nals.iter().chain(&avcc.pps_nals) {
@@ -849,7 +851,9 @@ fn decode_mp4_h264_sequence_with_sink(
             reorder_depth = reorder.max(1);
         }
     }
-    let color_info = color_info.expect("the avcC SPS set was checked as non-empty");
+    let color_info = color_info.ok_or_else(|| {
+        MediaDecodeError::Video("H.264 stream has no usable SPS color information".to_owned())
+    })?;
 
     let mut decoder = OrderedDecoder::<H264Timing>::with_max_depth(reorder_depth as usize);
     for parameter_set in avcc.sps_nals.iter().chain(&avcc.pps_nals) {
@@ -1114,7 +1118,11 @@ fn checked_avcc_nal_count(sample: &[u8], length_size: usize) -> Result<usize, Me
                 sample[offset + 3],
             ]))
             .map_err(|_| MediaDecodeError::DimensionsOverflow)?,
-            _ => unreachable!("AVCC length size checked above"),
+            _ => {
+                return Err(MediaDecodeError::Video(
+                    "unsupported AVCC length size".to_owned(),
+                ));
+            }
         };
         if length == 0 {
             return Err(MediaDecodeError::Video(
@@ -1857,7 +1865,10 @@ fn decode_webm_vp8_inner(
                         .collect(),
                     duration_ticks: None,
                 };
-                if !in_block_group && track.is_some_and(|track| track.number == packet.track) {
+                if let Some(track) = track
+                    && !in_block_group
+                    && track.number == packet.track
+                {
                     decode_video_block(
                         &mut decoder,
                         &mut decoded,
@@ -1866,7 +1877,7 @@ fn decode_webm_vp8_inner(
                         DecodeBlockContext {
                             cluster_timestamp,
                             timestamp_scale_ns,
-                            track: track.expect("checked above"),
+                            track,
                             cancelled,
                             first_frame_only,
                             max_frames,

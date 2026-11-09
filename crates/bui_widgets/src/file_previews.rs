@@ -491,7 +491,7 @@ fn decode_preview_file(
             )
             .map_err(|error| format!("decode preview: {error}"))?
             .ok_or_else(|| "preview load was cancelled".to_owned())?,
-            _ => unreachable!("unsupported video extensions return before file reads"),
+            _ => return Err("unsupported video extension".to_owned()),
         },
         _ => return Err("file type does not support image previews".to_owned()),
     };
@@ -579,13 +579,7 @@ fn admit_thumbnail(world: &mut World, path: PathBuf, frame: RgbaFrame, now: Dura
 
     let cache_entry_exists = {
         let mut cache = world.resource_mut::<FileBrowserPreviewCache>();
-        if cache.entries.contains_key(&path) {
-            cache.cached_bytes = cache.cached_bytes.saturating_add(byte_len);
-            cache.completed_decodes = cache.completed_decodes.saturating_add(1);
-            let entry = cache
-                .entries
-                .get_mut(&path)
-                .expect("preview entry was checked above");
+        if let Some(entry) = cache.entries.get_mut(&path) {
             entry.state = PreviewState::Ready {
                 asset_id,
                 width,
@@ -593,6 +587,8 @@ fn admit_thumbnail(world: &mut World, path: PathBuf, frame: RgbaFrame, now: Dura
                 byte_len,
             };
             entry.last_used = now;
+            cache.cached_bytes = cache.cached_bytes.saturating_add(byte_len);
+            cache.completed_decodes = cache.completed_decodes.saturating_add(1);
             true
         } else {
             false

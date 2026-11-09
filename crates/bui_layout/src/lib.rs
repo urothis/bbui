@@ -696,10 +696,12 @@ pub fn compute_layout(world: &mut World) {
             .resource::<UiLayoutCache>()
             .entity_roots
             .get(&change.entity);
-        if memberships.is_some_and(|roots| roots.len() == 1)
+        if let Some(root) = memberships
+            .filter(|roots| roots.len() == 1)
+            .and_then(|roots| roots.iter().next())
+            .copied()
             && is_independent_intrinsic_change(world, change)
         {
-            let root = *memberships.unwrap().iter().next().unwrap();
             local_only_entities.insert(change.entity);
             local_only_by_root
                 .entry(root)

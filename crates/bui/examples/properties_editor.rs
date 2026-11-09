@@ -60,10 +60,13 @@ fn toolbar_button(icon: &str, description: &str, key: &str) -> WidgetNode {
 
 fn setup(world: &mut World) {
     world.spawn(Camera2d);
-    let window = world
+    let Ok(window) = world
         .query_filtered::<Entity, With<PrimaryWindow>>()
         .single(world)
-        .expect("properties editor requires a window");
+    else {
+        eprintln!("properties editor requires a window");
+        return;
+    };
     let background = world.resource::<Theme>().background;
     let root = world
         .spawn((
@@ -241,24 +244,36 @@ fn setup(world: &mut World) {
         .with_width(UiLength::Fill(1.0))
         .with_height(UiLength::Fill(1.0)),
     );
-    tree.spawn(world, Some(root))
-        .expect("valid properties editor widget tree");
+    if let Err(error) = tree.spawn(world, Some(root)) {
+        eprintln!("widget tree setup: {error:?}");
+        return;
+    }
     let mut query = world.query::<(Entity, &UiKey)>();
     let keyed = query
         .iter(world)
         .map(|(entity, key)| (key.0.clone(), entity))
         .collect::<std::collections::HashMap<_, _>>();
-    let lookup = |key: &str| *keyed.get(key).expect("property control has a key");
+    let (Some(&transform), Some(&visibility), Some(&display), Some(&status)) = (
+        keyed.get("transform"),
+        keyed.get("visibility"),
+        keyed.get("viewport"),
+        keyed.get("property-status"),
+    ) else {
+        eprintln!("properties editor controls are incomplete");
+        return;
+    };
     world.insert_resource(PropertyControls {
-        transform: lookup("transform"),
-        visibility: lookup("visibility"),
-        display: lookup("viewport"),
-        status: lookup("property-status"),
+        transform,
+        visibility,
+        display,
+        status,
     });
 }
 
 fn handle_events(world: &mut World) {
-    let controls = *world.resource::<PropertyControls>();
+    let Some(controls) = world.get_resource::<PropertyControls>().copied() else {
+        return;
+    };
     let events = world.resource_mut::<WidgetEventQueue>().take();
     for event in events {
         if let WidgetEvent::Activated { target } = &event {
@@ -275,10 +290,13 @@ fn handle_events(world: &mut World) {
                     .into_iter()
                     .zip(expanded)
                 {
-                    world.get_mut::<Panel>(panel).unwrap().set_expanded(open);
+                    if let Some(mut panel) = world.get_mut::<Panel>(panel) {
+                        panel.set_expanded(open);
+                    }
                 }
-                world.get_mut::<Label>(controls.status).unwrap().text =
-                    format!("{name} · drag values · click tabs to switch sections");
+                if let Some(mut status) = world.get_mut::<Label>(controls.status) {
+                    status.text = format!("{name} · drag values · click tabs to switch sections");
+                }
             }
         }
         info!("properties editor: {event:?}");

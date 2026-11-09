@@ -90,7 +90,7 @@ impl Parse for WidgetDecl {
                 "inline" => Self::Inline(children),
                 "boxed" => Self::Boxed(children),
                 "scroll" => Self::Scroll(children),
-                _ => unreachable!(),
+                _ => return Err(syn::Error::new(kind.span(), "unsupported container")),
             });
         }
         if matches!(
@@ -118,12 +118,15 @@ impl Parse for WidgetDecl {
                 "grid" => Self::Grid(Box::new(first), children),
                 "responsive_grid" => Self::ResponsiveGrid(
                     Box::new(first),
-                    Box::new(second.expect("responsive grid has two arguments")),
+                    Box::new(
+                        second
+                            .ok_or_else(|| args.error("responsive grid requires two arguments"))?,
+                    ),
                     children,
                 ),
                 "flex_row" => Self::FlexRow(Box::new(first), children),
                 "flex_column" => Self::FlexColumn(Box::new(first), children),
-                _ => unreachable!(),
+                _ => return Err(syn::Error::new(kind.span(), "unsupported layout")),
             });
         }
         if name == "property_row" {
@@ -142,10 +145,10 @@ impl Parse for WidgetDecl {
                     "property_row requires exactly one control",
                 ));
             }
-            return Ok(Self::PropertyRow(
-                label,
-                Box::new(children.pop().unwrap().into_value()),
-            ));
+            let child = children
+                .pop()
+                .ok_or_else(|| child.error("property_row requires a control"))?;
+            return Ok(Self::PropertyRow(label, Box::new(child.into_value())));
         }
         if name == "tooltip" {
             let args;
@@ -163,10 +166,10 @@ impl Parse for WidgetDecl {
                     "tooltip requires exactly one child widget",
                 ));
             }
-            return Ok(Self::Tooltip(
-                text,
-                Box::new(children.pop().unwrap().into_value()),
-            ));
+            let child = children
+                .pop()
+                .ok_or_else(|| child.error("tooltip requires a child"))?;
+            return Ok(Self::Tooltip(text, Box::new(child.into_value())));
         }
 
         let args;

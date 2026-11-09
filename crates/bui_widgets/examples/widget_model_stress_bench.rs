@@ -2,11 +2,11 @@
 //!
 //! Run with `cargo run --release -p bui_widgets --example widget_model_stress_bench --locked`.
 //! The app warms each model before recording idle and changed updates. Allocation traffic and
-//! peak live Rust heap are measured separately from scene construction and reported per frame.
+//! sampled live Rust heap are measured separately from scene construction and reported per frame.
 
-use std::alloc::{GlobalAlloc, Layout, System};
+use stats_alloc::{Stats, StatsAlloc};
+use std::alloc::System;
 use std::hint::black_box;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use bevy_app::App;
@@ -30,86 +30,13 @@ const VIEWPORT_HEIGHT: f32 = 720.0;
 const FRAMES: usize = 30;
 const DATA_ROWS: usize = 10_000;
 
-struct TrackingAllocator;
-
-static TRACK_ALLOCATIONS: AtomicBool = AtomicBool::new(false);
-static ALLOCATION_COUNT: AtomicU64 = AtomicU64::new(0);
-static ALLOCATED_BYTES: AtomicU64 = AtomicU64::new(0);
-static LIVE_BYTES: AtomicU64 = AtomicU64::new(0);
-static PEAK_LIVE_BYTES: AtomicU64 = AtomicU64::new(0);
-
 #[global_allocator]
-static ALLOCATOR: TrackingAllocator = TrackingAllocator;
+static ALLOCATOR: StatsAlloc<System> = StatsAlloc::system();
 
-// SAFETY: Every allocation operation delegates to the system allocator unchanged. The counters
-// observe allocation sizes and current/peak live bytes without retaining pointers.
-unsafe impl GlobalAlloc for TrackingAllocator {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        let pointer = unsafe { System.alloc(layout) };
-        if !pointer.is_null() {
-            record_alloc(layout.size());
-        }
-        pointer
-    }
-
-    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
-        let pointer = unsafe { System.alloc_zeroed(layout) };
-        if !pointer.is_null() {
-            record_alloc(layout.size());
-        }
-        pointer
-    }
-
-    unsafe fn realloc(&self, pointer: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        let new_pointer = unsafe { System.realloc(pointer, layout, new_size) };
-        if !new_pointer.is_null() {
-            if TRACK_ALLOCATIONS.load(Ordering::Relaxed) {
-                ALLOCATION_COUNT.fetch_add(1, Ordering::Relaxed);
-                ALLOCATED_BYTES.fetch_add(new_size as u64, Ordering::Relaxed);
-            }
-            if new_size >= layout.size() {
-                update_live(new_size - layout.size(), 0);
-            } else {
-                update_live(0, layout.size() - new_size);
-            }
-        }
-        new_pointer
-    }
-
-    unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
-        unsafe { System.dealloc(pointer, layout) };
-        update_live(0, layout.size());
-    }
-}
-
-fn record_alloc(bytes: usize) {
-    if TRACK_ALLOCATIONS.load(Ordering::Relaxed) {
-        ALLOCATION_COUNT.fetch_add(1, Ordering::Relaxed);
-        ALLOCATED_BYTES.fetch_add(bytes as u64, Ordering::Relaxed);
-    }
-    update_live(bytes, 0);
-}
-
-fn update_live(add: usize, remove: usize) {
-    let live = if add > 0 {
-        LIVE_BYTES.fetch_add(add as u64, Ordering::Relaxed) + add as u64
-    } else if remove > 0 {
-        LIVE_BYTES.fetch_sub(remove as u64, Ordering::Relaxed) - remove as u64
-    } else {
-        LIVE_BYTES.load(Ordering::Relaxed)
-    };
-    let mut peak = PEAK_LIVE_BYTES.load(Ordering::Relaxed);
-    while live > peak {
-        match PEAK_LIVE_BYTES.compare_exchange_weak(
-            peak,
-            live,
-            Ordering::Relaxed,
-            Ordering::Relaxed,
-        ) {
-            Ok(_) => break,
-            Err(actual) => peak = actual,
-        }
-    }
+fn live_bytes(stats: Stats) -> usize {
+    let live = stats.bytes_allocated as i128 - stats.bytes_deallocated as i128
+        + stats.bytes_reallocated as i128;
+    usize::try_from(live.max(0)).unwrap_or(usize::MAX)
 }
 
 struct Scene {
@@ -134,11 +61,12 @@ struct Measure {
     peak_live_kb: f64,
 }
 
-fn main() {
+fn main() -> Result<(), String> {
     bench_scene(make_list_scene(DATA_ROWS));
     bench_scene(make_table_scene(DATA_ROWS, 8));
-    bench_scene(make_graph_scene(1_000, 4));
-    bench_scene(make_animation_scene(1_000));
+    bench_scene(make_graph_scene(1_000, 4)?);
+    bench_scene(make_animation_scene(1_000)?);
+    Ok(())
 }
 
 fn bench_scene(mut scene: Scene) {
@@ -160,10 +88,10 @@ fn bench_scene(mut scene: Scene) {
         begin_animation(&mut scene);
     }
     let changed = measure(&mut scene, FRAMES, true);
-    let live_heap_kb = LIVE_BYTES.load(Ordering::Relaxed) as f64 / 1024.0;
+    let live_heap_kb = live_bytes(ALLOCATOR.stats()) as f64 / 1024.0;
 
     println!(
-        "{} model_items={} entities={} materialized={} draw_items={} idle={:.2}us {:.1}allocs/{:.1}KB peak+{:.1}KB changed_or_animated={:.2}us {:.1}allocs/{:.1}KB peak+{:.1}KB live_heap={:.1}KB",
+        "{} model_items={} entities={} materialized={} draw_items={} idle={:.2}us {:.1}allocs/{:.1}KB sampled_peak+{:.1}KB changed_or_animated={:.2}us {:.1}allocs/{:.1}KB sampled_peak+{:.1}KB live_heap={:.1}KB",
         scene.name,
         model_items(&scene),
         entity_count,
@@ -268,7 +196,7 @@ fn make_table_scene(rows: usize, column_count: usize) -> Scene {
     }
 }
 
-fn make_graph_scene(nodes: usize, inputs_per_node: usize) -> Scene {
+fn make_graph_scene(nodes: usize, inputs_per_node: usize) -> Result<Scene, String> {
     let (mut app, owner) = make_app();
     let mut graph = NodeGraph::default();
     let sockets = std::iter::once(NodeSocket::output("out", SocketType::Float))
@@ -291,20 +219,20 @@ fn make_graph_scene(nodes: usize, inputs_per_node: usize) -> Scene {
         for offset in 1..=inputs_per_node {
             graph
                 .create_link(ids[target - offset], 0, ids[target], offset)
-                .expect("typed graph links should validate");
+                .map_err(|error| format!("graph benchmark link: {error:?}"))?;
         }
     }
     let links = graph.links.len();
     app.world_mut().entity_mut(owner).insert(graph);
-    Scene {
+    Ok(Scene {
         name: "node-graph",
         app,
         owner,
         workload: Workload::Graph { nodes, links },
-    }
+    })
 }
 
-fn make_animation_scene(nodes: usize) -> Scene {
+fn make_animation_scene(nodes: usize) -> Result<Scene, String> {
     let (mut app, owner) = make_app();
     let mut targets = Vec::with_capacity(nodes);
     let mut transitions = UiTransitions::default();
@@ -325,15 +253,16 @@ fn make_animation_scene(nodes: usize) -> Scene {
                 Checkbox::new(format!("Animated control {index}"), false),
             ))
             .id();
-        set_parent(app.world_mut(), target, owner).expect("valid animated child");
+        set_parent(app.world_mut(), target, owner)
+            .map_err(|error| format!("animated benchmark child: {error:?}"))?;
         targets.push(target);
     }
-    Scene {
+    Ok(Scene {
         name: "style-animation",
         app,
         owner,
         workload: Workload::Animation { targets },
-    }
+    })
 }
 
 fn begin_animation(scene: &mut Scene) {
@@ -364,16 +293,15 @@ fn measure(scene: &mut Scene, frames: usize, changed: bool) -> Measure {
     }
     let micros_per_frame = start.elapsed().as_secs_f64() * 1_000_000.0 / frames as f64;
 
-    let baseline_live = LIVE_BYTES.load(Ordering::Relaxed);
-    PEAK_LIVE_BYTES.store(baseline_live, Ordering::Relaxed);
-    ALLOCATION_COUNT.store(0, Ordering::Relaxed);
-    ALLOCATED_BYTES.store(0, Ordering::Relaxed);
-    TRACK_ALLOCATIONS.store(true, Ordering::Relaxed);
+    let before = ALLOCATOR.stats();
+    let baseline_live = live_bytes(before);
+    let mut peak_live = baseline_live;
     for frame in 0..frames {
         if changed {
             step_workload(scene, frame);
         }
         scene.app.update();
+        peak_live = peak_live.max(live_bytes(ALLOCATOR.stats()));
         black_box(
             scene
                 .app
@@ -383,12 +311,10 @@ fn measure(scene: &mut Scene, frames: usize, changed: bool) -> Measure {
                 .len(),
         );
     }
-    TRACK_ALLOCATIONS.store(false, Ordering::Relaxed);
-    let count = ALLOCATION_COUNT.load(Ordering::Relaxed);
-    let bytes = ALLOCATED_BYTES.load(Ordering::Relaxed);
-    let peak = PEAK_LIVE_BYTES
-        .load(Ordering::Relaxed)
-        .saturating_sub(baseline_live);
+    let delta = ALLOCATOR.stats() - before;
+    let count = delta.allocations + delta.reallocations;
+    let bytes = delta.bytes_allocated;
+    let peak = peak_live.saturating_sub(baseline_live);
     Measure {
         micros_per_frame,
         allocs_per_frame: count as f64 / frames as f64,
@@ -490,7 +416,7 @@ mod tests {
 
     #[test]
     fn graph_stress_keeps_thousands_of_nodes_and_links_and_virtualizes_controls() {
-        let mut graph_scene = make_graph_scene(1_000, 4);
+        let mut graph_scene = make_graph_scene(1_000, 4).unwrap();
         graph_scene.app.update();
         graph_scene.app.update();
         let graph = graph_scene
@@ -506,7 +432,7 @@ mod tests {
 
     #[test]
     fn active_style_animation_advances_then_returns_to_idle() {
-        let mut scene = make_animation_scene(64);
+        let mut scene = make_animation_scene(64).unwrap();
         scene.app.update();
         begin_animation(&mut scene);
         assert!(count_component::<UiStyleTransitionState>(&mut scene.app) > 0);

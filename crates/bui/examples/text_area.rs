@@ -15,10 +15,13 @@ use bui_render::{ClipRect, Primitive, UiPaint};
 fn setup(world: &mut World) {
     let background = world.resource::<Theme>().background;
     world.spawn(Camera2d);
-    let window = world
+    let Ok(window) = world
         .query_filtered::<Entity, With<PrimaryWindow>>()
         .single(world)
-        .expect("text area example requires a primary window");
+    else {
+        eprintln!("text area example requires a primary window");
+        return;
+    };
     let root = world
         .spawn((
             UiNode,
@@ -62,19 +65,20 @@ fn setup(world: &mut World) {
             "IME preedit, wrapping, selection, caret paint, and scrolling share one shaped layout.",
         ),
     ]));
-    let tree_root = tree
-        .spawn(world, Some(root))
-        .expect("valid text area example tree");
-    let area = world
-        .get::<UiChildren>(tree_root)
-        .and_then(|children| {
-            children
-                .0
-                .iter()
-                .copied()
-                .find(|entity| world.get::<bui_widgets::TextArea>(*entity).is_some())
-        })
-        .expect("text area should be present in its widget tree");
+    let Ok(tree_root) = tree.spawn(world, Some(root)) else {
+        eprintln!("failed to spawn text area example tree");
+        return;
+    };
+    let Some(area) = world.get::<UiChildren>(tree_root).and_then(|children| {
+        children
+            .0
+            .iter()
+            .copied()
+            .find(|entity| world.get::<bui_widgets::TextArea>(*entity).is_some())
+    }) else {
+        eprintln!("text area control is missing");
+        return;
+    };
     if let Some(mut layout) = world.get_mut::<UiLayoutNode>(area) {
         layout.size.width = UiLength::Px(820.0);
         layout.size.height = UiLength::Px(390.0);

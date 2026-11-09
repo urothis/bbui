@@ -58,6 +58,7 @@ fn test_app() -> App {
     app
 }
 
+#[cfg(test)]
 fn spawn_scene(app: &mut App) -> Scene {
     let mut window = Window::default();
     window.resolution.set(400.0, 200.0);
@@ -124,11 +125,13 @@ fn accessibility_tracks_direct_control_edits_and_removal_in_the_same_update() {
     assert!(app.world().get::<AccessibilityNode>(scene.button).is_none());
 }
 
+#[cfg(test)]
 fn center(app: &App, entity: bevy::prelude::Entity) -> Vec2 {
     let rect = app.world().get::<UiLayoutResult>(entity).unwrap().rect;
     Vec2::new(rect.x + rect.width * 0.5, rect.y + rect.height * 0.5)
 }
 
+#[cfg(test)]
 fn spawn_world_scene(app: &mut App) -> WorldScene {
     let mut window = Window::default();
     window.resolution.set(400.0, 200.0);
@@ -188,6 +191,7 @@ fn spawn_world_scene(app: &mut App) -> WorldScene {
     }
 }
 
+#[cfg(test)]
 fn screen_position_for_surface_ui(scene: &WorldScene, ui_position: Vec2) -> Vec2 {
     let local_world = Vec3::new(ui_position.x - 200.0, 100.0 - ui_position.y, 0.0);
     // The synthetic camera has a 1:1 orthographic mapping to this world surface.

@@ -5,7 +5,7 @@ use bui_layout::{
     UiLayoutMode, UiLayoutNode, UiLayoutResult, UiLayoutRoot, UiLength, UiSize,
 };
 
-fn main() {
+fn main() -> Result<(), bui_core::UiHierarchyError> {
     let mut app = App::new();
     app.add_plugins((CorePlugin, LayoutPlugin));
 
@@ -44,7 +44,7 @@ fn main() {
             },
         ))
         .id();
-    set_parent(app.world_mut(), flex, root).expect("valid flex parent");
+    set_parent(app.world_mut(), flex, root)?;
 
     let mut flex_items = Vec::new();
     for height in [30.0, 42.0, 24.0, 36.0, 28.0] {
@@ -60,7 +60,7 @@ fn main() {
                 },
             ))
             .id();
-        set_parent(app.world_mut(), item, flex).expect("valid flex item parent");
+        set_parent(app.world_mut(), item, flex)?;
         flex_items.push(item);
     }
 
@@ -83,7 +83,7 @@ fn main() {
             },
         ))
         .id();
-    set_parent(app.world_mut(), grid, root).expect("valid grid parent");
+    set_parent(app.world_mut(), grid, root)?;
 
     let mut grid_items = Vec::new();
     for height in [22.0, 34.0, 28.0, 46.0, 30.0, 40.0] {
@@ -91,18 +91,21 @@ fn main() {
             .world_mut()
             .spawn((UiNode, UiIntrinsicSize([70.0, height])))
             .id();
-        set_parent(app.world_mut(), item, grid).expect("valid grid item parent");
+        set_parent(app.world_mut(), item, grid)?;
         grid_items.push(item);
     }
 
     app.update();
     report(&app, flex, &flex_items, grid, &grid_items, "wide");
 
-    let mut root_config = *app.world().get::<UiLayoutRoot>(root).unwrap();
+    let Some(mut root_config) = app.world().get::<UiLayoutRoot>(root).copied() else {
+        return Ok(());
+    };
     root_config.viewport.width = 240.0;
     app.world_mut().entity_mut(root).insert(root_config);
     app.update();
     report(&app, flex, &flex_items, grid, &grid_items, "narrow");
+    Ok(())
 }
 
 fn report(
@@ -115,22 +118,30 @@ fn report(
 ) {
     println!(
         "{label}: flex={:?}",
-        app.world().get::<UiLayoutResult>(flex).unwrap().rect
+        app.world()
+            .get::<UiLayoutResult>(flex)
+            .map(|layout| layout.rect)
     );
     for (index, entity) in flex_items.iter().enumerate() {
         println!(
             "  flex[{index}]={:?}",
-            app.world().get::<UiLayoutResult>(*entity).unwrap().rect
+            app.world()
+                .get::<UiLayoutResult>(*entity)
+                .map(|layout| layout.rect)
         );
     }
     println!(
         "{label}: grid={:?}",
-        app.world().get::<UiLayoutResult>(grid).unwrap().rect
+        app.world()
+            .get::<UiLayoutResult>(grid)
+            .map(|layout| layout.rect)
     );
     for (index, entity) in grid_items.iter().enumerate() {
         println!(
             "  grid[{index}]={:?}",
-            app.world().get::<UiLayoutResult>(*entity).unwrap().rect
+            app.world()
+                .get::<UiLayoutResult>(*entity)
+                .map(|layout| layout.rect)
         );
     }
 }

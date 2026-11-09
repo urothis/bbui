@@ -37,10 +37,13 @@ fn button(label: &str, key: &str) -> WidgetNode {
 
 fn setup(world: &mut World) {
     world.spawn(Camera2d);
-    let window = world
+    let Ok(window) = world
         .query_filtered::<Entity, With<PrimaryWindow>>()
         .single(world)
-        .expect("file browser example requires a window");
+    else {
+        eprintln!("file browser example requires a window");
+        return;
+    };
     let background = world.resource::<Theme>().background;
     let root = world
         .spawn((
@@ -63,7 +66,10 @@ fn setup(world: &mut World) {
             }),
         ))
         .id();
-    let directory = std::env::current_dir().expect("current directory is available");
+    let Ok(directory) = std::env::current_dir() else {
+        eprintln!("file browser example needs a working directory");
+        return;
+    };
     let tree = WidgetNode::column([
         WidgetNode::row([
             WidgetNode::dropdown(
@@ -101,9 +107,10 @@ fn setup(world: &mut World) {
         .with_key("status"),
         WidgetNode::file_browser(directory).with_key("browser"),
     ]);
-    let container = WidgetTree::new(tree)
-        .spawn(world, Some(root))
-        .expect("file browser can read the current directory");
+    let Ok(container) = WidgetTree::new(tree).spawn(world, Some(root)) else {
+        eprintln!("file browser cannot read the current directory");
+        return;
+    };
     if let Some(mut layout) = world.get_mut::<UiLayoutNode>(container) {
         layout.size.width = UiLength::Fill(1.0);
         layout.size.height = UiLength::Fill(1.0);

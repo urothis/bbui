@@ -1769,6 +1769,7 @@ dependencies = [
  "bui_widgets",
  "criterion",
  "image",
+ "stats_alloc",
 ]
 
 [[package]]
@@ -1786,6 +1787,7 @@ dependencies = [
  "bevy_app",
  "bevy_ecs",
  "bui_core",
+ "stats_alloc",
 ]
 
 [[package]]
@@ -1820,6 +1822,7 @@ dependencies = [
  "bui_layout",
  "bui_style",
  "bui_text",
+ "stats_alloc",
 ]
 
 [[package]]
@@ -1873,6 +1876,7 @@ dependencies = [
  "bui_text",
  "serde",
  "serde_json",
+ "stats_alloc",
 ]
 
 [[package]]
@@ -4948,6 +4952,12 @@ name = "static_assertions"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
+
+[[package]]
+name = "stats_alloc"
+version = "0.1.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c0e04424e733e69714ca1bbb9204c1a57f09f5493439520f9f68c132ad25eec"
 
 [[package]]
 name = "strict-num"

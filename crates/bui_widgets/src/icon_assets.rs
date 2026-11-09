@@ -382,11 +382,10 @@ fn advance_entry(
     let Some(entry) = cache.entries.get_mut(&entity) else {
         return;
     };
-    if entry.handle.is_none() {
+    let Some(handle) = entry.handle.as_ref().cloned() else {
         set_status(world, entity, entry.status.clone());
         return;
-    }
-    let handle = entry.handle.as_ref().expect("handle was checked").clone();
+    };
     match asset_server.get_load_state(handle.id()) {
         Some(LoadState::Failed(error)) => {
             if let Some(asset_id) = entry.asset_id.take() {

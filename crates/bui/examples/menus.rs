@@ -27,10 +27,13 @@ fn setup(world: &mut World) {
     }
     let background = world.resource::<Theme>().background;
     world.spawn(Camera2d);
-    let window = world
+    let Ok(window) = world
         .query_filtered::<Entity, With<PrimaryWindow>>()
         .single(world)
-        .expect("menu example requires a primary window");
+    else {
+        eprintln!("menu example requires a primary window");
+        return;
+    };
     let root = world
         .spawn((
             UiNode,
@@ -116,25 +119,29 @@ fn setup(world: &mut World) {
             label("Choose a command to see the result here."),
         }
     };
-    tree.spawn(world, Some(root))
-        .expect("valid menu example widget tree");
+    if let Err(error) = tree.spawn(world, Some(root)) {
+        eprintln!("widget tree setup: {error:?}");
+        return;
+    }
     let status = {
         let mut labels = world.query::<(Entity, &Label)>();
         labels
             .iter(world)
             .find(|(_, label)| label.text == "Choose a command to see the result here.")
             .map(|(entity, _)| entity)
-            .expect("menu example status label")
     };
-    world.insert_resource(MenuExampleStatus(status));
+    if let Some(status) = status {
+        world.insert_resource(MenuExampleStatus(status));
+    }
 }
 
 fn log_widget_events(
     mut events: ResMut<WidgetEventQueue>,
     mut labels: Query<&mut Label>,
     menus: Query<&MenuControl>,
-    status: Res<MenuExampleStatus>,
+    status: Option<Res<MenuExampleStatus>>,
 ) {
+    let Some(status) = status else { return };
     for event in events.take() {
         info!("widget event: {event:?}");
         if let WidgetEvent::MenuCommand { target, command_id } = &event {

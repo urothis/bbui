@@ -8,10 +8,13 @@ use bui_layout::Rect;
 
 fn setup(world: &mut World) {
     world.spawn(Camera2d);
-    let window = world
+    let Ok(window) = world
         .query_filtered::<Entity, With<PrimaryWindow>>()
         .single(world)
-        .expect("layout gallery requires a primary window");
+    else {
+        eprintln!("layout gallery requires a primary window");
+        return;
+    };
     let mut tree = bui! {
         scroll {
             boxed {
@@ -40,7 +43,10 @@ fn setup(world: &mut World) {
         .root
         .with_width(UiLength::Fill(1.0))
         .with_height(UiLength::Fill(1.0));
-    let root = tree.spawn(world, None).expect("valid layout gallery tree");
+    let Ok(root) = tree.spawn(world, None) else {
+        eprintln!("failed to spawn layout gallery tree");
+        return;
+    };
     world.entity_mut(root).insert(UiLayoutRoot::new(
         window,
         Rect::new(0.0, 0.0, 900.0, 620.0),

@@ -13,3 +13,5 @@ bevy_ui = "=0.20.1"
 bui_core = { path = "../bui_core" }
 bui_layout = { path = "../bui_layout" }
 
+[lints]
+workspace = true

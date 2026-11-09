@@ -286,7 +286,10 @@ impl ColorRamp {
             .windows(2)
             .find_map(|pair| (position <= pair[1].position).then_some((pair[0], pair[1])))
         else {
-            return self.stops.last().unwrap().color;
+            return self
+                .stops
+                .last()
+                .map_or(Rgba(0.0, 0.0, 0.0, 1.0), |stop| stop.color);
         };
         if self.interpolation == Interpolation::Constant || right.position <= left.position {
             return left.color;
@@ -433,7 +436,7 @@ impl HsvColorEditor {
             HsvColorField::Saturation => &mut self.saturation,
             HsvColorField::Value => &mut self.value,
             HsvColorField::Alpha => &mut self.alpha,
-            _ => unreachable!(),
+            _ => return false,
         };
         let changed = *channel != value;
         *channel = value;
@@ -955,11 +958,14 @@ impl CurveEditor {
         if x <= self.points[0].position[0] {
             return self.points[0].position[1];
         }
-        if x >= self.points.last().unwrap().position[0] {
-            return self.points.last().unwrap().position[1];
+        let Some(last) = self.points.last() else {
+            return 0.0;
+        };
+        if x >= last.position[0] {
+            return last.position[1];
         }
         let Some(pair) = self.points.windows(2).find(|pair| x <= pair[1].position[0]) else {
-            return self.points.last().unwrap().position[1];
+            return last.position[1];
         };
         let left = pair[0];
         let right = pair[1];
@@ -1350,7 +1356,7 @@ impl NodeGraph {
             .links
             .iter_mut()
             .find(|link| link.id == link_id)
-            .unwrap();
+            .ok_or(NodeGraphError::MissingSocket)?;
         link.from_node = from_node;
         link.from_socket = from_socket;
         link.to_node = to_node;

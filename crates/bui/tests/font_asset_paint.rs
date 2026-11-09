@@ -22,6 +22,7 @@ use bui_widgets::{WidgetPlugin, WidgetTree, actions::collect_widget_paint};
 const FONT_BYTES: &[u8] =
     include_bytes!("../../bui_text/tests/assets/NotoSansSymbols2-U+1F7D5.ttf");
 
+#[cfg(test)]
 fn temp_directory() -> std::path::PathBuf {
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -56,6 +57,7 @@ fn await_font_status(app: &mut App, entity: bevy::prelude::Entity, ready: bool) 
     }
 }
 
+#[cfg(test)]
 fn generic_label_font(app: &App, label: bevy::prelude::Entity) -> TextFont {
     let items = app.world().resource::<DisplayList>().widget_items();
     let layout = app.world().get::<bui_layout::UiLayoutResult>(label);

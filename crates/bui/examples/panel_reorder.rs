@@ -11,10 +11,13 @@ use bui_layout::Rect;
 
 fn setup(world: &mut World) {
     world.spawn(Camera2d);
-    let window = world
+    let Ok(window) = world
         .query_filtered::<Entity, With<PrimaryWindow>>()
         .single(world)
-        .expect("panel reorder example requires a primary window");
+    else {
+        eprintln!("panel reorder example requires a primary window");
+        return;
+    };
     let tree = WidgetTree::new(WidgetNode::column([
         WidgetNode::panel(
             "Transform",
@@ -45,9 +48,10 @@ fn setup(world: &mut World) {
         .with_key("output"),
         WidgetNode::label("Ctrl+Up/Down moves the focused panel. Escape cancels a drag."),
     ]));
-    let root = tree
-        .spawn(world, None)
-        .expect("valid reorderable panel tree");
+    let Ok(root) = tree.spawn(world, None) else {
+        eprintln!("failed to spawn reorderable panel tree");
+        return;
+    };
     world.entity_mut(root).insert((
         UiKey("settings-panels".into()),
         PanelGroup::with_panels(["transform", "material", "output"])

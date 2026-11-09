@@ -117,6 +117,7 @@ fn assert_color_near_position(
     );
 }
 
+#[cfg(test)]
 fn sample_canvas() -> (Canvas, u64) {
     let mut canvas = Canvas::default();
     canvas

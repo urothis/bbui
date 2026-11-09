@@ -97,9 +97,10 @@ fn generated_animation() -> Vec<u8> {
         Frame::from_parts(pixels, 0, 0, Delay::from_numer_denom_ms(100, 1))
     });
     let mut bytes = Vec::new();
-    GifEncoder::new(&mut bytes)
-        .encode_frames(frames)
-        .expect("encode deterministic stress animation");
+    if let Err(error) = GifEncoder::new(&mut bytes).encode_frames(frames) {
+        eprintln!("encode stress animation: {error}");
+        return Vec::new();
+    }
     bytes
 }
 

@@ -544,9 +544,11 @@ impl DisplayList {
                 fragments
                     .sort_unstable_by_key(|fragment| (fragment.order, fragment.entity.to_bits()));
                 for fragment in fragments {
-                    view.entry(fragment.target_camera.expect("filtered camera fragment"))
-                        .or_default()
-                        .extend(fragment.items.iter().cloned());
+                    if let Some(camera) = fragment.target_camera {
+                        view.entry(camera)
+                            .or_default()
+                            .extend(fragment.items.iter().cloned());
+                    }
                 }
                 view
             })
@@ -1199,8 +1201,9 @@ fn update_widget_order_labels(
             item_index,
         })
         .collect();
-    let first = keys[0];
-    let last = *keys.last().expect("nonempty fragment key set");
+    let Some((&first, &last)) = keys.first().zip(keys.last()) else {
+        return true;
+    };
     let previous = cache
         .widget_order_labels
         .range(..first)
@@ -2099,7 +2102,7 @@ fn sync_widget_fragment_bezier_group(
                     || item.z != first_item.z
                     || !matches!(item.primitive, Primitive::Bezier { .. })
                     || !valid_clip(item.clip)
-                    || ClipGroupKey::new(item.clip, desired.target_camera) != clip.unwrap()
+                    || Some(ClipGroupKey::new(item.clip, desired.target_camera)) != clip
                 {
                     break;
                 }
@@ -2111,11 +2114,12 @@ fn sync_widget_fragment_bezier_group(
         stats.scanned_draw_keys = stats.scanned_draw_keys.saturating_add(run.len());
         let run_items: Vec<_> = run.iter().map(|(_, item)| item.clone()).collect();
         let run_keys: Vec<_> = run.iter().map(|(desired, _)| desired.key).collect();
-        let batch_key = (run.len() >= 2).then(|| BezierBatchKey {
-            first: run_keys[0],
-            last: *run_keys.last().expect("a batch run has keys"),
-            clip: clip.expect("a batch run has valid clipping"),
-        });
+        let batch_key = run_keys
+            .first()
+            .zip(run_keys.last())
+            .zip(clip)
+            .filter(|_| run.len() >= 2)
+            .map(|((&first, &last), clip)| BezierBatchKey { first, last, clip });
         let batch_values = batch_key.and_then(|key| {
             build_bezier_batch_values(&run_items, key.clip.clip()).map(|values| (key, values))
         });
@@ -2501,7 +2505,7 @@ fn sync_widget_fragments(
     }
     let mut touched_batches: Vec<_> = touched_batches.into_iter().collect();
     touched_batches.sort_unstable_by_key(|key| (key.first, key.last));
-    for old_batch_key in touched_batches {
+    'batches: for old_batch_key in touched_batches {
         let Some(batch) = cache.bezier_batches.get(&old_batch_key).cloned() else {
             continue;
         };
@@ -2592,74 +2596,75 @@ fn sync_widget_fragments(
             })
         });
         let sorted_keys: Vec<_> = entries.iter().map(|entry| entry.desired.key).collect();
-        if entries_are_compatible {
-            let new_key = BezierBatchKey {
-                first: sorted_keys[0],
-                last: *sorted_keys.last().expect("batch has keys"),
-                clip: old_batch_key.clip,
-            };
-            let signature: Vec<_> = entries
-                .iter()
-                .filter_map(|entry| entry.item.clone())
-                .collect();
-            let first = &entries[0];
-            let local_z = desired_local_z(
-                &first.desired,
-                &cache.layout_order,
-                &cache.layout_order_labels,
-                &cache.widget_order_labels,
-            );
-            let order_changed = sorted_keys != batch.keys || new_key != old_batch_key;
-            let local_z_changed = batch.local_z != local_z;
-            if order_changed || local_z_changed {
-                if new_key != old_batch_key {
-                    if let Some(previous) = cache.bezier_batches.remove(&old_batch_key) {
-                        cache.bezier_batches.insert(new_key, previous);
-                    }
-                    for key in &batch.keys {
-                        cache.bezier_batch_for_key.insert(*key, new_key);
-                    }
-                    for batch_keys in cache.fragment_batches.values_mut() {
-                        for key in batch_keys.iter_mut() {
-                            if *key == old_batch_key {
-                                *key = new_key;
+        'compatible: {
+            if entries_are_compatible
+                && let Some((&first_key, &last_key)) = sorted_keys.first().zip(sorted_keys.last())
+            {
+                let new_key = BezierBatchKey {
+                    first: first_key,
+                    last: last_key,
+                    clip: old_batch_key.clip,
+                };
+                let signature: Vec<_> = entries
+                    .iter()
+                    .filter_map(|entry| entry.item.clone())
+                    .collect();
+                let first = &entries[0];
+                let local_z = desired_local_z(
+                    &first.desired,
+                    &cache.layout_order,
+                    &cache.layout_order_labels,
+                    &cache.widget_order_labels,
+                );
+                let order_changed = sorted_keys != batch.keys || new_key != old_batch_key;
+                let local_z_changed = batch.local_z != local_z;
+                if order_changed || local_z_changed {
+                    let Some(values) = build_bezier_batch_values(&signature, new_key.clip.clip())
+                    else {
+                        break 'compatible;
+                    };
+                    if new_key != old_batch_key {
+                        if let Some(previous) = cache.bezier_batches.remove(&old_batch_key) {
+                            cache.bezier_batches.insert(new_key, previous);
+                        }
+                        for key in &batch.keys {
+                            cache.bezier_batch_for_key.insert(*key, new_key);
+                        }
+                        for batch_keys in cache.fragment_batches.values_mut() {
+                            for key in batch_keys.iter_mut() {
+                                if *key == old_batch_key {
+                                    *key = new_key;
+                                }
                             }
                         }
                     }
-                }
-                if let (Some(materials), Some(buffers)) =
-                    (bezier_batch_materials.as_mut(), shader_buffers.as_mut())
-                {
-                    let generation = cache.generation;
-                    let updated = BezierBatchSyncContext {
-                        commands: &mut commands,
-                        cache: &mut cache,
-                        materials,
-                        buffers,
-                        generation,
-                    }
-                    .sync(
-                        new_key,
-                        sorted_keys.clone(),
-                        signature,
-                        build_bezier_batch_values(
-                            &entries
-                                .iter()
-                                .filter_map(|entry| entry.item.clone())
-                                .collect::<Vec<_>>(),
-                            new_key.clip.clip(),
-                        )
-                        .expect("compatible Bezier batch has GPU data"),
-                        first.desired.z,
-                        local_z,
-                    );
-                    if updated {
-                        stats.updated_render_entries =
-                            stats.updated_render_entries.saturating_add(1);
+                    if let (Some(materials), Some(buffers)) =
+                        (bezier_batch_materials.as_mut(), shader_buffers.as_mut())
+                    {
+                        let generation = cache.generation;
+                        let updated = BezierBatchSyncContext {
+                            commands: &mut commands,
+                            cache: &mut cache,
+                            materials,
+                            buffers,
+                            generation,
+                        }
+                        .sync(
+                            new_key,
+                            sorted_keys.clone(),
+                            signature,
+                            values,
+                            first.desired.z,
+                            local_z,
+                        );
+                        if updated {
+                            stats.updated_render_entries =
+                                stats.updated_render_entries.saturating_add(1);
+                        }
                     }
                 }
+                continue 'batches;
             }
-            continue;
         }
 
         for key in &batch.keys {
@@ -2732,11 +2737,11 @@ fn sync_widget_fragments(
             let run = &entries[start..end];
             let signature: Vec<_> = run.iter().filter_map(|entry| entry.item.clone()).collect();
             let keys: Vec<_> = run.iter().map(|entry| entry.desired.key).collect();
-            let key = BezierBatchKey {
-                first: keys[0],
-                last: *keys.last().expect("batch run has keys"),
-                clip,
+            let Some((&first, &last)) = keys.first().zip(keys.last()) else {
+                start = end;
+                continue;
             };
+            let key = BezierBatchKey { first, last, clip };
             if let (Some(values), Some(materials), Some(buffers)) = (
                 build_bezier_batch_values(&signature, clip.clip()),
                 bezier_batch_materials.as_mut(),
@@ -3993,7 +3998,9 @@ impl BezierBatchSyncContext<'_, '_, '_> {
                 true,
             ));
         });
-        let entity = entity.expect("clip-group child should spawn");
+        let Some(entity) = entity else {
+            return false;
+        };
         cache.bezier_batches.insert(
             key,
             CachedBezierBatch {
@@ -4513,7 +4520,7 @@ mod tests {
             .iter()
             .map(|item| match item.primitive {
                 Primitive::RoundedRect { rect, .. } => rect.x,
-                _ => unreachable!(),
+                _ => panic!(),
             })
             .collect();
         assert_eq!(positions, [10.0, 20.0, 15.0, 25.0, 30.0, 35.0]);
@@ -4811,7 +4818,7 @@ mod tests {
                 width,
                 color: Rgba(0.9, 0.1, 0.2, 1.0),
             },
-            _ => unreachable!(),
+            _ => panic!(),
         };
         app.world_mut()
             .resource_mut::<DisplayList>()
@@ -4976,7 +4983,7 @@ mod tests {
                 .iter()
                 .map(|item| match &item.primitive {
                     Primitive::RoundedRect { rect, .. } => rect.x,
-                    _ => unreachable!(),
+                    _ => panic!(),
                 })
                 .collect::<Vec<_>>(),
             [1.0, 2.0, 3.0]
@@ -6374,7 +6381,7 @@ mod tests {
         let (_, changed_fragment) = &fragments[changed_index];
         let mut changed_fragment = changed_fragment.clone();
         let Primitive::Bezier { points, width, .. } = &changed_fragment.items[0].primitive else {
-            unreachable!();
+            panic!();
         };
         changed_fragment.items[0].primitive = Primitive::Bezier {
             points: *points,

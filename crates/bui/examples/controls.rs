@@ -12,10 +12,13 @@ use bui_render::{ClipRect, Primitive, UiPaint};
 
 fn setup(world: &mut World) {
     world.spawn(Camera2d);
-    let window = world
+    let Ok(window) = world
         .query_filtered::<Entity, With<PrimaryWindow>>()
         .single(world)
-        .expect("controls example requires a primary window");
+    else {
+        eprintln!("controls example requires a primary window");
+        return;
+    };
     let root = world
         .spawn((
             UiNode,
@@ -62,8 +65,10 @@ fn setup(world: &mut World) {
             label("Use arrows and Space/Enter in the radio group. Disabled and read-only states are visible."),
         }
     };
-    tree.spawn(world, Some(root))
-        .expect("valid controls example widget tree");
+    if let Err(error) = tree.spawn(world, Some(root)) {
+        eprintln!("widget tree setup: {error:?}");
+        return;
+    }
 
     let disabled_button = world.iter_entities().find_map(|entity| {
         entity
@@ -71,8 +76,10 @@ fn setup(world: &mut World) {
             .is_some_and(|button| button.label == "Disabled")
             .then_some(entity.id())
     });
-    if let Some(button) = disabled_button {
-        world.get_mut::<Button>(button).unwrap().enabled = false;
+    if let Some(button) = disabled_button
+        && let Some(mut button) = world.get_mut::<Button>(button)
+    {
+        button.enabled = false;
     }
     let read_only_field = world.iter_entities().find_map(|entity| {
         entity
@@ -81,7 +88,9 @@ fn setup(world: &mut World) {
             .then_some(entity.id())
     });
     if let Some(field) = read_only_field {
-        world.get_mut::<TextField>(field).unwrap().read_only = true;
+        if let Some(mut text_field) = world.get_mut::<TextField>(field) {
+            text_field.read_only = true;
+        }
         world.entity_mut(field).insert(bui_text::UiReadOnly);
     }
 }

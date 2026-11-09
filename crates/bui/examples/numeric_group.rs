@@ -13,10 +13,13 @@ use bui_render::{ClipRect, Primitive, UiPaint};
 
 fn setup(world: &mut World) {
     world.spawn(Camera2d);
-    let window = world
+    let Ok(window) = world
         .query_filtered::<Entity, With<PrimaryWindow>>()
         .single(world)
-        .expect("numeric group example requires a primary window");
+    else {
+        eprintln!("numeric group example requires a primary window");
+        return;
+    };
     let root = world
         .spawn((
             UiNode,
@@ -46,8 +49,10 @@ fn setup(world: &mut World) {
         WidgetNode::label("Drag down over fields to select, then right or left to scrub."),
         WidgetNode::label("Shift is precise · Control snaps · Escape restores the whole group."),
     ]));
-    tree.spawn(world, Some(root))
-        .expect("valid numeric group declaration");
+    if let Err(error) = tree.spawn(world, Some(root)) {
+        eprintln!("widget tree setup: {error:?}");
+        return;
+    }
     let keyed_fields: Vec<_> = world
         .query::<(Entity, &UiKey)>()
         .iter(world)

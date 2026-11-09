@@ -11,3 +11,8 @@ bui_layout = { path = "../bui_layout" }
 bui_style = { path = "../bui_style" }
 bui_text = { path = "../bui_text" }
 
+[dev-dependencies]
+stats_alloc.workspace = true
+
+[lints]
+workspace = true

@@ -18,6 +18,12 @@ This repository is an in-progress, original Rust implementation of Blender-style
 
 Use Rust 1.99 or newer. Dependencies are pinned through `Cargo.lock`, including Bevy 0.20.1.
 
+Every crate inherits the workspace lint policy in `Cargo.toml`. It forbids unsafe Rust and
+denies `unwrap`, `expect`, `panic`, `unreachable`, `todo`, `unimplemented`, and direct process
+exit calls. Handle fallible work with `Result`, `Option`, or an explicit logged fallback.
+Clippy permits assertion-style `unwrap`, `expect`, and `panic` inside tests; test helpers
+must be marked `#[cfg(test)]`. The all-targets Clippy command below checks the policy.
+
 ```sh
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --locked -- -D warnings

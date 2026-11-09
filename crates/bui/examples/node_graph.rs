@@ -11,7 +11,7 @@ use bui::widgets::{NodeCategory, NodeSocket, SocketType, WidgetEventQueue, Widge
 use bui_layout::{Rect, UiEdges};
 use bui_render::{ClipRect, Primitive, UiPaint};
 
-fn sample_graph() -> NodeGraph {
+fn sample_graph() -> Result<NodeGraph, String> {
     let mut graph = NodeGraph::default();
     let noise = graph.add_node_with_category(
         "Noise Texture",
@@ -45,33 +45,32 @@ fn sample_graph() -> NodeGraph {
         vec![NodeSocket::input("Surface", SocketType::Color)],
         NodeCategory::Output,
     );
-    graph
-        .create_link(noise, 0, color, 0)
-        .expect("matching Float sockets");
-    graph
-        .create_link(color, 1, mix, 0)
-        .expect("matching Color sockets");
-    graph
-        .create_link(color, 1, mix, 1)
-        .expect("matching Color sockets");
-    graph
-        .create_link(noise, 0, mix, 2)
-        .expect("matching Float sockets");
-    graph
-        .create_link(mix, 3, output, 0)
-        .expect("matching Color sockets");
+    for (from, from_socket, to, to_socket) in [
+        (noise, 0, color, 0),
+        (color, 1, mix, 0),
+        (color, 1, mix, 1),
+        (noise, 0, mix, 2),
+        (mix, 3, output, 0),
+    ] {
+        graph
+            .create_link(from, from_socket, to, to_socket)
+            .map_err(|error| format!("sample graph link: {error:?}"))?;
+    }
     // Center the sample network inside the editor viewport while keeping its model coordinates
     // independent from the current window and layout size.
     graph.pan = [80.0, 105.0];
-    graph
+    Ok(graph)
 }
 
 fn setup(world: &mut World) {
     world.spawn(Camera2d);
-    let window = world
+    let Ok(window) = world
         .query_filtered::<Entity, With<PrimaryWindow>>()
         .single(world)
-        .expect("NodeGraph example requires a primary window");
+    else {
+        eprintln!("NodeGraph example requires a primary window");
+        return;
+    };
     let background = world.resource::<Theme>().background;
     let root = world
         .spawn((
@@ -95,9 +94,13 @@ fn setup(world: &mut World) {
         ))
         .id();
 
+    let Ok(sample_graph) = sample_graph() else {
+        eprintln!("failed to build the sample node graph");
+        return;
+    };
     let tree = WidgetTree::new(WidgetNode::column([
         WidgetNode::label("NodeGraph · typed sockets · stable links"),
-        WidgetNode::node_graph("Material graph", sample_graph()).with_key("material-graph"),
+        WidgetNode::node_graph("Material graph", sample_graph).with_key("material-graph"),
         WidgetNode::label(
             "Drag headers to move · drag sockets to connect or reconnect · Alt-drag cuts links",
         ),
@@ -108,18 +111,26 @@ fn setup(world: &mut World) {
             "N adds a node · arrows move selection · Delete removes · Ctrl+Z/Y undo/redo",
         ),
     ]));
-    tree.spawn(world, Some(root))
-        .expect("valid NodeGraph declaration");
-    let graph = world
+    if let Err(error) = tree.spawn(world, Some(root)) {
+        eprintln!("widget tree setup: {error:?}");
+        return;
+    }
+    let Some(graph) = world
         .iter_entities()
         .find(|entity| {
             entity
                 .get::<UiKey>()
                 .is_some_and(|key| key.0 == "material-graph")
         })
-        .expect("keyed graph declaration was spawned")
-        .id();
-    let mut layout = world.get_mut::<UiLayoutNode>(graph).unwrap();
+        .map(|entity| entity.id())
+    else {
+        eprintln!("sample node graph control is missing");
+        return;
+    };
+    let Some(mut layout) = world.get_mut::<UiLayoutNode>(graph) else {
+        eprintln!("sample node graph layout is missing");
+        return;
+    };
     layout.size.width = UiLength::Px(1180.0);
     layout.size.height = UiLength::Px(600.0);
     layout.clip_contents = true;

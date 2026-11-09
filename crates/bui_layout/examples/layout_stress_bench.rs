@@ -5,9 +5,9 @@
 //! cargo run --release -p bui_layout --example layout_stress_bench --offline
 //! ```
 
-use std::alloc::{GlobalAlloc, Layout, System};
+use stats_alloc::{Stats, StatsAlloc};
+use std::alloc::System;
 use std::hint::black_box;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use bevy_app::App;
@@ -17,42 +17,15 @@ use bui_layout::{
     UiLayoutRoot, UiLayoutStats, UiLength, UiScroll, UiSize,
 };
 
-struct TrackingAllocator;
-
-static TRACK_ALLOCATIONS: AtomicBool = AtomicBool::new(false);
-static ALLOCATION_COUNT: AtomicU64 = AtomicU64::new(0);
-static ALLOCATED_BYTES: AtomicU64 = AtomicU64::new(0);
-
 #[global_allocator]
-static ALLOCATOR: TrackingAllocator = TrackingAllocator;
+static ALLOCATOR: StatsAlloc<System> = StatsAlloc::system();
 
-// SAFETY: Every operation delegates to the system allocator with the original
-// layout and pointer. Tracking only updates atomics around those operations.
-unsafe impl GlobalAlloc for TrackingAllocator {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        let pointer = unsafe { System.alloc(layout) };
-        if !pointer.is_null() && TRACK_ALLOCATIONS.load(Ordering::Relaxed) {
-            record_allocation(layout.size());
-        }
-        pointer
+fn allocation_delta(before: Stats) -> AllocationStats {
+    let delta = ALLOCATOR.stats() - before;
+    AllocationStats {
+        allocations: (delta.allocations + delta.reallocations) as u64,
+        bytes: delta.bytes_allocated as u64,
     }
-
-    unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
-        unsafe { System.dealloc(pointer, layout) };
-    }
-
-    unsafe fn realloc(&self, pointer: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        let new_pointer = unsafe { System.realloc(pointer, layout, new_size) };
-        if !new_pointer.is_null() && TRACK_ALLOCATIONS.load(Ordering::Relaxed) {
-            record_allocation(new_size);
-        }
-        new_pointer
-    }
-}
-
-fn record_allocation(bytes: usize) {
-    ALLOCATION_COUNT.fetch_add(1, Ordering::Relaxed);
-    ALLOCATED_BYTES.fetch_add(bytes as u64, Ordering::Relaxed);
 }
 
 #[derive(Clone, Copy)]
@@ -68,11 +41,11 @@ struct Scene {
     name: &'static str,
 }
 
-fn main() {
+fn main() -> Result<(), String> {
     const FRAMES: usize = 20;
     for node_count in [1_000, 10_000] {
         for name in ["flex", "responsive-grid", "nested-scroll"] {
-            let mut scene = make_scene(name, node_count);
+            let mut scene = make_scene(name, node_count)?;
             scene.app.update(); // Prime Bevy schedules and establish layout snapshots.
             scene.app.update(); // Keep warmup changes outside the measured intervals.
 
@@ -86,6 +59,7 @@ fn main() {
             print_phase("one input change/frame", dirty, dirty_allocations, FRAMES);
         }
     }
+    Ok(())
 }
 
 #[derive(Clone, Copy)]
@@ -101,7 +75,7 @@ struct AllocationStats {
     bytes: u64,
 }
 
-fn make_scene(name: &'static str, node_count: usize) -> Scene {
+fn make_scene(name: &'static str, node_count: usize) -> Result<Scene, String> {
     let mut app = App::new();
     app.add_plugins((CorePlugin, LayoutPlugin));
     let window = app.world_mut().spawn_empty().id();
@@ -120,7 +94,7 @@ fn make_scene(name: &'static str, node_count: usize) -> Scene {
             clip_contents: true,
             ..UiLayoutNode::default()
         },
-        _ => unreachable!("benchmark scenario is known"),
+        _ => return Err(format!("unknown layout benchmark scenario: {name}")),
     };
     let root = app
         .world_mut()
@@ -135,21 +109,25 @@ fn make_scene(name: &'static str, node_count: usize) -> Scene {
     }
 
     let dirty_input = match name {
-        "flex" => spawn_flex_children(&mut app, root, node_count.saturating_sub(1)),
-        "responsive-grid" => spawn_grid_children(&mut app, root, node_count.saturating_sub(1)),
-        "nested-scroll" => spawn_nested_scroll(&mut app, root, node_count),
-        _ => unreachable!("benchmark scenario is known"),
+        "flex" => spawn_flex_children(&mut app, root, node_count.saturating_sub(1))?,
+        "responsive-grid" => spawn_grid_children(&mut app, root, node_count.saturating_sub(1))?,
+        "nested-scroll" => spawn_nested_scroll(&mut app, root, node_count)?,
+        _ => return Err(format!("unknown layout benchmark scenario: {name}")),
     };
 
-    Scene {
+    Ok(Scene {
         app,
         dirty_input,
         node_count,
         name,
-    }
+    })
 }
 
-fn spawn_flex_children(app: &mut App, root: bevy_ecs::entity::Entity, count: usize) -> DirtyInput {
+fn spawn_flex_children(
+    app: &mut App,
+    root: bevy_ecs::entity::Entity,
+    count: usize,
+) -> Result<DirtyInput, String> {
     let mut first = None;
     for _ in 0..count {
         let child = app
@@ -165,13 +143,20 @@ fn spawn_flex_children(app: &mut App, root: bevy_ecs::entity::Entity, count: usi
                 },
             ))
             .id();
-        set_parent(app.world_mut(), child, root).expect("valid Flex benchmark hierarchy");
+        set_parent(app.world_mut(), child, root)
+            .map_err(|error| format!("flex hierarchy: {error:?}"))?;
         first.get_or_insert(child);
     }
-    DirtyInput::Intrinsic(first.expect("node_count is greater than one"))
+    first
+        .map(DirtyInput::Intrinsic)
+        .ok_or_else(|| "flex benchmark has no children".to_owned())
 }
 
-fn spawn_grid_children(app: &mut App, root: bevy_ecs::entity::Entity, count: usize) -> DirtyInput {
+fn spawn_grid_children(
+    app: &mut App,
+    root: bevy_ecs::entity::Entity,
+    count: usize,
+) -> Result<DirtyInput, String> {
     let mut first = None;
     for _ in 0..count {
         let child = app
@@ -182,17 +167,20 @@ fn spawn_grid_children(app: &mut App, root: bevy_ecs::entity::Entity, count: usi
                 UiLayoutNode::leaf(UiLength::Auto, UiLength::Auto),
             ))
             .id();
-        set_parent(app.world_mut(), child, root).expect("valid grid benchmark hierarchy");
+        set_parent(app.world_mut(), child, root)
+            .map_err(|error| format!("grid hierarchy: {error:?}"))?;
         first.get_or_insert(child);
     }
-    DirtyInput::Intrinsic(first.expect("node_count is greater than one"))
+    first
+        .map(DirtyInput::Intrinsic)
+        .ok_or_else(|| "grid benchmark has no children".to_owned())
 }
 
 fn spawn_nested_scroll(
     app: &mut App,
     root: bevy_ecs::entity::Entity,
     node_count: usize,
-) -> DirtyInput {
+) -> Result<DirtyInput, String> {
     const DEPTH: usize = 6;
     let mut parent = root;
     let mut deepest = root;
@@ -212,7 +200,8 @@ fn spawn_nested_scroll(
                 UiScroll::new(),
             ))
             .id();
-        set_parent(app.world_mut(), child, parent).expect("valid nested-scroll hierarchy");
+        set_parent(app.world_mut(), child, parent)
+            .map_err(|error| format!("scroll hierarchy: {error:?}"))?;
         parent = child;
         deepest = child;
     }
@@ -229,9 +218,10 @@ fn spawn_nested_scroll(
                 UiLayoutNode::leaf(UiLength::Auto, UiLength::Auto),
             ))
             .id();
-        set_parent(app.world_mut(), leaf, deepest).expect("valid nested-scroll leaf");
+        set_parent(app.world_mut(), leaf, deepest)
+            .map_err(|error| format!("scroll leaf: {error:?}"))?;
     }
-    DirtyInput::Scroll(deepest)
+    Ok(DirtyInput::Scroll(deepest))
 }
 
 fn measure_time(scene: &mut Scene, frames: usize, dirty: bool) -> PhaseStats {
@@ -260,20 +250,14 @@ fn measure_time(scene: &mut Scene, frames: usize, dirty: bool) -> PhaseStats {
 }
 
 fn measure_allocations(scene: &mut Scene, frames: usize, dirty: bool) -> AllocationStats {
-    ALLOCATION_COUNT.store(0, Ordering::Relaxed);
-    ALLOCATED_BYTES.store(0, Ordering::Relaxed);
-    TRACK_ALLOCATIONS.store(true, Ordering::Relaxed);
+    let before = ALLOCATOR.stats();
     for frame in 0..frames {
         if dirty {
             update_dirty_input(&mut scene.app, scene.dirty_input, frame + frames);
         }
         scene.app.update();
     }
-    TRACK_ALLOCATIONS.store(false, Ordering::Relaxed);
-    AllocationStats {
-        allocations: ALLOCATION_COUNT.load(Ordering::Relaxed),
-        bytes: ALLOCATED_BYTES.load(Ordering::Relaxed),
-    }
+    allocation_delta(before)
 }
 
 fn update_dirty_input(app: &mut App, input: DirtyInput, frame: usize) {
@@ -286,10 +270,9 @@ fn update_dirty_input(app: &mut App, input: DirtyInput, frame: usize) {
         }
         DirtyInput::Scroll(entity) => {
             let offset = if frame.is_multiple_of(2) { 16.0 } else { 24.0 };
-            app.world_mut()
-                .get_mut::<UiScroll>(entity)
-                .expect("scroll benchmark target")
-                .offset[1] = offset;
+            if let Some(mut scroll) = app.world_mut().get_mut::<UiScroll>(entity) {
+                scroll.offset[1] = offset;
+            }
         }
     }
 }

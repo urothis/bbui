@@ -711,7 +711,13 @@ pub fn edit_canvas_object(
     if updated.id != id || !updated.valid() || updated == *original {
         return false;
     }
-    world.get_mut::<Canvas>(owner).unwrap().objects[position] = updated;
+    let Some(mut canvas) = world.get_mut::<Canvas>(owner) else {
+        return false;
+    };
+    let Some(object) = canvas.objects.get_mut(position) else {
+        return false;
+    };
+    *object = updated;
     note_canvas_object_edits(world, owner, &[position]);
     true
 }
@@ -854,20 +860,25 @@ pub fn sync_canvas_object_views(world: &mut World) {
         for (control, paint, child_layout) in items {
             let object_id = control.object_id;
             let locked = control.locked;
-            let entity = owned
+            let entity = if let Some(entity) = owned
                 .remove(&object_id)
                 .filter(|entity| world.get_entity(*entity).is_ok())
-                .unwrap_or_else(|| {
-                    let entity = world
-                        .spawn((
-                            UiNode,
-                            UiFocusable,
-                            UiKey(format!("canvas:{owner:?}:{object_id}")),
-                        ))
-                        .id();
-                    set_parent(world, entity, owner).expect("canvas owner is a UI node");
-                    entity
-                });
+            {
+                entity
+            } else {
+                let entity = world
+                    .spawn((
+                        UiNode,
+                        UiFocusable,
+                        UiKey(format!("canvas:{owner:?}:{object_id}")),
+                    ))
+                    .id();
+                if set_parent(world, entity, owner).is_err() {
+                    world.despawn(entity);
+                    continue;
+                }
+                entity
+            };
             let mut paint_changed = false;
             let mut accessibility_changed = false;
             if world.get::<CanvasObjectControl>(entity) != Some(&control) {

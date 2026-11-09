@@ -92,6 +92,7 @@ fn assert_line_pixels(
     );
 }
 
+#[cfg(test)]
 fn capture(app: &mut App, target: &Handle<Image>, frame: usize) -> Vec<u8> {
     let readback = app
         .world_mut()

@@ -10,60 +10,64 @@ use bui::prelude::*;
 use bui::widgets::{CanvasShape, WidgetNode};
 use bui_layout::Rect;
 
-fn sample_canvas() -> Canvas {
+fn sample_canvas() -> Option<Canvas> {
     let mut canvas = Canvas::default();
-    canvas
-        .add(
-            [36.0, 58.0],
-            CanvasShape::Rectangle {
-                size: [190.0, 130.0],
-            },
-            [0.21, 0.44, 0.75, 1.0],
-        )
-        .expect("valid rectangle");
-    canvas
-        .add(
-            [162.0, 130.0],
-            CanvasShape::Ellipse {
-                size: [200.0, 140.0],
-            },
-            [0.86, 0.36, 0.22, 0.9],
-        )
-        .expect("valid ellipse");
-    canvas
-        .add(
-            [76.0, 345.0],
-            CanvasShape::Line {
-                end: [420.0, 290.0],
-            },
-            [0.29, 0.76, 0.52, 1.0],
-        )
-        .expect("valid line");
-    canvas
-        .add(
-            [525.0, 95.0],
-            CanvasShape::Image {
-                size: [210.0, 210.0],
-                asset: "canvas/checker.svg".to_owned(),
-            },
-            [1.0; 4],
-        )
-        .expect("valid image");
-    canvas
+    canvas.add(
+        [36.0, 58.0],
+        CanvasShape::Rectangle {
+            size: [190.0, 130.0],
+        },
+        [0.21, 0.44, 0.75, 1.0],
+    )?;
+    canvas.add(
+        [162.0, 130.0],
+        CanvasShape::Ellipse {
+            size: [200.0, 140.0],
+        },
+        [0.86, 0.36, 0.22, 0.9],
+    )?;
+    canvas.add(
+        [76.0, 345.0],
+        CanvasShape::Line {
+            end: [420.0, 290.0],
+        },
+        [0.29, 0.76, 0.52, 1.0],
+    )?;
+    canvas.add(
+        [525.0, 95.0],
+        CanvasShape::Image {
+            size: [210.0, 210.0],
+            asset: "canvas/checker.svg".to_owned(),
+        },
+        [1.0; 4],
+    )?;
+    Some(canvas)
 }
 
 fn setup(world: &mut World) {
     world.spawn(Camera2d);
-    let window = world
+    let Ok(window) = world
         .query_filtered::<Entity, With<PrimaryWindow>>()
         .single(world)
-        .expect("canvas example requires a window");
-    let canvas =
-        WidgetTree::new(WidgetNode::canvas("Canvas editor", sample_canvas()).with_key("canvas"))
-            .spawn(world, None)
-            .expect("canvas widget is valid");
+    else {
+        eprintln!("canvas example requires a window");
+        return;
+    };
+    let Some(model) = sample_canvas() else {
+        eprintln!("canvas sample geometry is invalid");
+        return;
+    };
+    let Ok(canvas) = WidgetTree::new(WidgetNode::canvas("Canvas editor", model).with_key("canvas"))
+        .spawn(world, None)
+    else {
+        eprintln!("failed to spawn canvas example widget");
+        return;
+    };
     {
-        let mut layout = world.get_mut::<UiLayoutNode>(canvas).unwrap();
+        let Some(mut layout) = world.get_mut::<UiLayoutNode>(canvas) else {
+            eprintln!("canvas example layout is missing");
+            return;
+        };
         layout.size.width = UiLength::Px(900.0);
         layout.size.height = UiLength::Px(620.0);
         layout.clip_contents = true;
@@ -96,7 +100,7 @@ mod tests {
 
     #[test]
     fn example_has_all_drawable_canvas_shapes() {
-        let canvas = sample_canvas();
+        let canvas = sample_canvas().unwrap();
         assert_eq!(canvas.objects.len(), 4);
         assert!(matches!(
             canvas.objects[0].shape,
