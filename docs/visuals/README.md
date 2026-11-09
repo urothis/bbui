@@ -5,7 +5,7 @@ These Dark and Light PNGs show the four-node, five-link scene from the public No
 Regenerate them with:
 
 ```sh
-BUI_NODE_GRAPH_CAPTURE_DIR=docs/visuals cargo test -p bui --test node_graph_gpu_readback --locked
+BUI_NODE_GRAPH_CAPTURE_DIR="$PWD/docs/visuals" cargo test -p bui --test node_graph_gpu_readback --locked
 ```
 
 The Linux GPU CI job also uploads each run's captures as the `node-graph-gpu-review-captures` artifact.
