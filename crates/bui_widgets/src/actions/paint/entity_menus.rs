@@ -309,31 +309,13 @@ pub(super) fn paint_buttons_and_menus(paint: &mut PaintEntityContext<'_>) -> boo
                     ),
                 ));
             } else {
-                push_popup_shadow(
+                push_popup_surface(
                     popup,
-                    theme.corner_radius,
-                    theme.surface,
+                    popup_clip,
                     shadow_clip,
-                    popup_z.saturating_sub(1),
-                    theme,
-                    camera_items,
-                );
-                camera_items.push(item(
-                    popup_clip,
                     popup_z,
-                    Primitive::RoundedRect {
-                        rect: ClipRect::from(popup),
-                        radius: theme.corner_radius,
-                        color: theme.surface,
-                    },
-                ));
-                let border = base_theme.color(ThemeColorToken::MenuBorder);
-                push_rounded_outline(
-                    popup,
-                    theme.corner_radius,
-                    border,
-                    popup_clip,
-                    popup_z.saturating_add(1),
+                    theme,
+                    base_theme,
                     camera_items,
                 );
             }

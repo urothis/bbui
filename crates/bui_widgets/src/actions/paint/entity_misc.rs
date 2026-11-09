@@ -102,17 +102,17 @@ pub(super) fn paint_misc_controls(paint: &mut PaintEntityContext<'_>) -> bool {
             .cloned()
             .unwrap_or_default();
         if compact || icon_only {
-            push_rect_outline_with_width(
+            push_rounded_outline(
                 Rect {
                     x: rect.x + 0.5,
                     y: rect.y + 0.5,
                     width: (rect.width - 1.0).max(0.0),
                     height: (rect.height - 1.0).max(0.0),
                 },
+                theme.corner_radius,
                 base_theme.surface.mix(base_theme.text, 0.25),
                 clip,
                 z.saturating_add(1),
-                1.0,
                 camera_items,
             );
         }
@@ -125,30 +125,13 @@ pub(super) fn paint_misc_controls(paint: &mut PaintEntityContext<'_>) -> bool {
             let popup_z = z.saturating_add(80);
             let shadow_clip =
                 popup_viewport_clip(world, layout.window, layout.clip, popup_state.viewport);
-            push_popup_shadow(
+            push_popup_surface(
                 popup,
-                theme.corner_radius,
-                theme.surface,
+                popup_clip,
                 shadow_clip,
-                popup_z.saturating_sub(1),
-                theme,
-                camera_items,
-            );
-            camera_items.push(item(
-                popup_clip,
                 popup_z,
-                Primitive::RoundedRect {
-                    rect: ClipRect::from(popup),
-                    radius: theme.corner_radius,
-                    color: theme.surface,
-                },
-            ));
-            push_rounded_outline(
-                popup,
-                theme.corner_radius,
-                base_theme.color(ThemeColorToken::MenuBorder),
-                popup_clip,
-                popup_z.saturating_add(3),
+                theme,
+                base_theme,
                 camera_items,
             );
         }

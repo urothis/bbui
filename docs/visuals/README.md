@@ -23,6 +23,9 @@ pages: [Modifiers](examples/properties_editor_modifiers.png),
 [Preferences](examples/properties_editor_preferences.png), and
 [Geometry Nodes](examples/properties_editor_nodes.png).
 
+Render is a command menu; Object Mode is a choice field, so its current value stays highlighted.
+Their open popups use the same surface, shadow, corner radius, and border.
+
 The [properties editor source map](properties-editor-reference.md) traces this composition to
 BUI's component demo and native panel layout code.
 

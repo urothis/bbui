@@ -24,6 +24,44 @@ pub(in crate::actions) fn push_rounded_outline(
     ));
 }
 
+/// Paint the shared surface used by command menus and choice dropdowns.
+pub(in crate::actions) fn push_popup_surface(
+    rect: Rect,
+    clip: ClipRect,
+    shadow_clip: ClipRect,
+    z: i32,
+    theme: &Theme,
+    base_theme: &Theme,
+    output: &mut Vec<DrawItem>,
+) {
+    push_popup_shadow(
+        rect,
+        theme.corner_radius,
+        theme.surface,
+        shadow_clip,
+        z.saturating_sub(1),
+        theme,
+        output,
+    );
+    output.push(item(
+        clip,
+        z,
+        Primitive::RoundedRect {
+            rect: ClipRect::from(rect),
+            radius: theme.corner_radius,
+            color: theme.surface,
+        },
+    ));
+    push_rounded_outline(
+        rect,
+        theme.corner_radius,
+        base_theme.color(ThemeColorToken::MenuBorder),
+        clip,
+        z.saturating_add(12),
+        output,
+    );
+}
+
 pub(in crate::actions) fn popup_viewport_clip(
     world: &World,
     window: Entity,
