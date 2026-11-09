@@ -11,7 +11,7 @@ use crate::{
     Label, LinkEndpoint, ListModel, MenuControl, MenuDisplay, MenuItemControl, NodeCategory,
     NodeGraph, NodeGraphError, NodeId, NodeSocket, NumericExpressionVariables, NumericField,
     NumericFieldKind, Panel, PanelGroup, PreviewGrid, Progress, RadioGroup, Slider,
-    SocketDirection, TextArea, TextField, Tooltip, TreeModel,
+    SocketDirection, SocketType, TextArea, TextField, Tooltip, TreeModel,
     declarative::{
         CollectionEditorState, CollectionItemControl, CollectionItemKind, ColorRampEditorState,
         DataTableCellControl, DataTableHeaderControl, FileBrowserItem, FileBrowserViewState,
@@ -37,7 +37,8 @@ use bui_core::{
 };
 use bui_layout::{Rect, UiLayoutNode, UiLayoutResult, UiLayoutRoot, UiWheelHandled};
 use bui_render::{
-    ClipRect, DisplayList, DrawItem, Primitive, TextRenderStyle, WidgetRenderFragment,
+    ClipRect, DisplayList, DrawItem, Primitive, TextRenderStyle, WidgetFragmentBatchGroup,
+    WidgetRenderFragment,
 };
 use bui_style::{
     Rgba, Theme, ThemeColorToken, ThemeMotionToken, UiClasses, UiComputedStyle, UiInlineStyle,
@@ -675,6 +676,66 @@ struct PaintFragmentGuard<'a> {
     fragment: Option<WidgetRenderFragment>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+struct NodeGraphChromeStamp {
+    graph_counts: (usize, usize),
+    pan: [u32; 2],
+    zoom: u32,
+    gesture: NodeGraphEditorState,
+    label: String,
+    rect: [u32; 4],
+    clip: Option<[u32; 4]>,
+    z: i32,
+    dpi_scale: u32,
+    camera: Option<Entity>,
+    theme: String,
+    canvas_surface: [u32; 4],
+}
+
+#[derive(Debug, Clone)]
+struct NodeGraphOutputLabelMeasurements {
+    signature: String,
+    widths: HashMap<usize, f32>,
+}
+
+fn node_graph_chrome_stamp(
+    graph: &NodeGraph,
+    state: &NodeGraphEditorState,
+    label: &str,
+    layout: UiLayoutResult,
+    camera: Option<Entity>,
+    theme: &Theme,
+    canvas_surface: Rgba,
+) -> NodeGraphChromeStamp {
+    let rect_bits = |rect: Rect| {
+        [
+            rect.x.to_bits(),
+            rect.y.to_bits(),
+            rect.width.to_bits(),
+            rect.height.to_bits(),
+        ]
+    };
+    NodeGraphChromeStamp {
+        graph_counts: (graph.nodes.len(), graph.links.len()),
+        pan: [graph.pan[0].to_bits(), graph.pan[1].to_bits()],
+        zoom: graph.zoom.to_bits(),
+        gesture: state.clone(),
+        label: label.to_owned(),
+        rect: rect_bits(layout.rect),
+        clip: layout.clip.map(rect_bits),
+        z: layout.z,
+        dpi_scale: layout.dpi_scale.to_bits(),
+        camera,
+        theme: format!("{theme:?}"),
+        canvas_surface: [
+            canvas_surface.0.to_bits(),
+            canvas_surface.1.to_bits(),
+            canvas_surface.2.to_bits(),
+            canvas_surface.3.to_bits(),
+        ],
+    }
+}
+
 impl Drop for PaintFragmentGuard<'_> {
     fn drop(&mut self) {
         let Some(fragment) = self.fragment.take() else {
@@ -695,6 +756,9 @@ struct WidgetPaintCache {
     focus_active_window: Option<Entity>,
     focus_targets: Vec<FocusTargetSnapshot>,
     interaction_targets: HashSet<Entity>,
+    node_graph_chrome_stamps: HashMap<Entity, NodeGraphChromeStamp>,
+    node_graph_output_measurements:
+        HashMap<Entity, HashMap<NodeId, NodeGraphOutputLabelMeasurements>>,
     fragments: HashSet<Entity>,
     paint_ranks: HashMap<Entity, u64>,
     paint_order_keys: BTreeMap<u64, Entity>,
@@ -710,7 +774,10 @@ struct WidgetPaintCache {
 }
 
 #[derive(Resource, Debug, Default)]
-struct WidgetFileBrowserItems(HashMap<Entity, HashMap<PathBuf, Entity>>);
+struct WidgetFileBrowserItems {
+    items: HashMap<Entity, HashMap<PathBuf, Entity>>,
+    stamps: HashMap<Entity, FileBrowserVirtualStamp>,
+}
 
 #[derive(Resource, Debug, Default)]
 struct WidgetFileBrowserFilterEdits {
@@ -719,12 +786,34 @@ struct WidgetFileBrowserFilterEdits {
 }
 
 #[derive(Resource, Debug, Default)]
-struct WidgetCollectionItems(HashMap<Entity, HashMap<u64, Entity>>);
+struct WidgetCollectionItems {
+    items: HashMap<Entity, HashMap<u64, Entity>>,
+    stamps: HashMap<Entity, CollectionVirtualStamp>,
+}
 
 #[derive(Resource, Debug, Default)]
 struct WidgetControlOptionItems {
     dropdowns: HashMap<Entity, Vec<Entity>>,
     radios: HashMap<Entity, Vec<Entity>>,
+    dropdown_stamps: HashMap<Entity, ControlOptionStamp>,
+    radio_stamps: HashMap<Entity, ControlOptionStamp>,
+}
+
+#[derive(Resource, Debug, Default)]
+struct WidgetMenuPopupStamps {
+    stamps: HashMap<Entity, MenuPopupSyncStamp>,
+}
+
+#[derive(Resource, Debug, Default)]
+struct WidgetPanelSyncCache {
+    stamps: HashMap<Entity, PanelSyncStamp>,
+    clips: HashMap<Entity, PanelDescendantClip>,
+}
+
+#[derive(Resource, Debug, Default)]
+struct WidgetPanelSyncInvalidations {
+    panels: HashSet<Entity>,
+    topology_changed: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -738,7 +827,69 @@ struct VirtualViewStamp {
     model_changed: u32,
     layout_changed: Option<u32>,
     theme_changed: Option<u32>,
+    style_changed: Option<u32>,
     key_changed: Option<u32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FileBrowserVirtualStamp {
+    model_changed: u32,
+    layout_changed: Option<u32>,
+    view_changed: Option<u32>,
+    theme_changed: Option<u32>,
+    key_changed: Option<u32>,
+    visible_changed: Option<u32>,
+    enabled_changed: Option<u32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CollectionVirtualStamp {
+    kind: u8,
+    stamp: VirtualViewStamp,
+    visible_changed: Option<u32>,
+    enabled_changed: Option<u32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct ControlOptionStamp {
+    kind: u8,
+    model_changed: u32,
+    layout_changed: Option<u32>,
+    popup_changed: Option<u32>,
+    theme_changed: Option<u32>,
+    viewport_changed: Option<u32>,
+    viewport: Rect,
+    owner_visible: bool,
+    owner_enabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct MenuPopupSyncStamp {
+    menu_changed: u32,
+    layout_changed: u32,
+    viewport_changed: Option<u32>,
+    viewport: Rect,
+    theme_changed: Option<u32>,
+    owner_visible: bool,
+    owner_enabled: bool,
+    item_ticks: HashMap<Entity, Option<u32>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PanelSyncStamp {
+    panel_changed: u32,
+    children_changed: Option<u32>,
+    layout_changed: Option<u32>,
+    theme_changed: Option<u32>,
+    progress_bits: u32,
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+struct PanelDescendantClip {
+    base_layout: Option<Rect>,
+    applied_layout: Option<Option<Rect>>,
+    base_hit: Option<UiRect>,
+    applied_hit: Option<Option<UiRect>>,
 }
 
 #[derive(Resource, Debug, Default)]
@@ -754,10 +905,76 @@ enum NodeGraphItemKey {
     Link(u64),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct NodeGraphNodeGeometrySignature {
+    position: [u32; 2],
+    size: [u32; 2],
+    collapsed: bool,
+    socket_layout: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct NodeGraphNodeSignature {
+    paint: u64,
+    geometry: NodeGraphNodeGeometrySignature,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct NodeGraphLinkSignature {
+    from_node: NodeId,
+    from_socket: usize,
+    to_node: NodeId,
+    to_socket: usize,
+    from_geometry: Option<NodeGraphNodeGeometrySignature>,
+    to_geometry: Option<NodeGraphNodeGeometrySignature>,
+    source_socket_type: Option<SocketType>,
+    selected: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct NodeGraphTransformSignature {
+    pan: [u32; 2],
+    zoom: u32,
+}
+
+struct NodeGraphSignatureSnapshot {
+    node_indices: HashMap<NodeId, usize>,
+    node_signatures: HashMap<NodeId, NodeGraphNodeSignature>,
+    node_order: Vec<NodeId>,
+    link_indices: HashMap<u64, usize>,
+    link_signatures: HashMap<u64, NodeGraphLinkSignature>,
+    link_order: Vec<u64>,
+    incident_links: HashMap<NodeId, Vec<u64>>,
+    transform: NodeGraphTransformSignature,
+}
+
 #[derive(Resource, Debug, Default)]
 struct WidgetNodeGraphItems {
     items: HashMap<Entity, HashMap<NodeGraphItemKey, Entity>>,
     stamps: HashMap<Entity, VirtualViewStamp>,
+    node_indices: HashMap<Entity, HashMap<NodeId, usize>>,
+    link_indices: HashMap<Entity, HashMap<u64, usize>>,
+    incident_links: HashMap<Entity, HashMap<NodeId, Vec<u64>>>,
+    node_signatures: HashMap<Entity, HashMap<NodeId, NodeGraphNodeSignature>>,
+    node_order: HashMap<Entity, Vec<NodeId>>,
+    link_signatures: HashMap<Entity, HashMap<u64, NodeGraphLinkSignature>>,
+    link_order: HashMap<Entity, Vec<u64>>,
+    transforms: HashMap<Entity, NodeGraphTransformSignature>,
+    journaled_ticks: HashMap<Entity, u32>,
+}
+
+#[derive(Resource, Debug, Default)]
+struct WidgetNodeGraphDeltas(HashMap<Entity, HashSet<NodeId>>, HashSet<Entity>);
+
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+struct NodeGraphLinkPaintGeometry {
+    points: [[u32; 2]; 4],
+    source_socket_type: Option<SocketType>,
+}
+
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+struct NodeGraphNodePaintState {
+    signature: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -785,8 +1002,10 @@ struct WidgetMenuAnimations(HashMap<Entity, MenuAnimationState>);
 struct NodeGraphViewItem {
     key: NodeGraphItemKey,
     node: Option<NodeGraphNodeControl>,
+    node_paint_state: Option<NodeGraphNodePaintState>,
     socket: Option<NodeGraphSocketControl>,
     link: Option<NodeGraphLinkControl>,
+    link_geometry: Option<NodeGraphLinkPaintGeometry>,
     rect: Rect,
     clip: Rect,
     z: i32,
@@ -795,6 +1014,8 @@ struct NodeGraphViewItem {
 struct NodeGraphView {
     owner: Entity,
     items: Vec<NodeGraphViewItem>,
+    replaced_keys: HashSet<NodeGraphItemKey>,
+    replace_all: bool,
 }
 
 struct DataTableViewItem {
@@ -812,6 +1033,7 @@ struct DataTableView {
 
 struct CollectionView {
     owner: Entity,
+    stamp: CollectionVirtualStamp,
     items: Vec<(CollectionItemControl, Rect)>,
 }
 
@@ -830,6 +1052,10 @@ pub fn install_widget_systems(app: &mut App) {
         .init_resource::<WidgetControlOptionItems>()
         .init_resource::<WidgetDataTableItems>()
         .init_resource::<WidgetNodeGraphItems>()
+        .init_resource::<WidgetNodeGraphDeltas>()
+        .init_resource::<WidgetMenuPopupStamps>()
+        .init_resource::<WidgetPanelSyncCache>()
+        .init_resource::<WidgetPanelSyncInvalidations>()
         .init_resource::<WidgetTooltips>()
         .init_resource::<WidgetMenuAnimations>()
         .init_resource::<UiRoutedEvents>()
@@ -848,6 +1074,7 @@ pub fn install_widget_systems(app: &mut App) {
                 advance_tooltips,
                 apply_widget_actions,
                 advance_panel_animations,
+                collect_panel_descendant_invalidations,
                 sync_panel_children,
                 sync_menu_popups,
                 advance_menu_animations,
@@ -909,6 +1136,7 @@ pub fn install_widget_systems(app: &mut App) {
         CurveEditor,
         NodeGraph,
         Canvas,
+        crate::canvas::CanvasObjectPaint,
         Tooltip,
         IconButtonAsset,
         DropdownPopupState,
@@ -920,8 +1148,10 @@ pub fn install_widget_systems(app: &mut App) {
         crate::canvas::CanvasObjectControl,
         crate::IconButtonAssetState,
         NodeGraphNodeControl,
+        NodeGraphNodePaintState,
         NodeGraphSocketControl,
         NodeGraphLinkControl,
+        NodeGraphLinkPaintGeometry,
         crate::PanelGroup,
         RadioOptionControl,
     );
@@ -1683,7 +1913,7 @@ pub fn process_routed_widget_events(world: &mut World) {
                 } else if world.get::<FileBrowser>(target).is_some() {
                     begin_file_browser_filter_edit(world, target);
                     if let Some(mut browser) = world.get_mut::<FileBrowser>(target) {
-                        let mut filter = browser.filter.clone();
+                        let mut filter = browser.filter().to_owned();
                         filter.push_str(&text);
                         browser.set_filter(filter);
                     }
@@ -4679,9 +4909,9 @@ fn click_file_browser(
         if local_x < view_switch_width + sort_control_width {
             let before = file_browser_snapshot(world, target);
             if let Some(mut browser) = world.get_mut::<FileBrowser>(target) {
-                let sort = browser.sort;
-                let ascending = if browser.sort == FileSort::Name {
-                    !browser.ascending
+                let sort = browser.sort();
+                let ascending = if browser.sort() == FileSort::Name {
+                    !browser.ascending()
                 } else {
                     true
                 };
@@ -5243,7 +5473,7 @@ fn handle_file_browser_key(
 ) {
     let current_filter = world
         .get::<FileBrowser>(target)
-        .map(|browser| browser.filter.clone())
+        .map(|browser| browser.filter().to_owned())
         .unwrap_or_default();
     let filter_edit =
         !current_filter.is_empty() && matches!(key, UiKeyCode::Backspace | UiKeyCode::Escape);
@@ -5374,7 +5604,7 @@ fn handle_file_browser_key_inner(
         UiKeyCode::Backspace => {
             let filter = world
                 .get::<FileBrowser>(target)
-                .map(|browser| browser.filter.clone())
+                .map(|browser| browser.filter().to_owned())
                 .unwrap_or_default();
             if filter.is_empty() {
                 if let Some(mut browser) = world.get_mut::<FileBrowser>(target) {
@@ -8187,7 +8417,11 @@ fn begin_node_graph_gesture(
                 if let Some(mut graph) = world.get_mut::<NodeGraph>(target) {
                     graph.select(id, false);
                 }
-            } else if let Some(mut graph) = world.get_mut::<NodeGraph>(target) {
+            } else if world
+                .get::<NodeGraph>(target)
+                .is_some_and(|graph| graph.selected_link.is_some())
+                && let Some(mut graph) = world.get_mut::<NodeGraph>(target)
+            {
                 graph.selected_link = None;
             }
 
@@ -8258,6 +8492,75 @@ fn set_node_graph_gesture(world: &mut World, target: Entity, gesture: Option<Nod
     }
 }
 
+/// Move one graph node and record the affected node and incident links for scoped view updates.
+/// Returns false for a missing node, a non-finite position, or an unchanged position.
+pub fn move_node_graph_node(
+    world: &mut World,
+    owner: Entity,
+    id: NodeId,
+    position: [f32; 2],
+) -> bool {
+    if !position.into_iter().all(f32::is_finite) {
+        return false;
+    }
+    world.init_resource::<WidgetNodeGraphItems>();
+    world.init_resource::<WidgetNodeGraphDeltas>();
+    let cache = world.get_resource::<WidgetNodeGraphItems>();
+    let index = cache
+        .and_then(|cache| cache.node_indices.get(&owner))
+        .and_then(|indices| indices.get(&id))
+        .copied();
+    let synced_tick = cache.and_then(|cache| {
+        cache
+            .journaled_ticks
+            .get(&owner)
+            .copied()
+            .or_else(|| cache.stamps.get(&owner).map(|stamp| stamp.model_changed))
+    });
+    let current_tick = entity_component_changed_tick::<NodeGraph>(world, owner);
+    let signature_diff_required = current_tick
+        .zip(synced_tick)
+        .is_none_or(|(current, synced)| current != synced);
+    let Some(graph) = world.get::<NodeGraph>(owner) else {
+        return false;
+    };
+    let node = index
+        .and_then(|index| graph.nodes.get(index))
+        .filter(|node| node.id == id)
+        .or_else(|| graph.nodes.iter().find(|node| node.id == id));
+    if node.is_none_or(|node| node.position == position) {
+        return false;
+    }
+    let changed = if let Some(mut graph) = world.get_mut::<NodeGraph>(owner) {
+        if let Some(node) = index
+            .and_then(|index| graph.nodes.get_mut(index))
+            .filter(|node| node.id == id)
+        {
+            node.position = position;
+            true
+        } else {
+            graph.move_node(id, position)
+        }
+    } else {
+        false
+    };
+    if !changed {
+        return false;
+    }
+    if let Some(tick) = entity_component_changed_tick::<NodeGraph>(world, owner) {
+        world
+            .resource_mut::<WidgetNodeGraphItems>()
+            .journaled_ticks
+            .insert(owner, tick);
+    }
+    let mut deltas = world.resource_mut::<WidgetNodeGraphDeltas>();
+    deltas.0.entry(owner).or_default().insert(id);
+    if signature_diff_required {
+        deltas.1.insert(owner);
+    }
+    true
+}
+
 fn update_node_graph_gesture(world: &mut World, target: Entity, position: [f32; 2]) {
     let Some(gesture) = world
         .get::<NodeGraphEditorState>(target)
@@ -8283,13 +8586,94 @@ fn update_node_graph_gesture(world: &mut World, target: Entity, position: [f32; 
             starts,
             ..
         } => {
+            let graph_cache = world.resource::<WidgetNodeGraphItems>();
+            let synced_tick = graph_cache
+                .journaled_ticks
+                .get(&target)
+                .copied()
+                .or_else(|| {
+                    graph_cache
+                        .stamps
+                        .get(&target)
+                        .map(|stamp| stamp.model_changed)
+                });
+            let current_tick = entity_component_changed_tick::<NodeGraph>(world, target);
+            let signature_diff_required = current_tick
+                .zip(synced_tick)
+                .is_none_or(|(current, synced)| current != synced);
+            let indexed_starts: Vec<_> = starts
+                .into_iter()
+                .map(|(id, start)| {
+                    let index = world
+                        .resource::<WidgetNodeGraphItems>()
+                        .node_indices
+                        .get(&target)
+                        .and_then(|indices| indices.get(&id))
+                        .copied();
+                    (id, start, index)
+                })
+                .collect();
+            let Some(graph) = world.get::<NodeGraph>(target) else {
+                return;
+            };
+            let delta = [
+                (position[0] - start_pointer[0]) / graph.zoom,
+                (position[1] - start_pointer[1]) / graph.zoom,
+            ];
+            let planned: Vec<_> = indexed_starts
+                .into_iter()
+                .filter_map(|(id, start, index)| {
+                    let next = [start[0] + delta[0], start[1] + delta[1]];
+                    next.into_iter()
+                        .all(f32::is_finite)
+                        .then_some((id, index, next))
+                })
+                .collect();
+            let changed_nodes: HashSet<_> = planned
+                .iter()
+                .filter_map(|(id, index, next)| {
+                    let node = index
+                        .and_then(|index| graph.nodes.get(index))
+                        .filter(|node| node.id == *id)
+                        .or_else(|| graph.nodes.iter().find(|node| node.id == *id));
+                    node.is_some_and(|node| node.position != *next)
+                        .then_some(*id)
+                })
+                .collect();
+            if changed_nodes.is_empty() {
+                return;
+            }
+            let mut moved_nodes = HashSet::new();
             if let Some(mut graph) = world.get_mut::<NodeGraph>(target) {
-                let delta = [
-                    (position[0] - start_pointer[0]) / graph.zoom,
-                    (position[1] - start_pointer[1]) / graph.zoom,
-                ];
-                for (id, start) in starts {
-                    graph.move_node(id, [start[0] + delta[0], start[1] + delta[1]]);
+                for (id, index, next) in planned {
+                    if !changed_nodes.contains(&id) {
+                        continue;
+                    }
+                    let changed = if let Some(node) = index
+                        .and_then(|index| graph.nodes.get_mut(index))
+                        .filter(|node| node.id == id)
+                    {
+                        node.position = next;
+                        true
+                    } else {
+                        graph.move_node(id, next)
+                    };
+                    if changed {
+                        moved_nodes.insert(id);
+                    }
+                }
+            }
+            if !moved_nodes.is_empty() {
+                if let Some(tick) = entity_component_changed_tick::<NodeGraph>(world, target) {
+                    world
+                        .resource_mut::<WidgetNodeGraphItems>()
+                        .journaled_ticks
+                        .insert(target, tick);
+                }
+                let mut deltas = world.resource_mut::<WidgetNodeGraphDeltas>();
+                deltas.0.entry(target).or_default().extend(moved_nodes);
+                if signature_diff_required {
+                    deltas.1.insert(target);
                 }
             }
         }
@@ -9215,46 +9599,169 @@ fn cancel_panel_reorder(world: &mut World, window: Entity, emitted: &mut Vec<Wid
 
 /// Keep collapsed panel children out of layout and hit testing.
 pub fn sync_panel_children(world: &mut World) {
-    let mut query = world.query::<(Entity, &Panel, &bui_core::UiChildren)>();
-    let panels: Vec<_> = query
-        .iter(world)
-        .map(|(entity, panel, children)| {
-            (
-                entity,
-                panel.state.progress,
-                panel.state.target_expanded,
-                children.0.clone(),
-            )
-        })
-        .collect();
-    for (panel, progress, expanded, children) in panels {
+    world.init_resource::<WidgetPanelSyncCache>();
+    world.init_resource::<WidgetPanelSyncInvalidations>();
+    let theme_changed = world
+        .get_resource_change_ticks::<Theme>()
+        .map(|ticks| ticks.changed.get());
+    let mut cache = world
+        .remove_resource::<WidgetPanelSyncCache>()
+        .unwrap_or_default();
+    let invalidations = std::mem::take(&mut *world.resource_mut::<WidgetPanelSyncInvalidations>());
+    let mut query = world.query_filtered::<Entity, With<Panel>>();
+    let mut panels: Vec<_> = query.iter(world).collect();
+    let live_panels: HashSet<_> = panels.iter().copied().collect();
+    cache.stamps.retain(|panel, _| live_panels.contains(panel));
+    cache
+        .clips
+        .retain(|entity, _| world.get_entity(*entity).is_ok());
+    panels.sort_by_key(|panel| widget_hierarchy_depth(world, *panel));
+
+    for panel in panels {
+        let Some(stamp) = panel_sync_stamp(world, panel, theme_changed) else {
+            continue;
+        };
+        let invalidated_descendant = invalidations.panels.contains(&panel);
+        if cache.stamps.get(&panel) == Some(&stamp) && !invalidated_descendant {
+            continue;
+        }
+        let Some((progress, expanded)) = world
+            .get::<Panel>(panel)
+            .map(|panel| (panel.state.progress, panel.state.target_expanded))
+        else {
+            continue;
+        };
+        let children = world
+            .get::<bui_core::UiChildren>(panel)
+            .map_or_else(Vec::new, |children| children.0.clone());
         for child in children {
             if world.get::<crate::WidgetElement>(child).is_none() {
                 continue;
             }
-            if let Some(mut visible) = world.get_mut::<UiVisible>(child) {
-                visible.0 = expanded || progress > 0.0;
-            } else {
-                world
-                    .entity_mut(child)
-                    .insert(UiVisible(expanded || progress > 0.0));
+            set_visible(world, child, expanded || progress > 0.0);
+        }
+        apply_panel_clip(world, panel, &mut cache.clips);
+        cache.stamps.insert(panel, stamp);
+    }
+    if invalidations.topology_changed {
+        let detached: Vec<_> = cache
+            .clips
+            .keys()
+            .copied()
+            .filter(|entity| !has_panel_ancestor(world, *entity))
+            .collect();
+        for entity in detached {
+            let Some(state) = cache.clips.remove(&entity) else {
+                continue;
+            };
+            if let Some(mut layout) = world.get_mut::<UiLayoutResult>(entity)
+                && state.applied_layout == Some(layout.clip)
+                && layout.clip != state.base_layout
+            {
+                layout.clip = state.base_layout;
+            }
+            if let Some(mut hit) = world.get_mut::<UiHitBox>(entity)
+                && state.applied_hit == Some(hit.clip)
+                && hit.clip != state.base_hit
+            {
+                hit.clip = state.base_hit;
             }
         }
-        apply_panel_clip(world, panel, progress);
+    }
+    world.insert_resource(cache);
+}
+
+fn panel_sync_stamp(
+    world: &World,
+    panel: Entity,
+    theme_changed: Option<u32>,
+) -> Option<PanelSyncStamp> {
+    Some(PanelSyncStamp {
+        panel_changed: entity_component_changed_tick::<Panel>(world, panel)?,
+        children_changed: entity_component_changed_tick::<bui_core::UiChildren>(world, panel),
+        layout_changed: entity_component_changed_tick::<UiLayoutResult>(world, panel),
+        theme_changed,
+        progress_bits: world.get::<Panel>(panel)?.state.progress.to_bits(),
+    })
+}
+
+fn widget_hierarchy_depth(world: &World, mut entity: Entity) -> usize {
+    let mut depth = 0;
+    while let Some(parent) = world.get::<UiParent>(entity) {
+        depth += 1;
+        entity = parent.0;
+        if depth >= 1024 {
+            break;
+        }
+    }
+    depth
+}
+
+#[expect(
+    clippy::type_complexity,
+    reason = "Panel clip invalidations track the layout, hitbox, and hierarchy inputs that can change a descendant reveal"
+)]
+fn collect_panel_descendant_invalidations(
+    changed: Query<
+        Entity,
+        Or<(
+            Changed<UiLayoutResult>,
+            Changed<UiHitBox>,
+            Changed<bui_core::UiChildren>,
+            Changed<UiParent>,
+        )>,
+    >,
+    parents: Query<Option<&'static UiParent>>,
+    panels: Query<(), With<Panel>>,
+    topology: Query<Entity, Or<(Changed<bui_core::UiChildren>, Changed<UiParent>)>>,
+    mut invalidated: ResMut<WidgetPanelSyncInvalidations>,
+) {
+    if !topology.is_empty() {
+        invalidated.topology_changed = true;
+    }
+    for entity in &changed {
+        let mut current = entity;
+        for _ in 0..1024 {
+            if panels.get(current).is_ok() {
+                invalidated.panels.insert(current);
+            }
+            let Ok(Some(parent)) = parents.get(current) else {
+                break;
+            };
+            current = parent.0;
+        }
     }
 }
 
-fn apply_panel_clip(world: &mut World, panel: Entity, progress: f32) {
-    if progress >= 1.0 {
-        return;
+fn panel_descendant_entities(world: &World, panel: Entity) -> Vec<Entity> {
+    let mut stack = world
+        .get::<bui_core::UiChildren>(panel)
+        .map_or_else(Vec::new, |children| children.0.clone());
+    let mut seen = HashSet::new();
+    let mut descendants = Vec::new();
+    while let Some(entity) = stack.pop() {
+        if !seen.insert(entity) {
+            continue;
+        }
+        descendants.push(entity);
+        if let Some(children) = world.get::<bui_core::UiChildren>(entity) {
+            stack.extend(children.0.iter().copied());
+        }
     }
-    let Some(panel_layout) = world.get::<UiLayoutResult>(panel).copied() else {
-        return;
-    };
-    let header_spacing = world.get_resource::<Theme>().map_or_else(
-        || Theme::default().spacing.panel.header_height,
-        |theme| theme.spacing.panel.header_height,
-    );
+    descendants
+}
+
+fn panel_reveal_rect(
+    world: &World,
+    panel: Entity,
+    header_spacing: f32,
+    clips: &HashMap<Entity, PanelDescendantClip>,
+) -> Option<Rect> {
+    let progress = world.get::<Panel>(panel)?.state.progress;
+    if progress >= 1.0 {
+        return None;
+    }
+    let panel_layout = world.get::<UiLayoutResult>(panel).copied()?;
     let header_height = panel_layout.rect.height.min(header_spacing);
     let content_height = (panel_layout.rect.height - header_height).max(0.0) * progress;
     let mut reveal = Rect {
@@ -9263,46 +9770,138 @@ fn apply_panel_clip(world: &mut World, panel: Entity, progress: f32) {
         width: panel_layout.rect.width,
         height: content_height,
     };
-    if let Some(parent_clip) = panel_layout.clip {
-        let Some(intersection) = reveal.intersection(parent_clip) else {
-            reveal.width = 0.0;
-            reveal.height = 0.0;
-            set_descendant_clip(world, panel, panel_layout.window, reveal);
-            return;
-        };
-        reveal = intersection;
+    let base_clip = clips
+        .get(&panel)
+        .and_then(|state| state.applied_layout.map(|_| state.base_layout))
+        .unwrap_or(panel_layout.clip);
+    if let Some(parent_clip) = base_clip {
+        reveal = reveal.intersection(parent_clip).unwrap_or(Rect {
+            x: reveal.x.max(parent_clip.x),
+            y: reveal.y.max(parent_clip.y),
+            width: 0.0,
+            height: 0.0,
+        });
     }
-    set_descendant_clip(world, panel, panel_layout.window, reveal);
+    Some(reveal)
 }
 
-fn set_descendant_clip(world: &mut World, panel: Entity, window: Entity, clip: Rect) {
-    let mut query = world.query_filtered::<Entity, With<UiLayoutResult>>();
-    let descendants: Vec<_> = query
-        .iter(world)
-        .filter(|entity| *entity != panel && has_ancestor(world, *entity, panel))
-        .collect();
+fn panel_effective_layout_clip(
+    world: &World,
+    entity: Entity,
+    base: Option<Rect>,
+    header_spacing: f32,
+    clips: &HashMap<Entity, PanelDescendantClip>,
+) -> Option<Rect> {
+    let mut effective = base;
+    let mut current = world.get::<UiParent>(entity).map(|parent| parent.0);
+    for _ in 0..1024 {
+        let Some(panel) = current else {
+            break;
+        };
+        if world.get::<Panel>(panel).is_some()
+            && let Some(reveal) = panel_reveal_rect(world, panel, header_spacing, clips)
+        {
+            effective = Some(effective.map_or(reveal, |old| {
+                old.intersection(reveal).unwrap_or(Rect {
+                    x: old.x.max(reveal.x),
+                    y: old.y.max(reveal.y),
+                    width: 0.0,
+                    height: 0.0,
+                })
+            }));
+        }
+        current = world.get::<UiParent>(panel).map(|parent| parent.0);
+    }
+    effective
+}
+
+fn panel_effective_hit_clip(
+    world: &World,
+    entity: Entity,
+    base: Option<UiRect>,
+    header_spacing: f32,
+    clips: &HashMap<Entity, PanelDescendantClip>,
+) -> Option<UiRect> {
+    let mut effective = base;
+    let mut current = world.get::<UiParent>(entity).map(|parent| parent.0);
+    for _ in 0..1024 {
+        let Some(panel) = current else {
+            break;
+        };
+        if world.get::<Panel>(panel).is_some()
+            && let Some(reveal) = panel_reveal_rect(world, panel, header_spacing, clips)
+        {
+            let reveal = to_ui_rect(reveal);
+            effective = Some(effective.map_or(reveal, |old| {
+                old.intersection(reveal).unwrap_or(UiRect::new(
+                    old.x.max(reveal.x),
+                    old.y.max(reveal.y),
+                    0.0,
+                    0.0,
+                ))
+            }));
+        }
+        current = world.get::<UiParent>(panel).map(|parent| parent.0);
+    }
+    effective
+}
+
+fn apply_panel_clip(
+    world: &mut World,
+    panel: Entity,
+    clips: &mut HashMap<Entity, PanelDescendantClip>,
+) {
+    let Some(panel_layout) = world.get::<UiLayoutResult>(panel).copied() else {
+        return;
+    };
+    let header_spacing = world.get_resource::<Theme>().map_or_else(
+        || Theme::default().spacing.panel.header_height,
+        |theme| theme.spacing.panel.header_height,
+    );
+    let descendants = panel_descendant_entities(world, panel);
+    let mut live_descendants = HashSet::with_capacity(descendants.len());
     for entity in descendants {
         let Some(layout) = world.get::<UiLayoutResult>(entity).copied() else {
             continue;
         };
-        if layout.window != window {
+        if layout.window != panel_layout.window {
             continue;
         }
-        let clip = layout
-            .clip
-            .and_then(|old| clip.intersection(old))
-            .unwrap_or(clip);
-        if let Some(mut layout) = world.get_mut::<UiLayoutResult>(entity) {
-            layout.clip = Some(clip);
+        live_descendants.insert(entity);
+        let mut state = clips.get(&entity).copied().unwrap_or_default();
+        if state.applied_layout != Some(layout.clip) {
+            state.base_layout = layout.clip;
         }
+        let current_hit = world.get::<UiHitBox>(entity).map(|hit| hit.clip);
+        if let Some(current_hit) = current_hit {
+            if state.applied_hit != Some(current_hit) {
+                state.base_hit = current_hit;
+            }
+        } else {
+            state.base_hit = None;
+            state.applied_hit = None;
+        }
+        clips.insert(entity, state);
+        let layout_clip =
+            panel_effective_layout_clip(world, entity, state.base_layout, header_spacing, clips);
+        if layout.clip != layout_clip
+            && let Some(mut layout) = world.get_mut::<UiLayoutResult>(entity)
+        {
+            layout.clip = layout_clip;
+        }
+        let hit_clip =
+            panel_effective_hit_clip(world, entity, state.base_hit, header_spacing, clips);
         if let Some(mut hit) = world.get_mut::<UiHitBox>(entity) {
-            hit.clip = Some(
-                hit.clip
-                    .and_then(|old| clip.intersection(old))
-                    .unwrap_or(clip),
-            );
+            if hit.clip != hit_clip {
+                hit.clip = hit_clip;
+            }
+            state.applied_hit = Some(hit_clip);
         }
+        state.applied_layout = Some(layout_clip);
+        clips.insert(entity, state);
     }
+    clips
+        .retain(|entity, _| live_descendants.contains(entity) || world.get_entity(*entity).is_ok());
 }
 
 fn has_ancestor(world: &World, mut entity: Entity, ancestor: Entity) -> bool {
@@ -9315,32 +9914,71 @@ fn has_ancestor(world: &World, mut entity: Entity, ancestor: Entity) -> bool {
     false
 }
 
+fn has_panel_ancestor(world: &World, mut entity: Entity) -> bool {
+    for _ in 0..1024 {
+        let Some(parent) = world.get::<UiParent>(entity) else {
+            return false;
+        };
+        entity = parent.0;
+        if world.get::<Panel>(entity).is_some() {
+            return true;
+        }
+    }
+    false
+}
+
 /// Recompute popup item visibility, geometry, and hitboxes after widget state changes.
 pub fn sync_menu_popups(world: &mut World) {
+    world.init_resource::<WidgetMenuPopupStamps>();
+    let theme_changed = world
+        .get_resource_change_ticks::<Theme>()
+        .map(|ticks| ticks.changed.get());
+    let mut root_query = world.query::<(Entity, &UiLayoutRoot)>();
+    let mut viewports = HashMap::new();
+    for (root_entity, root) in root_query.iter(world) {
+        viewports.entry(root.window).or_insert((
+            root.viewport,
+            entity_component_changed_tick::<UiLayoutRoot>(world, root_entity),
+        ));
+    }
     let mut menu_query = world.query_filtered::<Entity, With<MenuControl>>();
     let menus: Vec<_> = menu_query.iter(world).collect();
+    let live_menus: HashSet<_> = menus.iter().copied().collect();
+    let mut stamps = world
+        .remove_resource::<WidgetMenuPopupStamps>()
+        .unwrap_or_default();
+    stamps.stamps.retain(|owner, _| live_menus.contains(owner));
     for owner in menus {
         let Some(owner_layout) = world.get::<UiLayoutResult>(owner).copied() else {
+            stamps.stamps.remove(&owner);
             continue;
         };
+        let (viewport, viewport_changed) =
+            viewports.get(&owner_layout.window).copied().unwrap_or((
+                Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 1280.0,
+                    height: 720.0,
+                },
+                None,
+            ));
+        let Some(stamp) =
+            menu_popup_sync_stamp(world, owner, viewport, viewport_changed, theme_changed)
+        else {
+            stamps.stamps.remove(&owner);
+            continue;
+        };
+        let unchanged = stamps.stamps.get(&owner).is_some_and(|previous| {
+            menu_popup_stamp_core_matches(previous, &stamp)
+                && !menu_item_controls_changed(world, owner, previous)
+        });
+        if unchanged {
+            continue;
+        }
         let menu_spacing = world
             .get_resource::<Theme>()
             .map_or_else(|| Theme::default().spacing.menu, |theme| theme.spacing.menu);
-        let viewport = {
-            let mut roots = world.query::<&UiLayoutRoot>();
-            roots
-                .iter(world)
-                .find(|root| root.window == owner_layout.window)
-                .map_or(
-                    Rect {
-                        x: 0.0,
-                        y: 0.0,
-                        width: 1280.0,
-                        height: 720.0,
-                    },
-                    |root| root.viewport,
-                )
-        };
         let (
             open,
             display,
@@ -9454,26 +10092,34 @@ pub fn sync_menu_popups(world: &mut World) {
             );
             (bounds, anchor, [0.0, 0.0], popup.side)
         };
-        if let Some(mut menu) = world.get_mut::<MenuControl>(owner) {
-            menu.popup.anchor = popup_anchor;
-            menu.popup.bounds = bounds;
-            menu.popup.open = open;
-            menu.popup.side = popup_side;
+        if let Some(current) = world.get::<MenuControl>(owner) {
+            let mut popup = current.popup;
+            popup.anchor = popup_anchor;
+            popup.bounds = bounds;
+            popup.open = open;
+            popup.side = popup_side;
+            let mut pie_state = current.pie;
             if display == MenuDisplay::Pie {
-                if menu.pie.is_none() && open {
-                    menu.pie = Some(crate::PieMenu::new(
+                if pie_state.is_none() && open {
+                    pie_state = Some(crate::PieMenu::new(
                         [0.0, 0.0],
                         menu_spacing.pie_inner_radius,
                         menu_spacing.pie_outer_radius,
                     ));
                 }
-                if let Some(pie) = &mut menu.pie {
+                if let Some(pie) = &mut pie_state {
                     pie.center = pie_center;
                     pie.dead_zone = menu_spacing.pie_inner_radius;
                     pie.radius = (bounds.width.min(bounds.height) * 0.5
                         - menu_spacing.pie_inner_radius)
                         .max(0.0);
                 }
+            }
+            if (current.popup != popup || current.pie != pie_state)
+                && let Some(mut menu) = world.get_mut::<MenuControl>(owner)
+            {
+                menu.popup = popup;
+                menu.pie = pie_state;
             }
         }
         let owner_hit_rect = if open { bounds } else { owner_layout.rect };
@@ -9482,16 +10128,20 @@ pub fn sync_menu_popups(world: &mut World) {
         } else {
             owner_layout.z
         };
-        world.entity_mut(owner).insert(UiHitBox {
-            window: Some(owner_layout.window),
-            rect: owner_hit_rect,
-            clip: if open {
-                Some(viewport)
-            } else {
-                owner_layout.clip
+        set_hitbox(
+            world,
+            owner,
+            UiHitBox {
+                window: Some(owner_layout.window),
+                rect: owner_hit_rect,
+                clip: if open {
+                    Some(viewport)
+                } else {
+                    owner_layout.clip
+                },
+                z_index: owner_hit_z,
             },
-            z_index: owner_hit_z,
-        });
+        );
 
         let item_components: Vec<_> = item_entities
             .iter()
@@ -9515,29 +10165,42 @@ pub fn sync_menu_popups(world: &mut World) {
             .filter(|(_, entry)| entry.enabled && !entry.separator)
             .map(|(index, _)| index)
             .collect();
+        let pie_positions: HashMap<_, _> = selectable_pie_indices
+            .iter()
+            .enumerate()
+            .map(|(position, index)| (*index, position))
+            .collect();
         let mut search_order: Vec<_> = item_components
             .iter()
             .filter(|(_, item)| search_ids.contains(&item.id))
             .map(|(entity, item)| (*entity, item.clone()))
             .collect();
+        let search_ranks: HashMap<_, _> = search_order_ids
+            .iter()
+            .enumerate()
+            .map(|(rank, id)| (id.as_str(), rank))
+            .collect();
         search_order.sort_by_key(|(_, item)| {
-            search_order_ids
-                .iter()
-                .position(|id| id == &item.id)
+            search_ranks
+                .get(item.id.as_str())
+                .copied()
                 .unwrap_or(usize::MAX)
         });
+        let search_rows: HashMap<_, _> = search_order
+            .iter()
+            .enumerate()
+            .map(|(row, (entity, _))| (*entity, row))
+            .collect();
         let max_depth = maximum_menu_depth;
         let left_space = bounds.x - viewport.x;
         let right_space = viewport.x + viewport.width - (bounds.x + width);
         let left_fits = left_space >= width * max_depth as f32;
         let right_fits = right_space >= width * max_depth as f32;
         let cascade_right = right_fits || !left_fits;
-        let mut search_row = 0usize;
+        let mut search_row = search_order.len();
         for (entity, item) in item_components {
             let in_search = !query_text.is_empty();
-            let pie_index = selectable_pie_indices
-                .iter()
-                .position(|index| *index == item.index);
+            let pie_index = pie_positions.get(&item.index).copied();
             let visible = if !open {
                 false
             } else if in_search {
@@ -9556,14 +10219,8 @@ pub fn sync_menu_popups(world: &mut World) {
                         .entries_at(&item.parent_path)
                         .is_some_and(|entries| !entries.is_empty())
             };
-            if let Some(mut visible_component) = world.get_mut::<UiVisible>(entity) {
-                visible_component.0 = visible;
-            } else {
-                world.entity_mut(entity).insert(UiVisible(visible));
-            }
-            if let Some(mut enabled) = world.get_mut::<bui_core::UiEnabled>(entity) {
-                enabled.0 = item.enabled && !item.separator;
-            }
+            set_visible(world, entity, visible);
+            set_enabled(world, entity, item.enabled && !item.separator);
             if !visible {
                 continue;
             }
@@ -9593,14 +10250,11 @@ pub fn sync_menu_popups(world: &mut World) {
                     owner_layout.z.saturating_add(120),
                 )
             } else if in_search {
-                let row = search_order
-                    .iter()
-                    .position(|(search_entity, _)| *search_entity == entity)
-                    .unwrap_or_else(|| {
-                        let row = search_row;
-                        search_row += 1;
-                        row
-                    });
+                let row = search_rows.get(&entity).copied().unwrap_or_else(|| {
+                    let row = search_row;
+                    search_row += 1;
+                    row
+                });
                 (
                     Rect {
                         x: bounds.x,
@@ -9635,7 +10289,9 @@ pub fn sync_menu_popups(world: &mut World) {
                 )
             };
             let clip = Some(viewport);
-            world.entity_mut(entity).insert((
+            set_layout_result(
+                world,
+                entity,
                 UiLayoutResult {
                     window: owner_layout.window,
                     rect,
@@ -9644,54 +10300,140 @@ pub fn sync_menu_popups(world: &mut World) {
                     content_size: [rect.width, rect.height],
                     dpi_scale: owner_layout.dpi_scale,
                 },
+            );
+            set_hitbox(
+                world,
+                entity,
                 UiHitBox {
                     window: Some(owner_layout.window),
                     rect,
                     clip,
                     z_index: z,
                 },
-            ));
+            );
         }
         if let Some(mut menu) = world.get_mut::<MenuControl>(owner)
             && !open
+            && !menu.query.is_empty()
         {
             menu.query.clear();
         }
+        if let Some(mut stamp) =
+            menu_popup_sync_stamp(world, owner, viewport, viewport_changed, theme_changed)
+        {
+            stamp.item_ticks = menu_item_component_ticks(world, owner);
+            stamps.stamps.insert(owner, stamp);
+        }
     }
+    world.insert_resource(stamps);
 }
 
 /// Materialize stable option rows for Dropdown and RadioGroup owners.
 pub fn sync_control_option_views(world: &mut World) {
-    let theme = world.get_resource::<Theme>().cloned().unwrap_or_default();
-    let mut root_query = world.query::<&UiLayoutRoot>();
-    let viewports: HashMap<_, _> = root_query
-        .iter(world)
-        .map(|root| (root.window, root.viewport))
-        .collect();
+    world.init_resource::<WidgetControlOptionItems>();
+    let (row_height, popup_margin, control_height) = world.get_resource::<Theme>().map_or_else(
+        || {
+            let theme = Theme::default();
+            (
+                theme.spacing.menu.item_height.max(1.0),
+                theme.spacing.menu.popup_padding.max(0.0),
+                theme.control_height.max(1.0),
+            )
+        },
+        |theme| {
+            (
+                theme.spacing.menu.item_height.max(1.0),
+                theme.spacing.menu.popup_padding.max(0.0),
+                theme.control_height.max(1.0),
+            )
+        },
+    );
+    let theme_changed = world
+        .get_resource_change_ticks::<Theme>()
+        .map(|ticks| ticks.changed.get());
+    let mut root_query = world.query::<(Entity, &UiLayoutRoot)>();
+    let mut viewports = HashMap::new();
+    for (root_entity, root) in root_query.iter(world) {
+        viewports.entry(root.window).or_insert((
+            root.viewport,
+            entity_component_changed_tick::<UiLayoutRoot>(world, root_entity),
+        ));
+    }
 
     let mut dropdown_query = world.query::<(Entity, &Dropdown, &UiLayoutResult)>();
-    let dropdown_views: Vec<_> = dropdown_query
-        .iter(world)
-        .map(|(owner, dropdown, layout)| {
-            (
+    let mut current_dropdowns = HashSet::new();
+    let mut dropdown_views = Vec::new();
+    for (owner, dropdown, layout) in dropdown_query.iter(world) {
+        current_dropdowns.insert(owner);
+        let (viewport, viewport_changed) = viewports.get(&layout.window).copied().unwrap_or((
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 1280.0,
+                height: 720.0,
+            },
+            None,
+        ));
+        let Some(stamp) = control_option_stamp::<Dropdown>(
+            world,
+            owner,
+            0,
+            viewport,
+            viewport_changed,
+            theme_changed,
+        ) else {
+            continue;
+        };
+        let dirty = world
+            .resource::<WidgetControlOptionItems>()
+            .dropdown_stamps
+            .get(&owner)
+            != Some(&stamp);
+        if dirty {
+            dropdown_views.push((
                 owner,
                 dropdown.clone(),
-                world
-                    .get::<Label>(owner)
-                    .map_or_else(String::new, |label| label.text.clone()),
                 *layout,
                 world
                     .get::<UiEnabled>(owner)
                     .is_none_or(|enabled| enabled.0),
                 is_visible(world, owner),
-            )
-        })
-        .collect();
+                viewport,
+                viewport_changed,
+            ));
+        }
+    }
     let mut radio_query = world.query::<(Entity, &RadioGroup, &UiLayoutResult)>();
-    let radio_views: Vec<_> = radio_query
-        .iter(world)
-        .map(|(owner, group, layout)| {
-            (
+    let mut current_radios = HashSet::new();
+    let mut radio_views = Vec::new();
+    for (owner, group, layout) in radio_query.iter(world) {
+        current_radios.insert(owner);
+        let (viewport, viewport_changed) = viewports.get(&layout.window).copied().unwrap_or((
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 1280.0,
+                height: 720.0,
+            },
+            None,
+        ));
+        let Some(stamp) = control_option_stamp::<RadioGroup>(
+            world,
+            owner,
+            1,
+            viewport,
+            viewport_changed,
+            theme_changed,
+        ) else {
+            continue;
+        };
+        let dirty = world
+            .resource::<WidgetControlOptionItems>()
+            .radio_stamps
+            .get(&owner)
+            != Some(&stamp);
+        if dirty {
+            radio_views.push((
                 owner,
                 group.clone(),
                 *layout,
@@ -9699,52 +10441,67 @@ pub fn sync_control_option_views(world: &mut World) {
                     .get::<UiEnabled>(owner)
                     .is_none_or(|enabled| enabled.0),
                 is_visible(world, owner),
-            )
-        })
-        .collect();
+                viewport,
+                viewport_changed,
+            ));
+        }
+    }
 
-    let current_dropdowns: HashSet<_> = dropdown_views.iter().map(|(owner, ..)| *owner).collect();
-    let current_radios: HashSet<_> = radio_views.iter().map(|(owner, ..)| *owner).collect();
+    let stale_dropdowns: Vec<_> = {
+        let cache = world.resource::<WidgetControlOptionItems>();
+        cache
+            .dropdowns
+            .keys()
+            .chain(cache.dropdown_stamps.keys())
+            .copied()
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .filter(|owner| !current_dropdowns.contains(owner))
+            .collect()
+    };
+    let stale_radios: Vec<_> = {
+        let cache = world.resource::<WidgetControlOptionItems>();
+        cache
+            .radios
+            .keys()
+            .chain(cache.radio_stamps.keys())
+            .copied()
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .filter(|owner| !current_radios.contains(owner))
+            .collect()
+    };
+    if dropdown_views.is_empty()
+        && radio_views.is_empty()
+        && stale_dropdowns.is_empty()
+        && stale_radios.is_empty()
+    {
+        return;
+    }
     let mut items = world
         .remove_resource::<WidgetControlOptionItems>()
         .unwrap_or_default();
-    let stale_dropdowns: Vec<_> = items
-        .dropdowns
-        .keys()
-        .copied()
-        .filter(|owner| !current_dropdowns.contains(owner))
-        .collect();
     for owner in stale_dropdowns {
         if let Some(entities) = items.dropdowns.remove(&owner) {
             despawn_option_entities(world, owner, entities);
         }
+        items.dropdown_stamps.remove(&owner);
         if world.get_entity(owner).is_ok() {
             world.entity_mut(owner).remove::<DropdownPopupState>();
         }
     }
-    let stale_radios: Vec<_> = items
-        .radios
-        .keys()
-        .copied()
-        .filter(|owner| !current_radios.contains(owner))
-        .collect();
     for owner in stale_radios {
         if let Some(entities) = items.radios.remove(&owner) {
             despawn_option_entities(world, owner, entities);
         }
+        items.radio_stamps.remove(&owner);
     }
 
-    let row_height = theme.spacing.menu.item_height.max(1.0);
-    let popup_margin = theme.spacing.menu.popup_padding.max(0.0);
-    for (owner, dropdown, _label, layout, owner_enabled, owner_visible) in dropdown_views {
+    for (owner, dropdown, layout, owner_enabled, owner_visible, viewport, viewport_changed) in
+        dropdown_views
+    {
         let entities = items.dropdowns.entry(owner).or_default();
         resize_dropdown_option_entities(world, owner, entities, dropdown.options.len());
-        let viewport = viewports.get(&layout.window).copied().unwrap_or(Rect {
-            x: 0.0,
-            y: 0.0,
-            width: 1280.0,
-            height: 720.0,
-        });
         let max_rows = (viewport.height / row_height).floor().max(1.0) as usize;
         let mut visible_count = dropdown.options.len().min(8).min(max_rows);
         let mut popup_state =
@@ -9876,10 +10633,21 @@ pub fn sync_control_option_views(world: &mut World) {
                 );
             }
         }
+        if let Some(stamp) = control_option_stamp::<Dropdown>(
+            world,
+            owner,
+            0,
+            viewport,
+            viewport_changed,
+            theme_changed,
+        ) {
+            items.dropdown_stamps.insert(owner, stamp);
+        }
     }
 
-    let control_height = theme.control_height.max(1.0);
-    for (owner, group, layout, owner_enabled, owner_visible) in radio_views {
+    for (owner, group, layout, owner_enabled, owner_visible, viewport, viewport_changed) in
+        radio_views
+    {
         let entities = items.radios.entry(owner).or_default();
         resize_radio_option_entities(world, owner, entities, group.options.len());
         let clip = layout
@@ -9934,6 +10702,16 @@ pub fn sync_control_option_views(world: &mut World) {
                     },
                 );
             }
+        }
+        if let Some(stamp) = control_option_stamp::<RadioGroup>(
+            world,
+            owner,
+            1,
+            viewport,
+            viewport_changed,
+            theme_changed,
+        ) {
+            items.radio_stamps.insert(owner, stamp);
         }
     }
     world.insert_resource(items);
@@ -10061,21 +10839,73 @@ fn to_ui_rect(rect: Rect) -> UiRect {
 }
 
 /// Spawn and update only file rows that intersect the current list/grid viewport.
+/// Per-owner component ticks bridge direct ECS mutations into a bounded dirty-owner set; the
+/// cached filtered index is maintained by FileBrowser's mutation methods.
 pub fn sync_file_browser_items(world: &mut World) {
     let spacing = world.get_resource::<Theme>().map_or_else(
         || Theme::default().spacing.file_browser,
         |theme| theme.spacing.file_browser,
     );
+    let theme_changed = world
+        .get_resource_change_ticks::<Theme>()
+        .map(|ticks| ticks.changed.get());
     let mut query = world.query::<(
         Entity,
         &FileBrowser,
-        &UiLayoutResult,
+        Option<&UiLayoutResult>,
         Option<&FileBrowserViewState>,
     )>();
     let owners: Vec<_> = query
         .iter(world)
-        .map(|(owner, browser, layout, view)| {
-            let view = view.copied().unwrap_or_default();
+        .filter_map(|(owner, _, layout, view)| {
+            Some((
+                owner,
+                layout.copied(),
+                view.copied(),
+                FileBrowserVirtualStamp {
+                    model_changed: entity_component_changed_tick::<FileBrowser>(world, owner)?,
+                    layout_changed: entity_component_changed_tick::<UiLayoutResult>(world, owner),
+                    view_changed: entity_component_changed_tick::<FileBrowserViewState>(
+                        world, owner,
+                    ),
+                    theme_changed,
+                    key_changed: entity_component_changed_tick::<UiKey>(world, owner),
+                    visible_changed: entity_component_changed_tick::<UiVisible>(world, owner),
+                    enabled_changed: entity_component_changed_tick::<UiEnabled>(world, owner),
+                },
+            ))
+        })
+        .collect();
+    let live_owners: HashSet<_> = owners.iter().map(|(owner, _, _, _)| *owner).collect();
+    let dirty_owners: Vec<_> = owners
+        .iter()
+        .filter(|(owner, _, _, stamp)| {
+            let cache = world.resource::<WidgetFileBrowserItems>();
+            cache.stamps.get(owner) != Some(stamp) || !cache.items.contains_key(owner)
+        })
+        .copied()
+        .collect();
+    let stale_owners: Vec<_> = {
+        let cache = world.resource::<WidgetFileBrowserItems>();
+        cache
+            .items
+            .keys()
+            .chain(cache.stamps.keys())
+            .copied()
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .filter(|owner| !live_owners.contains(owner))
+            .collect()
+    };
+    if dirty_owners.is_empty() && stale_owners.is_empty() {
+        return;
+    }
+
+    let mut updates = Vec::with_capacity(dirty_owners.len());
+    for (owner, layout, view, stamp) in dirty_owners {
+        let mut rows = Vec::new();
+        if let (Some(layout), Some(browser)) = (layout, world.get::<FileBrowser>(owner)) {
+            let view = view.unwrap_or_default();
             let header_height = if view.header_height == 48.0 {
                 spacing.header_height
             } else {
@@ -10106,105 +10936,121 @@ pub fn sync_file_browser_items(world: &mut World) {
                     rows.saturating_mul(columns),
                 )
             };
-            let entries: Vec<_> = browser
-                .visible_entries()
+            for (slot, entry) in browser
+                .visible_range(start_index, max_visible)
                 .into_iter()
                 .enumerate()
-                .skip(start_index)
-                .take(max_visible)
-                .enumerate()
-                .map(|(slot, (index, entry))| {
-                    let (x, y, item_width, item_height) = if browser.view == FileView::List {
-                        (
-                            layout.rect.x,
-                            layout.rect.y + header_height + slot as f32 * row_height,
-                            width,
-                            row_height,
-                        )
-                    } else {
-                        let col = slot % columns;
-                        let row = slot / columns;
-                        (
-                            layout.rect.x
-                                + col as f32 * (spacing.grid_cell_width + spacing.grid_gap),
-                            layout.rect.y + header_height + row as f32 * row_height,
-                            spacing.grid_cell_width,
-                            spacing.grid_cell_height,
-                        )
-                    };
+            {
+                let index = start_index + slot;
+                let (x, y, item_width, item_height) = if browser.view == FileView::List {
                     (
-                        FileBrowserItem {
-                            owner,
-                            path: entry.path.clone(),
-                            name: entry.name.clone(),
-                            index,
-                            directory: entry.directory,
-                            size: entry.size,
-                            selected: browser.selected.contains(&entry.path),
-                            preview: entry.preview,
-                        },
-                        Rect {
-                            x,
-                            y,
-                            width: item_width,
-                            height: item_height,
-                        },
-                        layout.window,
-                        layout.clip,
-                        layout.dpi_scale,
-                        layout.z,
+                        layout.rect.x,
+                        layout.rect.y + header_height + slot as f32 * row_height,
+                        width,
+                        row_height,
                     )
-                })
-                .collect();
-            (owner, entries)
-        })
-        .collect();
+                } else {
+                    let col = slot % columns;
+                    let row = slot / columns;
+                    (
+                        layout.rect.x + col as f32 * (spacing.grid_cell_width + spacing.grid_gap),
+                        layout.rect.y + header_height + row as f32 * row_height,
+                        spacing.grid_cell_width,
+                        spacing.grid_cell_height,
+                    )
+                };
+                rows.push((
+                    FileBrowserItem {
+                        owner,
+                        path: entry.path.clone(),
+                        name: entry.name.clone(),
+                        index,
+                        directory: entry.directory,
+                        size: entry.size,
+                        selected: browser.selected.contains(&entry.path),
+                        preview: entry.preview,
+                    },
+                    Rect {
+                        x,
+                        y,
+                        width: item_width,
+                        height: item_height,
+                    },
+                    layout.window,
+                    layout.clip,
+                    layout.dpi_scale,
+                    layout.z,
+                ));
+            }
+        }
+        updates.push((owner, stamp, rows));
+    }
 
-    for (owner, rows) in owners {
-        let previous = world
-            .resource::<WidgetFileBrowserItems>()
-            .0
-            .get(&owner)
-            .cloned()
-            .unwrap_or_default();
-        let mut cache = previous.clone();
+    let mut previous = {
+        let mut cache = world.resource_mut::<WidgetFileBrowserItems>();
+        std::mem::take(&mut cache.items)
+    };
+    let mut stamps = {
+        let mut cache = world.resource_mut::<WidgetFileBrowserItems>();
+        std::mem::take(&mut cache.stamps)
+    };
+    for (owner, stamp, rows) in updates {
+        let mut cache = previous.remove(&owner).unwrap_or_default();
         let mut visible_paths = HashSet::new();
         for (item, rect, window, inherited_clip, dpi_scale, base_z) in rows {
             visible_paths.insert(item.path.clone());
-            let entity = cache
+            let existing = cache
                 .get(&item.path)
                 .copied()
-                .filter(|entity| world.get_entity(*entity).is_ok())
-                .unwrap_or_else(|| {
-                    world
-                        .spawn((UiNode, UiEnabled(true), UiVisible(true), item.clone()))
-                        .id()
-                });
+                .filter(|entity| world.get_entity(*entity).is_ok());
+            let entity = existing.unwrap_or_else(|| world.spawn_empty().id());
             cache.insert(item.path.clone(), entity);
             let clip = inherited_clip
                 .and_then(|clip| clip.intersection(rect))
                 .unwrap_or(rect);
             let z = base_z.saturating_add(20);
-            world.entity_mut(entity).insert((
-                UiEnabled(true),
-                UiVisible(true),
-                item,
-                UiLayoutResult {
-                    window,
-                    rect,
-                    clip: Some(clip),
-                    z,
-                    content_size: [rect.width, rect.height],
-                    dpi_scale,
-                },
-                UiHitBox {
-                    window: Some(window),
-                    rect,
-                    clip: Some(clip),
-                    z_index: z,
-                },
-            ));
-            let _ = set_parent(world, entity, owner);
+            let owner_visible = world
+                .get::<UiVisible>(owner)
+                .is_none_or(|visible| visible.0);
+            let owner_enabled = world
+                .get::<UiEnabled>(owner)
+                .is_none_or(|enabled| enabled.0);
+            let layout = UiLayoutResult {
+                window,
+                rect,
+                clip: Some(clip),
+                z,
+                content_size: [rect.width, rect.height],
+                dpi_scale,
+            };
+            let hitbox = UiHitBox {
+                window: Some(window),
+                rect,
+                clip: Some(clip),
+                z_index: z,
+            };
+            if existing.is_some() {
+                set_enabled(world, entity, owner_enabled);
+                set_visible(world, entity, owner_visible);
+                insert_component_if_changed(world, entity, item);
+                set_layout_result(world, entity, layout);
+                set_hitbox(world, entity, hitbox);
+            } else {
+                world.entity_mut(entity).insert((
+                    UiNode,
+                    UiEnabled(owner_enabled),
+                    UiVisible(owner_visible),
+                    item,
+                    layout,
+                    hitbox,
+                ));
+            }
+            if world
+                .get::<UiParent>(entity)
+                .is_none_or(|parent| parent.0 != owner)
+            {
+                let _ = set_parent(world, entity, owner);
+            }
         }
         let stale: Vec<_> = cache
             .keys()
@@ -10223,16 +11069,31 @@ pub fn sync_file_browser_items(world: &mut World) {
                 cache.remove(&path);
             }
         }
-        world
-            .resource_mut::<WidgetFileBrowserItems>()
-            .0
-            .insert(owner, cache);
+        previous.insert(owner, cache);
+        stamps.insert(owner, stamp);
     }
+    for owner in stale_owners {
+        if let Some(items) = previous.remove(&owner) {
+            for entity in items.into_values() {
+                if world.get_entity(entity).is_ok() {
+                    detach_from_parent(world, entity);
+                    world.despawn(entity);
+                }
+            }
+        }
+        stamps.remove(&owner);
+    }
+    previous.retain(|owner, _| live_owners.contains(owner));
+    stamps.retain(|owner, _| live_owners.contains(owner));
+    let mut cache = world.resource_mut::<WidgetFileBrowserItems>();
+    cache.items = previous;
+    cache.stamps = stamps;
 }
 
 /// Mount real, clipped Bevy item entities for the rows and preview tiles that
 /// intersect each collection viewport. Model ids remain the stable item keys
-/// even when virtualization despawns an offscreen entity.
+/// even when virtualization despawns an offscreen entity. Component ticks form
+/// the direct ECS bridge into a dirty-owner set, so unchanged models skip row enumeration.
 pub fn sync_collection_views(world: &mut World) {
     let theme = world.get_resource::<Theme>().cloned().unwrap_or_default();
     let collection_spacing = theme.spacing.collection;
@@ -10247,27 +11108,47 @@ pub fn sync_collection_views(world: &mut World) {
         Option<&PreviewGrid>,
         Option<&UiLayoutResult>,
     )>();
-    let mut views = Vec::new();
-    let mut live_owners = HashSet::new();
     let owners: Vec<_> = query
         .iter(world)
         .filter(|(_, list, tree, grid, _)| list.is_some() || tree.is_some() || grid.is_some())
-        .map(|(owner, list, tree, grid, layout)| {
-            live_owners.insert(owner);
-            (
-                owner,
-                list.cloned(),
-                tree.cloned(),
-                grid.cloned(),
-                layout.copied(),
-            )
+        .filter_map(|(owner, _, _, _, layout)| {
+            collection_virtual_stamp(world, owner).map(|stamp| (owner, layout.copied(), stamp))
         })
         .collect();
+    let live_owners: HashSet<_> = owners.iter().map(|(owner, _, _)| *owner).collect();
+    let dirty_owners: Vec<_> = owners
+        .iter()
+        .filter(|(owner, _, stamp)| {
+            let cache = world.resource::<WidgetCollectionItems>();
+            cache.stamps.get(owner) != Some(stamp) || !cache.items.contains_key(owner)
+        })
+        .copied()
+        .collect();
+    let stale_owners: Vec<_> = {
+        let cache = world.resource::<WidgetCollectionItems>();
+        cache
+            .items
+            .keys()
+            .chain(cache.stamps.keys())
+            .copied()
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .filter(|owner| !live_owners.contains(owner))
+            .collect()
+    };
+    if dirty_owners.is_empty() && stale_owners.is_empty() {
+        return;
+    }
+    let mut views = Vec::with_capacity(dirty_owners.len());
 
-    for (owner, mut list, mut tree, mut grid, layout) in owners {
+    for (owner, layout, stamp) in dirty_owners {
+        let mut list = world.get::<ListModel<String>>(owner).cloned();
+        let mut tree = world.get::<TreeModel<String>>(owner).cloned();
+        let mut grid = world.get::<PreviewGrid>(owner).cloned();
         let Some(layout) = layout else {
             views.push(CollectionView {
                 owner,
+                stamp,
                 items: Vec::new(),
             });
             continue;
@@ -10481,13 +11362,24 @@ pub fn sync_collection_views(world: &mut World) {
             }
         }
 
-        views.push(CollectionView { owner, items });
+        let stamp = collection_virtual_stamp(world, owner).unwrap_or(stamp);
+        views.push(CollectionView {
+            owner,
+            stamp,
+            items,
+        });
     }
 
-    let previous = world.resource::<WidgetCollectionItems>().0.clone();
-    let mut next = HashMap::new();
+    let mut previous = {
+        let mut cache = world.resource_mut::<WidgetCollectionItems>();
+        std::mem::take(&mut cache.items)
+    };
+    let mut stamps = {
+        let mut cache = world.resource_mut::<WidgetCollectionItems>();
+        std::mem::take(&mut cache.stamps)
+    };
     for view in views {
-        let old_items = previous.get(&view.owner).cloned().unwrap_or_default();
+        let old_items = previous.remove(&view.owner).unwrap_or_default();
         let owner_layout = world.get::<UiLayoutResult>(view.owner).copied();
         let mut current_items = HashMap::new();
         if let Some(owner_layout) = owner_layout {
@@ -10501,44 +11393,59 @@ pub fn sync_collection_views(world: &mut World) {
                     height: (owner_layout.rect.height - header_height).max(0.0),
                 })
                 .unwrap_or(Rect::default());
+            let owner_visible = world
+                .get::<UiVisible>(view.owner)
+                .is_none_or(|visible| visible.0);
+            let owner_enabled = world
+                .get::<UiEnabled>(view.owner)
+                .is_none_or(|enabled| enabled.0);
             for (control, rect) in view.items {
-                let entity = old_items
+                let existing = old_items
                     .get(&control.id)
                     .copied()
-                    .filter(|entity| world.get_entity(*entity).is_ok())
-                    .unwrap_or_else(|| {
-                        world
-                            .spawn((UiNode, UiEnabled(control.enabled), UiVisible(true)))
-                            .id()
-                    });
+                    .filter(|entity| world.get_entity(*entity).is_ok());
+                let id = control.id;
+                let entity = existing.unwrap_or_else(|| world.spawn_empty().id());
                 let z = owner_layout.z.saturating_add(20);
                 let clip = rect.intersection(owner_clip).unwrap_or(owner_clip);
-                world.entity_mut(entity).insert((
-                    UiEnabled(control.enabled),
-                    UiVisible(true),
-                    control.clone(),
-                    UiLayoutResult {
-                        window: owner_layout.window,
-                        rect,
-                        clip: Some(clip),
-                        z,
-                        content_size: [rect.width, rect.height],
-                        dpi_scale: owner_layout.dpi_scale,
-                    },
-                    UiHitBox {
-                        window: Some(owner_layout.window),
-                        rect,
-                        clip: Some(clip),
-                        z_index: z,
-                    },
-                ));
+                let enabled = owner_enabled && control.enabled;
+                let layout = UiLayoutResult {
+                    window: owner_layout.window,
+                    rect,
+                    clip: Some(clip),
+                    z,
+                    content_size: [rect.width, rect.height],
+                    dpi_scale: owner_layout.dpi_scale,
+                };
+                let hitbox = UiHitBox {
+                    window: Some(owner_layout.window),
+                    rect,
+                    clip: Some(clip),
+                    z_index: z,
+                };
+                if existing.is_some() {
+                    set_enabled(world, entity, enabled);
+                    set_visible(world, entity, owner_visible);
+                    insert_component_if_changed(world, entity, control);
+                    set_layout_result(world, entity, layout);
+                    set_hitbox(world, entity, hitbox);
+                } else {
+                    world.entity_mut(entity).insert((
+                        UiNode,
+                        UiEnabled(enabled),
+                        UiVisible(owner_visible),
+                        control,
+                        layout,
+                        hitbox,
+                    ));
+                }
                 if world
                     .get::<UiParent>(entity)
                     .is_none_or(|parent| parent.0 != view.owner)
                 {
                     let _ = set_parent(world, entity, view.owner);
                 }
-                current_items.insert(control.id, entity);
+                current_items.insert(id, entity);
             }
         }
         for (id, entity) in old_items {
@@ -10547,20 +11454,25 @@ pub fn sync_collection_views(world: &mut World) {
                 world.despawn(entity);
             }
         }
-        next.insert(view.owner, current_items);
+        previous.insert(view.owner, current_items);
+        stamps.insert(view.owner, view.stamp);
     }
-    for (owner, items) in previous {
-        if live_owners.contains(&owner) {
-            continue;
-        }
-        for entity in items.into_values() {
-            if world.get_entity(entity).is_ok() {
-                detach_from_parent(world, entity);
-                world.despawn(entity);
+    for owner in stale_owners {
+        if let Some(items) = previous.remove(&owner) {
+            for entity in items.into_values() {
+                if world.get_entity(entity).is_ok() {
+                    detach_from_parent(world, entity);
+                    world.despawn(entity);
+                }
             }
         }
+        stamps.remove(&owner);
     }
-    world.resource_mut::<WidgetCollectionItems>().0 = next;
+    previous.retain(|owner, _| live_owners.contains(owner));
+    stamps.retain(|owner, _| live_owners.contains(owner));
+    let mut cache = world.resource_mut::<WidgetCollectionItems>();
+    cache.items = previous;
+    cache.stamps = stamps;
 }
 
 fn insert_component_if_changed<T: Component + PartialEq>(
@@ -10586,7 +11498,24 @@ fn virtual_view_stamp<T: Component>(world: &World, owner: Entity) -> Option<Virt
         theme_changed: world
             .get_resource_change_ticks::<Theme>()
             .map(|ticks| ticks.changed.get()),
+        style_changed: entity_component_changed_tick::<UiComputedStyle>(world, owner),
         key_changed: entity_component_changed_tick::<UiKey>(world, owner),
+    })
+}
+
+fn collection_virtual_stamp(world: &World, owner: Entity) -> Option<CollectionVirtualStamp> {
+    let (kind, stamp) = if let Some(stamp) = virtual_view_stamp::<ListModel<String>>(world, owner) {
+        (0, stamp)
+    } else if let Some(stamp) = virtual_view_stamp::<TreeModel<String>>(world, owner) {
+        (1, stamp)
+    } else {
+        (2, virtual_view_stamp::<PreviewGrid>(world, owner)?)
+    };
+    Some(CollectionVirtualStamp {
+        kind,
+        stamp,
+        visible_changed: entity_component_changed_tick::<UiVisible>(world, owner),
+        enabled_changed: entity_component_changed_tick::<UiEnabled>(world, owner),
     })
 }
 
@@ -10597,6 +11526,89 @@ fn entity_component_changed_tick<T: Component>(world: &World, entity: Entity) ->
         .ok()?
         .get_change_ticks_by_id(component_id)
         .map(|ticks| ticks.changed.get())
+}
+
+fn menu_popup_sync_stamp(
+    world: &World,
+    owner: Entity,
+    viewport: Rect,
+    viewport_changed: Option<u32>,
+    theme_changed: Option<u32>,
+) -> Option<MenuPopupSyncStamp> {
+    Some(MenuPopupSyncStamp {
+        menu_changed: entity_component_changed_tick::<MenuControl>(world, owner)?,
+        layout_changed: entity_component_changed_tick::<UiLayoutResult>(world, owner)?,
+        viewport_changed,
+        viewport,
+        theme_changed,
+        owner_visible: is_visible(world, owner),
+        owner_enabled: world
+            .get::<UiEnabled>(owner)
+            .is_none_or(|enabled| enabled.0),
+        item_ticks: HashMap::new(),
+    })
+}
+
+fn menu_popup_stamp_core_matches(left: &MenuPopupSyncStamp, right: &MenuPopupSyncStamp) -> bool {
+    left.menu_changed == right.menu_changed
+        && left.layout_changed == right.layout_changed
+        && left.viewport_changed == right.viewport_changed
+        && left.viewport == right.viewport
+        && left.theme_changed == right.theme_changed
+        && left.owner_visible == right.owner_visible
+        && left.owner_enabled == right.owner_enabled
+}
+
+fn menu_item_component_ticks(world: &World, owner: Entity) -> HashMap<Entity, Option<u32>> {
+    world
+        .get::<MenuControl>(owner)
+        .into_iter()
+        .flat_map(|menu| &menu.items)
+        .map(|entity| {
+            (
+                *entity,
+                entity_component_changed_tick::<MenuItemControl>(world, *entity),
+            )
+        })
+        .collect()
+}
+
+fn menu_item_controls_changed(world: &World, owner: Entity, previous: &MenuPopupSyncStamp) -> bool {
+    let Some(menu) = world.get::<MenuControl>(owner) else {
+        return true;
+    };
+    menu.items.len() != previous.item_ticks.len()
+        || menu.items.iter().any(|entity| {
+            previous.item_ticks.get(entity).copied()
+                != Some(entity_component_changed_tick::<MenuItemControl>(
+                    world, *entity,
+                ))
+        })
+}
+
+fn control_option_stamp<T: Component>(
+    world: &World,
+    owner: Entity,
+    kind: u8,
+    viewport: Rect,
+    viewport_changed: Option<u32>,
+    theme_changed: Option<u32>,
+) -> Option<ControlOptionStamp> {
+    Some(ControlOptionStamp {
+        kind,
+        model_changed: entity_component_changed_tick::<T>(world, owner)?,
+        layout_changed: entity_component_changed_tick::<UiLayoutResult>(world, owner),
+        popup_changed: (kind == 0)
+            .then(|| entity_component_changed_tick::<DropdownPopupState>(world, owner))
+            .flatten(),
+        theme_changed,
+        viewport_changed,
+        viewport,
+        owner_visible: is_visible(world, owner),
+        owner_enabled: world
+            .get::<UiEnabled>(owner)
+            .is_none_or(|enabled| enabled.0),
+    })
 }
 
 /// Materialize only table columns and rows intersecting the laid out viewport.
@@ -10804,11 +11816,11 @@ pub fn sync_data_table_views(world: &mut World) {
 
     for view in views {
         let mut current_items = previous.remove(&view.owner).unwrap_or_default();
-        let mut stale_keys: Vec<_> = current_items.keys().copied().collect();
+        let mut mounted_keys = HashSet::with_capacity(view.items.len());
         let owner_layout = world.get::<UiLayoutResult>(view.owner).copied();
         if let Some(owner_layout) = owner_layout {
             for view_item in view.items {
-                stale_keys.retain(|key| *key != view_item.key);
+                mounted_keys.insert(view_item.key);
                 let entity = current_items
                     .get(&view_item.key)
                     .copied()
@@ -10864,6 +11876,11 @@ pub fn sync_data_table_views(world: &mut World) {
                 current_items.insert(view_item.key, entity);
             }
         }
+        let stale_keys: Vec<_> = current_items
+            .keys()
+            .filter(|key| !mounted_keys.contains(key))
+            .copied()
+            .collect();
         for key in stale_keys {
             if let Some(entity) = current_items.remove(&key)
                 && world.get_entity(entity).is_ok()
@@ -10912,13 +11929,18 @@ pub fn sync_node_graph_views(world: &mut World) {
         })
         .collect::<Vec<_>>();
     let live_owners: HashSet<_> = owners.iter().map(|(owner, _, _)| *owner).collect();
-    let mut previous = {
-        let mut items = world.resource_mut::<WidgetNodeGraphItems>();
-        std::mem::take(&mut items.items)
+    let mut cache = {
+        let mut resource = world.resource_mut::<WidgetNodeGraphItems>();
+        std::mem::take(&mut *resource)
     };
-    let mut stamps = {
-        let mut cache = world.resource_mut::<WidgetNodeGraphItems>();
-        std::mem::take(&mut cache.stamps)
+    let mut previous = std::mem::take(&mut cache.items);
+    let mut stamps = std::mem::take(&mut cache.stamps);
+    let (mut deltas, mut forced_signature_diffs) = {
+        let mut graph_deltas = world.resource_mut::<WidgetNodeGraphDeltas>();
+        (
+            std::mem::take(&mut graph_deltas.0),
+            std::mem::take(&mut graph_deltas.1),
+        )
     };
     let mut views = Vec::new();
 
@@ -10926,16 +11948,167 @@ pub fn sync_node_graph_views(world: &mut World) {
         if stamps.get(&owner) == Some(&stamp) && previous.contains_key(&owner) {
             continue;
         }
+        let moved_nodes = deltas.remove(&owner).filter(|nodes| !nodes.is_empty());
+        let force_signature_diff = forced_signature_diffs.remove(&owner);
+        let previous_stamp = stamps.get(&owner).copied();
+        let partial_update = moved_nodes.as_ref().filter(|_| {
+            !force_signature_diff && {
+                previous.contains_key(&owner)
+                    && previous_stamp.is_some_and(|previous| {
+                        previous.layout_changed == stamp.layout_changed
+                            && previous.theme_changed == stamp.theme_changed
+                            && previous.style_changed == stamp.style_changed
+                            && previous.key_changed == stamp.key_changed
+                    })
+                    && cache.node_indices.contains_key(&owner)
+                    && cache.link_indices.contains_key(&owner)
+                    && cache.incident_links.contains_key(&owner)
+                    && cache.node_signatures.contains_key(&owner)
+                    && cache.link_signatures.contains_key(&owner)
+                    && cache.transforms.contains_key(&owner)
+            }
+        });
         let Some(layout) = layout else {
             views.push(NodeGraphView {
                 owner,
                 items: Vec::new(),
+                replaced_keys: HashSet::new(),
+                replace_all: true,
             });
             continue;
         };
         let Some(graph) = world.get::<NodeGraph>(owner) else {
             continue;
         };
+        if let Some(moved_nodes) = partial_update {
+            let (items, replaced_keys) = node_graph_delta_view_items(
+                NodeGraphViewContext {
+                    owner,
+                    graph,
+                    layout,
+                    spacing,
+                    node_indices: cache
+                        .node_indices
+                        .get(&owner)
+                        .expect("delta has node indices"),
+                    link_indices: cache
+                        .link_indices
+                        .get(&owner)
+                        .expect("delta has link indices"),
+                    incident_links: cache
+                        .incident_links
+                        .get(&owner)
+                        .expect("delta has incident links"),
+                },
+                moved_nodes,
+                None,
+            );
+            let affected_links: HashSet<_> = moved_nodes
+                .iter()
+                .flat_map(|node_id| {
+                    cache
+                        .incident_links
+                        .get(&owner)
+                        .and_then(|incident| incident.get(node_id))
+                        .into_iter()
+                        .flatten()
+                        .copied()
+                })
+                .collect();
+            if let Some(signatures) = cache.node_signatures.get_mut(&owner) {
+                for node_id in moved_nodes {
+                    if let Some(node) = cache
+                        .node_indices
+                        .get(&owner)
+                        .and_then(|indices| indices.get(node_id))
+                        .and_then(|index| graph.nodes.get(*index))
+                    {
+                        signatures.insert(
+                            *node_id,
+                            node_graph_node_signature(node, graph.selected.contains(node_id)),
+                        );
+                    }
+                }
+            }
+            if let (Some(signatures), Some(nodes), Some(indices)) = (
+                cache.link_signatures.get_mut(&owner),
+                cache.node_signatures.get(&owner),
+                cache.node_indices.get(&owner),
+            ) {
+                for link_id in affected_links {
+                    if let Some(link) = cache
+                        .link_indices
+                        .get(&owner)
+                        .and_then(|indices| indices.get(&link_id))
+                        .and_then(|index| graph.links.get(*index))
+                    {
+                        signatures.insert(
+                            link_id,
+                            node_graph_link_signature(graph, *link, indices, nodes),
+                        );
+                    }
+                }
+            }
+            views.push(NodeGraphView {
+                owner,
+                items,
+                replaced_keys,
+                replace_all: false,
+            });
+            continue;
+        }
+        let signature_snapshot = node_graph_signature_snapshot(graph);
+        let unchanged_structure = previous.contains_key(&owner)
+            && cache.node_order.get(&owner) == Some(&signature_snapshot.node_order)
+            && cache.link_order.get(&owner) == Some(&signature_snapshot.link_order);
+        let unchanged_context = previous_stamp.is_some_and(|previous| {
+            previous.layout_changed == stamp.layout_changed
+                && previous.theme_changed == stamp.theme_changed
+                && previous.style_changed == stamp.style_changed
+                && previous.key_changed == stamp.key_changed
+        }) && cache.transforms.get(&owner)
+            == Some(&signature_snapshot.transform);
+        if unchanged_structure && unchanged_context {
+            let changed_nodes = changed_signature_ids(
+                cache
+                    .node_signatures
+                    .get(&owner)
+                    .expect("stable graph views have node signatures"),
+                &signature_snapshot.node_signatures,
+            );
+            let changed_links = changed_signature_ids(
+                cache
+                    .link_signatures
+                    .get(&owner)
+                    .expect("stable graph views have link signatures"),
+                &signature_snapshot.link_signatures,
+            );
+            if changed_nodes.is_empty() && changed_links.is_empty() {
+                store_node_graph_signature_snapshot(owner, signature_snapshot, &mut cache);
+                continue;
+            }
+            let (items, replaced_keys) = node_graph_delta_view_items(
+                NodeGraphViewContext {
+                    owner,
+                    graph,
+                    layout,
+                    spacing,
+                    node_indices: &signature_snapshot.node_indices,
+                    link_indices: &signature_snapshot.link_indices,
+                    incident_links: &signature_snapshot.incident_links,
+                },
+                &changed_nodes,
+                Some(&changed_links),
+            );
+            views.push(NodeGraphView {
+                owner,
+                items,
+                replaced_keys,
+                replace_all: false,
+            });
+            store_node_graph_signature_snapshot(owner, signature_snapshot, &mut cache);
+            continue;
+        }
         let viewport = layout
             .clip
             .unwrap_or(layout.rect)
@@ -10974,8 +12147,13 @@ pub fn sync_node_graph_views(world: &mut World) {
                     selected: graph.selected.contains(&node.id),
                     collapsed: node.collapsed,
                 }),
+                node_paint_state: Some(NodeGraphNodePaintState {
+                    signature: node_graph_node_signature(node, graph.selected.contains(&node.id))
+                        .paint,
+                }),
                 socket: None,
                 link: None,
+                link_geometry: None,
                 rect,
                 clip,
                 z: layout.z.saturating_add(4),
@@ -10998,6 +12176,7 @@ pub fn sync_node_graph_views(world: &mut World) {
                 items.push(NodeGraphViewItem {
                     key: NodeGraphItemKey::Socket(node.id, socket_index),
                     node: None,
+                    node_paint_state: None,
                     socket: Some(NodeGraphSocketControl {
                         owner,
                         node_id: node.id,
@@ -11007,6 +12186,7 @@ pub fn sync_node_graph_views(world: &mut World) {
                         socket_type: socket.socket_type,
                     }),
                     link: None,
+                    link_geometry: None,
                     rect: socket_rect,
                     clip: socket_clip,
                     z: layout.z.saturating_add(6),
@@ -11014,21 +12194,28 @@ pub fn sync_node_graph_views(world: &mut World) {
             }
         }
         for link in &graph.links {
-            let Some(from) = socket_positions.get(&(link.from_node, link.from_socket)) else {
+            let (Some(from_node), Some(to_node)) = (
+                signature_snapshot
+                    .node_indices
+                    .get(&link.from_node)
+                    .and_then(|index| graph.nodes.get(*index)),
+                signature_snapshot
+                    .node_indices
+                    .get(&link.to_node)
+                    .and_then(|index| graph.nodes.get(*index)),
+            ) else {
                 continue;
             };
-            let Some(to) = socket_positions.get(&(link.to_node, link.to_socket)) else {
+            let Some(points) = node_graph_link_points_between(
+                graph,
+                layout.rect,
+                *link,
+                from_node,
+                to_node,
+                spacing,
+            ) else {
                 continue;
             };
-            let tangent =
-                ((to[0] - from[0]).abs() * 0.5).max(spacing.connection_tangent_min * graph.zoom);
-            let direction = if to[0] >= from[0] { 1.0 } else { -1.0 };
-            let points = [
-                *from,
-                [from[0] + tangent * direction, from[1]],
-                [to[0] - tangent * direction, to[1]],
-                *to,
-            ];
             let min_x = points
                 .iter()
                 .map(|point| point[0])
@@ -11057,6 +12244,7 @@ pub fn sync_node_graph_views(world: &mut World) {
             items.push(NodeGraphViewItem {
                 key: NodeGraphItemKey::Link(link.id),
                 node: None,
+                node_paint_state: None,
                 socket: None,
                 link: Some(NodeGraphLinkControl {
                     owner,
@@ -11067,17 +12255,33 @@ pub fn sync_node_graph_views(world: &mut World) {
                     to_socket: link.to_socket,
                     selected: graph.selected_link == Some(link.id),
                 }),
+                link_geometry: Some(NodeGraphLinkPaintGeometry {
+                    points: points.map(|point| [point[0].to_bits(), point[1].to_bits()]),
+                    source_socket_type: from_node
+                        .sockets
+                        .get(link.from_socket)
+                        .map(|socket| socket.socket_type),
+                }),
                 rect,
                 clip,
                 z: layout.z.saturating_add(2),
             });
         }
-        views.push(NodeGraphView { owner, items });
+        let replaced_keys = items.iter().map(|item| item.key).collect();
+        views.push(NodeGraphView {
+            owner,
+            items,
+            replaced_keys,
+            replace_all: true,
+        });
+        store_node_graph_signature_snapshot(owner, signature_snapshot, &mut cache);
     }
 
     for view in views {
         let mut current_items = previous.remove(&view.owner).unwrap_or_default();
-        let mut stale_keys: Vec<_> = current_items.keys().copied().collect();
+        let replace_all = view.replace_all;
+        let ordered_keys: Vec<_> = view.items.iter().map(|item| item.key).collect();
+        let mut mounted_keys = HashSet::with_capacity(view.items.len());
         let owner_layout = world.get::<UiLayoutResult>(view.owner).copied();
         let owner_key = world.get::<UiKey>(view.owner).map_or_else(
             || format!("entity:{:016x}", view.owner.to_bits()),
@@ -11085,7 +12289,7 @@ pub fn sync_node_graph_views(world: &mut World) {
         );
         if let Some(owner_layout) = owner_layout {
             for view_item in view.items {
-                stale_keys.retain(|key| *key != view_item.key);
+                mounted_keys.insert(view_item.key);
                 let entity = current_items
                     .get(&view_item.key)
                     .copied()
@@ -11132,18 +12336,31 @@ pub fn sync_node_graph_views(world: &mut World) {
                 insert_component_if_changed(world, entity, UiRole::new(role));
                 if let Some(node) = view_item.node {
                     insert_component_if_changed(world, entity, node.clone());
+                    if let Some(paint_state) = view_item.node_paint_state {
+                        insert_component_if_changed(world, entity, paint_state);
+                    }
                     set_ui_style_state(world, entity, UiStyleState::SELECTED, node.selected);
                     remove_component_if_present::<NodeGraphSocketControl>(world, entity);
                     remove_component_if_present::<NodeGraphLinkControl>(world, entity);
+                    remove_component_if_present::<NodeGraphLinkPaintGeometry>(world, entity);
                 } else if let Some(socket) = view_item.socket {
                     insert_component_if_changed(world, entity, socket);
                     remove_component_if_present::<NodeGraphNodeControl>(world, entity);
+                    remove_component_if_present::<NodeGraphNodePaintState>(world, entity);
                     remove_component_if_present::<NodeGraphLinkControl>(world, entity);
+                    remove_component_if_present::<NodeGraphLinkPaintGeometry>(world, entity);
                 } else if let Some(link) = view_item.link {
                     insert_component_if_changed(world, entity, link);
                     set_ui_style_state(world, entity, UiStyleState::SELECTED, link.selected);
+                    if let Some(geometry) = view_item.link_geometry {
+                        insert_component_if_changed(world, entity, geometry);
+                    }
                     remove_component_if_present::<NodeGraphNodeControl>(world, entity);
+                    remove_component_if_present::<NodeGraphNodePaintState>(world, entity);
                     remove_component_if_present::<NodeGraphSocketControl>(world, entity);
+                } else {
+                    remove_component_if_present::<NodeGraphLinkPaintGeometry>(world, entity);
+                    remove_component_if_present::<NodeGraphNodePaintState>(world, entity);
                 }
                 if world
                     .get::<UiParent>(entity)
@@ -11154,6 +12371,19 @@ pub fn sync_node_graph_views(world: &mut World) {
                 current_items.insert(view_item.key, entity);
             }
         }
+        let stale_keys: Vec<_> = if view.replace_all {
+            current_items
+                .keys()
+                .filter(|key| !view.replaced_keys.contains(key))
+                .copied()
+                .collect()
+        } else {
+            view.replaced_keys
+                .iter()
+                .filter(|key| !mounted_keys.contains(key))
+                .copied()
+                .collect()
+        };
         for key in stale_keys {
             if let Some(entity) = current_items.remove(&key)
                 && world.get_entity(entity).is_ok()
@@ -11161,6 +12391,13 @@ pub fn sync_node_graph_views(world: &mut World) {
                 detach_from_parent(world, entity);
                 world.despawn(entity);
             }
+        }
+        if replace_all {
+            let ordered_entities = ordered_keys
+                .iter()
+                .filter_map(|key| current_items.get(key).copied())
+                .collect::<Vec<_>>();
+            reorder_node_graph_children(world, view.owner, &ordered_entities);
         }
         previous.insert(view.owner, current_items);
     }
@@ -11173,6 +12410,14 @@ pub fn sync_node_graph_views(world: &mut World) {
         let Some(items) = previous.remove(&owner) else {
             continue;
         };
+        cache.node_indices.remove(&owner);
+        cache.link_indices.remove(&owner);
+        cache.incident_links.remove(&owner);
+        cache.node_signatures.remove(&owner);
+        cache.node_order.remove(&owner);
+        cache.link_signatures.remove(&owner);
+        cache.link_order.remove(&owner);
+        cache.transforms.remove(&owner);
         for entity in items.into_values() {
             if world.get_entity(entity).is_ok() {
                 detach_from_parent(world, entity);
@@ -11184,9 +12429,409 @@ pub fn sync_node_graph_views(world: &mut World) {
         stamps.insert(owner, stamp);
     }
     stamps.retain(|owner, _| live_owners.contains(owner));
-    let mut cache = world.resource_mut::<WidgetNodeGraphItems>();
+    cache
+        .node_indices
+        .retain(|owner, _| live_owners.contains(owner));
+    cache
+        .link_indices
+        .retain(|owner, _| live_owners.contains(owner));
+    cache
+        .incident_links
+        .retain(|owner, _| live_owners.contains(owner));
+    cache
+        .node_signatures
+        .retain(|owner, _| live_owners.contains(owner));
+    cache
+        .node_order
+        .retain(|owner, _| live_owners.contains(owner));
+    cache
+        .link_signatures
+        .retain(|owner, _| live_owners.contains(owner));
+    cache
+        .link_order
+        .retain(|owner, _| live_owners.contains(owner));
+    cache
+        .transforms
+        .retain(|owner, _| live_owners.contains(owner));
     cache.items = previous;
     cache.stamps = stamps;
+    cache.journaled_ticks.clear();
+    world.insert_resource(cache);
+}
+
+fn reorder_node_graph_children(world: &mut World, owner: Entity, ordered: &[Entity]) {
+    let Some(mut children) = world.get_mut::<UiChildren>(owner) else {
+        return;
+    };
+    let graph_children: HashSet<_> = ordered.iter().copied().collect();
+    let insertion = children
+        .0
+        .iter()
+        .position(|child| graph_children.contains(child))
+        .unwrap_or(children.0.len());
+    let mut next: Vec<_> = children
+        .0
+        .iter()
+        .copied()
+        .filter(|child| !graph_children.contains(child))
+        .collect();
+    let insertion = insertion.min(next.len());
+    next.splice(insertion..insertion, ordered.iter().copied());
+    if children.0 != next {
+        children.0 = next;
+    }
+}
+
+fn node_graph_node_signature(node: &crate::NodeModel, selected: bool) -> NodeGraphNodeSignature {
+    let mut paint = DefaultHasher::new();
+    node.id.hash(&mut paint);
+    node.title.hash(&mut paint);
+    (node.category as u8).hash(&mut paint);
+    node.position.map(f32::to_bits).hash(&mut paint);
+    node.size.map(f32::to_bits).hash(&mut paint);
+    node.collapsed.hash(&mut paint);
+    selected.hash(&mut paint);
+    node.sockets.len().hash(&mut paint);
+
+    let mut socket_layout = DefaultHasher::new();
+    for socket in &node.sockets {
+        socket.name.hash(&mut paint);
+        (socket.direction as u8).hash(&mut paint);
+        (socket.socket_type as u8).hash(&mut paint);
+        (socket.direction as u8).hash(&mut socket_layout);
+    }
+
+    NodeGraphNodeSignature {
+        paint: paint.finish(),
+        geometry: NodeGraphNodeGeometrySignature {
+            position: node.position.map(f32::to_bits),
+            size: node.size.map(f32::to_bits),
+            collapsed: node.collapsed,
+            socket_layout: socket_layout.finish(),
+        },
+    }
+}
+
+fn node_graph_link_signature(
+    graph: &NodeGraph,
+    link: crate::NodeLink,
+    node_indices: &HashMap<NodeId, usize>,
+    node_signatures: &HashMap<NodeId, NodeGraphNodeSignature>,
+) -> NodeGraphLinkSignature {
+    let source_socket_type = node_indices
+        .get(&link.from_node)
+        .and_then(|index| graph.nodes.get(*index))
+        .and_then(|node| node.sockets.get(link.from_socket))
+        .map(|socket| socket.socket_type);
+    NodeGraphLinkSignature {
+        from_node: link.from_node,
+        from_socket: link.from_socket,
+        to_node: link.to_node,
+        to_socket: link.to_socket,
+        from_geometry: node_signatures
+            .get(&link.from_node)
+            .map(|signature| signature.geometry),
+        to_geometry: node_signatures
+            .get(&link.to_node)
+            .map(|signature| signature.geometry),
+        source_socket_type,
+        selected: graph.selected_link == Some(link.id),
+    }
+}
+
+fn node_graph_signature_snapshot(graph: &NodeGraph) -> NodeGraphSignatureSnapshot {
+    let node_indices: HashMap<_, _> = graph
+        .nodes
+        .iter()
+        .enumerate()
+        .map(|(index, node)| (node.id, index))
+        .collect();
+    let node_signatures: HashMap<_, _> = graph
+        .nodes
+        .iter()
+        .map(|node| {
+            (
+                node.id,
+                node_graph_node_signature(node, graph.selected.contains(&node.id)),
+            )
+        })
+        .collect();
+    let node_order = graph.nodes.iter().map(|node| node.id).collect();
+    let link_indices: HashMap<_, _> = graph
+        .links
+        .iter()
+        .enumerate()
+        .map(|(index, link)| (link.id, index))
+        .collect();
+    let link_order: Vec<_> = graph.links.iter().map(|link| link.id).collect();
+    let mut incident_links = HashMap::<NodeId, Vec<u64>>::new();
+    for link in &graph.links {
+        incident_links
+            .entry(link.from_node)
+            .or_default()
+            .push(link.id);
+        incident_links
+            .entry(link.to_node)
+            .or_default()
+            .push(link.id);
+    }
+    let link_signatures = graph
+        .links
+        .iter()
+        .map(|link| {
+            (
+                link.id,
+                node_graph_link_signature(graph, *link, &node_indices, &node_signatures),
+            )
+        })
+        .collect();
+
+    NodeGraphSignatureSnapshot {
+        node_indices,
+        node_signatures,
+        node_order,
+        link_indices,
+        link_signatures,
+        link_order,
+        incident_links,
+        transform: NodeGraphTransformSignature {
+            pan: graph.pan.map(f32::to_bits),
+            zoom: graph.zoom.to_bits(),
+        },
+    }
+}
+
+fn store_node_graph_signature_snapshot(
+    owner: Entity,
+    snapshot: NodeGraphSignatureSnapshot,
+    cache: &mut WidgetNodeGraphItems,
+) {
+    cache.node_indices.insert(owner, snapshot.node_indices);
+    cache
+        .node_signatures
+        .insert(owner, snapshot.node_signatures);
+    cache.node_order.insert(owner, snapshot.node_order);
+    cache.link_indices.insert(owner, snapshot.link_indices);
+    cache
+        .link_signatures
+        .insert(owner, snapshot.link_signatures);
+    cache.link_order.insert(owner, snapshot.link_order);
+    cache.incident_links.insert(owner, snapshot.incident_links);
+    cache.transforms.insert(owner, snapshot.transform);
+}
+
+fn changed_signature_ids<K: Copy + Eq + std::hash::Hash, V: PartialEq>(
+    previous: &HashMap<K, V>,
+    current: &HashMap<K, V>,
+) -> HashSet<K> {
+    current
+        .iter()
+        .filter_map(|(key, value)| (previous.get(key) != Some(value)).then_some(*key))
+        .chain(
+            previous
+                .keys()
+                .filter(|key| !current.contains_key(key))
+                .copied(),
+        )
+        .collect()
+}
+
+struct NodeGraphViewContext<'a> {
+    owner: Entity,
+    graph: &'a NodeGraph,
+    layout: UiLayoutResult,
+    spacing: &'a bui_style::ThemeNodeGraphSpacing,
+    node_indices: &'a HashMap<NodeId, usize>,
+    link_indices: &'a HashMap<u64, usize>,
+    incident_links: &'a HashMap<NodeId, Vec<u64>>,
+}
+
+fn node_graph_delta_view_items(
+    context: NodeGraphViewContext<'_>,
+    moved_nodes: &HashSet<NodeId>,
+    changed_links: Option<&HashSet<u64>>,
+) -> (Vec<NodeGraphViewItem>, HashSet<NodeGraphItemKey>) {
+    let NodeGraphViewContext {
+        owner,
+        graph,
+        layout,
+        spacing,
+        node_indices,
+        link_indices,
+        incident_links,
+    } = context;
+    let viewport = layout
+        .clip
+        .unwrap_or(layout.rect)
+        .intersection(layout.rect)
+        .and_then(|clip| {
+            clip.intersection(Rect {
+                y: layout.rect.y + spacing.header_height,
+                height: (layout.rect.height - spacing.header_height).max(0.0),
+                ..layout.rect
+            })
+        })
+        .unwrap_or_default();
+    let mut items = Vec::new();
+    let mut replaced_keys = HashSet::new();
+    let mut affected_links = HashSet::new();
+
+    for node_id in moved_nodes {
+        let node_key = NodeGraphItemKey::Node(*node_id);
+        replaced_keys.insert(node_key);
+        let Some(node) = node_indices
+            .get(node_id)
+            .and_then(|index| graph.nodes.get(*index))
+            .filter(|node| node.id == *node_id)
+        else {
+            continue;
+        };
+        let node_rect = node_graph_node_rect(graph, layout.rect, node, spacing);
+        if let Some(clip) = node_rect.intersection(viewport) {
+            items.push(NodeGraphViewItem {
+                key: node_key,
+                node: Some(NodeGraphNodeControl {
+                    owner,
+                    node_id: node.id,
+                    label: node.title.clone(),
+                    selected: graph.selected.contains(&node.id),
+                    collapsed: node.collapsed,
+                }),
+                node_paint_state: Some(NodeGraphNodePaintState {
+                    signature: node_graph_node_signature(node, graph.selected.contains(&node.id))
+                        .paint,
+                }),
+                socket: None,
+                link: None,
+                link_geometry: None,
+                rect: node_rect,
+                clip,
+                z: layout.z.saturating_add(4),
+            });
+        }
+
+        for (socket_index, socket) in node.sockets.iter().enumerate() {
+            let key = NodeGraphItemKey::Socket(node.id, socket_index);
+            replaced_keys.insert(key);
+            let Some(center) =
+                node_graph_socket_position(graph, layout.rect, node, socket_index, spacing)
+            else {
+                continue;
+            };
+            let socket_rect = Rect::new(center[0] - 8.0, center[1] - 8.0, 16.0, 16.0);
+            let Some(clip) = socket_rect.intersection(viewport) else {
+                continue;
+            };
+            items.push(NodeGraphViewItem {
+                key,
+                node: None,
+                node_paint_state: None,
+                socket: Some(NodeGraphSocketControl {
+                    owner,
+                    node_id: node.id,
+                    socket_index,
+                    direction: socket.direction,
+                    label: socket.name.clone(),
+                    socket_type: socket.socket_type,
+                }),
+                link: None,
+                link_geometry: None,
+                rect: socket_rect,
+                clip,
+                z: layout.z.saturating_add(6),
+            });
+        }
+
+        if changed_links.is_none() {
+            affected_links.extend(incident_links.get(node_id).into_iter().flatten().copied());
+        }
+    }
+
+    if let Some(changed_links) = changed_links {
+        affected_links.extend(changed_links.iter().copied());
+    }
+
+    for link_id in affected_links {
+        let key = NodeGraphItemKey::Link(link_id);
+        replaced_keys.insert(key);
+        let Some(link) = link_indices
+            .get(&link_id)
+            .and_then(|index| graph.links.get(*index))
+            .filter(|link| link.id == link_id)
+            .copied()
+        else {
+            continue;
+        };
+        let (Some(from), Some(to)) = (
+            node_indices
+                .get(&link.from_node)
+                .and_then(|index| graph.nodes.get(*index))
+                .filter(|node| node.id == link.from_node),
+            node_indices
+                .get(&link.to_node)
+                .and_then(|index| graph.nodes.get(*index))
+                .filter(|node| node.id == link.to_node),
+        ) else {
+            continue;
+        };
+        let Some(points) =
+            node_graph_link_points_between(graph, layout.rect, link, from, to, spacing)
+        else {
+            continue;
+        };
+        let min_x = points
+            .iter()
+            .map(|point| point[0])
+            .fold(f32::INFINITY, f32::min);
+        let max_x = points
+            .iter()
+            .map(|point| point[0])
+            .fold(f32::NEG_INFINITY, f32::max);
+        let min_y = points
+            .iter()
+            .map(|point| point[1])
+            .fold(f32::INFINITY, f32::min);
+        let max_y = points
+            .iter()
+            .map(|point| point[1])
+            .fold(f32::NEG_INFINITY, f32::max);
+        let rect = Rect::new(
+            min_x - 8.0,
+            min_y - 8.0,
+            (max_x - min_x).max(16.0) + 16.0,
+            (max_y - min_y).max(16.0) + 16.0,
+        );
+        let Some(clip) = rect.intersection(viewport) else {
+            continue;
+        };
+        items.push(NodeGraphViewItem {
+            key,
+            node: None,
+            node_paint_state: None,
+            socket: None,
+            link: Some(NodeGraphLinkControl {
+                owner,
+                link_id,
+                from_node: link.from_node,
+                from_socket: link.from_socket,
+                to_node: link.to_node,
+                to_socket: link.to_socket,
+                selected: graph.selected_link == Some(link_id),
+            }),
+            link_geometry: Some(NodeGraphLinkPaintGeometry {
+                points: points.map(|point| [point[0].to_bits(), point[1].to_bits()]),
+                source_socket_type: from
+                    .sockets
+                    .get(link.from_socket)
+                    .map(|socket| socket.socket_type),
+            }),
+            rect,
+            clip,
+            z: layout.z.saturating_add(2),
+        });
+    }
+
+    (items, replaced_keys)
 }
 
 /// Keep legacy display models synchronized with the shared byte-indexed text buffer.
@@ -11202,14 +12847,17 @@ pub fn sync_text_controls(world: &mut World) {
         Option<&TextField>,
         Option<&TextArea>,
     )>();
-    let buffers: Vec<_> = query
-        .iter(world)
-        .filter(|(entity, _, _, _, _)| {
-            batch
-                .as_ref()
-                .is_none_or(|batch| batch.all || batch.entities.contains(entity))
-        })
-        .map(|(entity, buffer, label, field, area)| {
+    let targets: Vec<_> = if let Some(batch) = batch.as_ref().filter(|batch| !batch.all) {
+        batch.entities.iter().copied().collect()
+    } else {
+        query.iter(world).map(|(entity, ..)| entity).collect()
+    };
+    let buffers: Vec<_> = targets
+        .into_iter()
+        .filter_map(|entity| {
+            let Ok((_, buffer, label, field, area)) = query.get(world, entity) else {
+                return None;
+            };
             let label = label.map_or_else(String::new, |label| label.text.clone());
             let placeholder = field
                 .map(|field| field.placeholder.clone())
@@ -11217,7 +12865,7 @@ pub fn sync_text_controls(world: &mut World) {
                 .unwrap_or_default();
             let wrap = area.is_some_and(|area| area.wrap);
             let scroll_line = area.map_or(0, |area| area.scroll_line);
-            (
+            Some((
                 entity,
                 buffer.as_str().to_owned(),
                 buffer.caret(),
@@ -11227,7 +12875,7 @@ pub fn sync_text_controls(world: &mut World) {
                 placeholder,
                 wrap,
                 scroll_line,
-            )
+            ))
         })
         .collect();
     let theme = world.get_resource::<Theme>().cloned().unwrap_or_default();
@@ -11442,9 +13090,10 @@ struct WidgetPaintInvalidations<'w, 's> {
     parent_changes: Query<'w, 's, Entity, Changed<UiParent>>,
     children_changes: Query<'w, 's, Entity, Changed<UiChildren>>,
     root_changes: Query<'w, 's, Entity, Changed<UiLayoutRoot>>,
+    style_changes: Query<'w, 's, Entity, Changed<UiComputedStyle>>,
+    node_graph_roots: Query<'w, 's, Entity, With<NodeGraph>>,
     inherited_state: Query<'w, 's, Entity, Or<(Changed<UiEnabled>, Changed<UiVisible>)>>,
     children: Query<'w, 's, &'static UiChildren>,
-    canvases: Query<'w, 's, Entity, With<Canvas>>,
 }
 
 /// Rebuild the shared draw list from current widget state and the completed layout pass.
@@ -11527,7 +13176,13 @@ fn collect_widget_paint_changes(
             Changed<HsvColorEditor>,
             Changed<CurveEditor>,
             Changed<NodeGraph>,
-            Changed<Canvas>,
+            Changed<NodeGraphNodeControl>,
+            Changed<NodeGraphNodePaintState>,
+            Changed<NodeGraphSocketControl>,
+            Changed<NodeGraphLinkControl>,
+            Changed<NodeGraphLinkPaintGeometry>,
+            Changed<crate::canvas::CanvasObjectControl>,
+            Changed<crate::canvas::CanvasObjectPaint>,
             Changed<Tooltip>,
         )>,
     >,
@@ -11552,9 +13207,6 @@ fn collect_widget_paint_changes(
             Changed<UiKey>,
             Changed<crate::canvas::CanvasObjectControl>,
             Changed<crate::IconButtonAssetState>,
-            Changed<NodeGraphNodeControl>,
-            Changed<NodeGraphSocketControl>,
-            Changed<NodeGraphLinkControl>,
             Changed<crate::PanelGroup>,
             Changed<RadioOptionControl>,
         )>,
@@ -11562,7 +13214,6 @@ fn collect_widget_paint_changes(
     theme: Res<Theme>,
     interaction: Res<WidgetInteractionState>,
     focus: Option<Res<UiFocus>>,
-    canvas_images: Option<Res<crate::canvas::CanvasImageAssets>>,
     mut cache: ResMut<WidgetPaintCache>,
     mut dirty: ResMut<UiDirty>,
 ) {
@@ -11617,19 +13268,16 @@ fn collect_widget_paint_changes(
     for entity in &invalidations.root_changes {
         mark_widget_paint_subtree(entity, &invalidations.children, &mut dirty);
     }
+    for entity in &invalidations.style_changes {
+        if invalidations.node_graph_roots.get(entity).is_ok() {
+            mark_widget_paint_subtree(entity, &invalidations.children, &mut dirty);
+        }
+    }
     if theme.is_changed() {
         dirty.mark_all(UiDirtyDomain::Paint);
     }
     for entity in &invalidations.inherited_state {
         mark_widget_paint_subtree(entity, &invalidations.children, &mut dirty);
-    }
-    if canvas_images
-        .as_ref()
-        .is_some_and(|images| images.is_changed())
-    {
-        for entity in &invalidations.canvases {
-            dirty.mark(UiDirtyDomain::Paint, entity);
-        }
     }
     for entity in &base {
         dirty.mark(UiDirtyDomain::Paint, entity);
@@ -12349,6 +13997,7 @@ fn collect_widget_paint_full(
         mut paint_parents,
         parent_changes,
         children_changes,
+        mut node_graph_chrome_stamps,
     ) = {
         let mut cache = world.resource_mut::<WidgetPaintCache>();
         (
@@ -12360,6 +14009,7 @@ fn collect_widget_paint_full(
             std::mem::take(&mut cache.paint_parents),
             std::mem::take(&mut cache.pending_parent_changes),
             std::mem::take(&mut cache.pending_children_changes),
+            std::mem::take(&mut cache.node_graph_chrome_stamps),
         )
     };
     let repaint_all = batch.as_ref().is_none_or(|batch| batch.all) || paint_ranks.is_empty();
@@ -12420,16 +14070,25 @@ fn collect_widget_paint_full(
     let mut repainted_entities = 0;
 
     for &entity in &entities {
-        if fragments.remove(&entity) {
+        let graph_root = world.get::<NodeGraph>(entity).is_some();
+        if !graph_root && fragments.remove(&entity) {
             removed_fragments.insert(entity);
         }
         if world.get::<UiLayoutResult>(entity).is_none() {
+            if fragments.remove(&entity) {
+                removed_fragments.insert(entity);
+            }
+            node_graph_chrome_stamps.remove(&entity);
             if let Some(rank) = paint_ranks.remove(&entity) {
                 paint_order_keys.remove(&rank);
             }
             continue;
         }
         if !is_visible(world, entity) {
+            if fragments.remove(&entity) {
+                removed_fragments.insert(entity);
+            }
+            node_graph_chrome_stamps.remove(&entity);
             continue;
         }
         let Some(layout) = world.get::<UiLayoutResult>(entity).copied() else {
@@ -12467,7 +14126,12 @@ fn collect_widget_paint_full(
             && world.get::<HsvColorEditor>(entity).is_none()
             && world.get::<CurveEditor>(entity).is_none()
             && world.get::<NodeGraph>(entity).is_none()
+            && world.get::<NodeGraphNodeControl>(entity).is_none()
+            && world.get::<NodeGraphLinkControl>(entity).is_none()
             && world.get::<Canvas>(entity).is_none()
+            && world
+                .get::<crate::canvas::CanvasObjectControl>(entity)
+                .is_none()
             && world.get::<Tooltip>(entity).is_none()
         {
             continue;
@@ -12475,6 +14139,10 @@ fn collect_widget_paint_full(
         let clip_rect = match layout.clip {
             Some(parent_clip) => {
                 let Some(intersection) = parent_clip.intersection(layout.rect) else {
+                    if fragments.remove(&entity) {
+                        removed_fragments.insert(entity);
+                    }
+                    node_graph_chrome_stamps.remove(&entity);
                     continue;
                 };
                 intersection
@@ -12489,6 +14157,35 @@ fn collect_widget_paint_full(
         let camera = world
             .get::<bevy_camera::Camera>(layout.window)
             .map(|_| layout.window);
+        if let Some(graph) = world.get::<NodeGraph>(entity) {
+            let state = world
+                .get::<NodeGraphEditorState>(entity)
+                .cloned()
+                .unwrap_or_default();
+            let label = world
+                .get::<Label>(entity)
+                .map_or("Node graph", |label| label.text.as_str());
+            let canvas_surface = node_graph_canvas_surface(world, entity, &base_theme);
+            let stamp = node_graph_chrome_stamp(
+                graph,
+                &state,
+                label,
+                layout,
+                camera,
+                theme,
+                canvas_surface,
+            );
+            if !repaint_all
+                && fragments.contains(&entity)
+                && node_graph_chrome_stamps.get(&entity) == Some(&stamp)
+            {
+                continue;
+            }
+            node_graph_chrome_stamps.insert(entity, stamp);
+        }
+        if fragments.remove(&entity) {
+            removed_fragments.insert(entity);
+        }
         let order = paint_ranks.get(&entity).copied().unwrap_or_default();
         let mut fragment_guard = PaintFragmentGuard {
             fragment_entities: &mut fragments,
@@ -12623,19 +14320,17 @@ fn collect_widget_paint_full(
             );
             continue;
         }
-        if let Some(graph) = world.get::<NodeGraph>(entity).cloned() {
+        if let Some(graph) = world.get::<NodeGraph>(entity) {
             let font = resolve_text_font(world, entity, ui_default_text_font(theme.font_size));
-            let output_label_widths =
-                measure_node_graph_output_label_widths(world, &graph, &font, theme);
             let canvas_surface = node_graph_canvas_surface(world, entity, &base_theme);
-            paint_node_graph(
+            paint_node_graph_target(
                 NodeGraphPaint {
-                    graph: &graph,
+                    graph,
                     state: world
                         .get::<NodeGraphEditorState>(entity)
                         .cloned()
                         .unwrap_or_default(),
-                    output_label_widths,
+                    output_label_widths: HashMap::new(),
                     canvas_surface,
                     label: world
                         .get::<Label>(entity)
@@ -12646,20 +14341,188 @@ fn collect_widget_paint_full(
                     theme,
                     font,
                 },
+                NodeGraphPaintTarget::Chrome,
                 camera_items,
             );
             continue;
         }
-        if let Some(canvas) = world.get::<Canvas>(entity) {
-            crate::canvas::paint_canvas(
+        if let Some(node_control) = world.get::<NodeGraphNodeControl>(entity) {
+            let owner = node_control.owner;
+            let node_id = node_control.node_id;
+            let Some(owner_layout) = world.get::<UiLayoutResult>(owner).copied() else {
+                continue;
+            };
+            let owner_clip = match owner_layout.clip {
+                Some(parent_clip) => {
+                    let Some(clip) = parent_clip.intersection(owner_layout.rect) else {
+                        continue;
+                    };
+                    ClipRect::from(clip)
+                }
+                None => ClipRect::from(owner_layout.rect),
+            };
+            let owner_theme = styled_theme(world, owner, &base_theme);
+            let font = resolve_text_font(world, owner, ui_default_text_font(owner_theme.font_size));
+            let Some(node_index) = world
+                .resource::<WidgetNodeGraphItems>()
+                .node_indices
+                .get(&owner)
+                .and_then(|indices| indices.get(&node_id))
+                .copied()
+            else {
+                continue;
+            };
+            let (zoom, output_labels) = {
+                let Some(graph) = world.get::<NodeGraph>(owner) else {
+                    continue;
+                };
+                let Some(node) = graph
+                    .nodes
+                    .get(node_index)
+                    .filter(|node| node.id == node_id)
+                else {
+                    continue;
+                };
+                (
+                    graph.zoom,
+                    node.sockets
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, socket)| socket.direction == SocketDirection::Output)
+                        .map(|(index, socket)| (index, socket.name.clone()))
+                        .collect::<Vec<_>>(),
+                )
+            };
+            let output_label_widths = cached_node_graph_output_label_widths(
+                world,
+                owner,
+                node_id,
+                &output_labels,
+                &font,
+                &owner_theme,
+                zoom,
+            );
+            let Some(graph) = world.get::<NodeGraph>(owner) else {
+                continue;
+            };
+            let Some(node) = graph
+                .nodes
+                .get(node_index)
+                .filter(|node| node.id == node_id)
+            else {
+                continue;
+            };
+            paint_node_graph_target(
+                NodeGraphPaint {
+                    graph,
+                    state: NodeGraphEditorState::default(),
+                    output_label_widths,
+                    canvas_surface: owner_theme.color(ThemeColorToken::NodeGraphSurface),
+                    label: "Node graph",
+                    rect: owner_layout.rect,
+                    clip: owner_clip,
+                    z: owner_layout.z,
+                    theme: &owner_theme,
+                    font,
+                },
+                NodeGraphPaintTarget::Node(node),
+                camera_items,
+            );
+            continue;
+        }
+        if let Some(link_control) = world.get::<NodeGraphLinkControl>(entity) {
+            let owner = link_control.owner;
+            let Some(owner_layout) = world.get::<UiLayoutResult>(owner).copied() else {
+                continue;
+            };
+            let owner_clip = match owner_layout.clip {
+                Some(parent_clip) => {
+                    let Some(clip) = parent_clip.intersection(owner_layout.rect) else {
+                        continue;
+                    };
+                    ClipRect::from(clip)
+                }
+                None => ClipRect::from(owner_layout.rect),
+            };
+            let owner_theme = styled_theme(world, owner, &base_theme);
+            let font = resolve_text_font(world, owner, ui_default_text_font(owner_theme.font_size));
+            let indices = world.resource::<WidgetNodeGraphItems>();
+            let Some(link_index) = indices
+                .link_indices
+                .get(&owner)
+                .and_then(|links| links.get(&link_control.link_id))
+                .copied()
+            else {
+                continue;
+            };
+            let (Some(graph), Some(node_indices)) = (
+                world.get::<NodeGraph>(owner),
+                indices.node_indices.get(&owner),
+            ) else {
+                continue;
+            };
+            let Some(link) = graph.links.get(link_index).copied() else {
+                continue;
+            };
+            let (Some(from), Some(to)) = (
+                node_indices
+                    .get(&link.from_node)
+                    .and_then(|index| graph.nodes.get(*index)),
+                node_indices
+                    .get(&link.to_node)
+                    .and_then(|index| graph.nodes.get(*index)),
+            ) else {
+                continue;
+            };
+            paint_node_graph_target(
+                NodeGraphPaint {
+                    graph,
+                    state: NodeGraphEditorState::default(),
+                    output_label_widths: HashMap::new(),
+                    canvas_surface: owner_theme.color(ThemeColorToken::NodeGraphSurface),
+                    label: "Node graph",
+                    rect: owner_layout.rect,
+                    clip: owner_clip,
+                    z: owner_layout.z,
+                    theme: &owner_theme,
+                    font,
+                },
+                NodeGraphPaintTarget::Link { link, from, to },
+                camera_items,
+            );
+            continue;
+        }
+        if let Some(control) = world.get::<crate::canvas::CanvasObjectControl>(entity) {
+            let owner = control.owner;
+            let (Some(canvas), Some(paint), Some(owner_layout)) = (
+                world.get::<Canvas>(owner),
+                world.get::<crate::canvas::CanvasObjectPaint>(entity),
+                world.get::<UiLayoutResult>(owner).copied(),
+            ) else {
+                continue;
+            };
+            let Some(owner_clip) = owner_layout
+                .clip
+                .unwrap_or(owner_layout.rect)
+                .intersection(owner_layout.rect)
+            else {
+                continue;
+            };
+            let owner_theme = styled_theme(world, owner, &base_theme);
+            crate::canvas::paint_canvas_object_fragment(
                 canvas,
-                rect,
-                clip,
-                z,
-                theme,
+                &paint.0,
+                owner_layout.rect,
+                ClipRect::from(owner_clip),
+                owner_layout.z,
+                &owner_theme,
                 world.get_resource::<crate::canvas::CanvasImageAssets>(),
                 camera_items,
             );
+            continue;
+        }
+        if world.get::<Canvas>(entity).is_some() {
+            crate::canvas::paint_canvas_background(rect, clip, z, theme, camera_items);
             continue;
         }
         if let Some(header) = world.get::<DataTableHeaderControl>(entity).cloned() {
@@ -13096,7 +14959,7 @@ fn collect_widget_paint_full(
             } else {
                 "Grid"
             };
-            let sort = match browser.sort {
+            let sort = match browser.sort() {
                 FileSort::Name => "Name",
                 FileSort::Kind => "Kind",
                 FileSort::Size => "Size",
@@ -13123,11 +14986,11 @@ fn collect_widget_paint_full(
                         ],
                         text: format!(
                             "{view}  •  Sort: {sort} {}  •  Filter: {}  •  ★ {bookmark_names}",
-                            if browser.ascending { "↑" } else { "↓" },
-                            if browser.filter.is_empty() {
+                            if browser.ascending() { "↑" } else { "↓" },
+                            if browser.filter().is_empty() {
                                 "type to search"
                             } else {
-                                &browser.filter
+                                browser.filter()
                             }
                         ),
                     },
@@ -13633,10 +15496,40 @@ fn collect_widget_paint_full(
         }
     }
 
+    let graph_link_groups: HashMap<_, _> = changed_outputs
+        .keys()
+        .map(|entity| {
+            let group = world
+                .get::<NodeGraphLinkControl>(*entity)
+                .and_then(|control| {
+                    world
+                        .resource::<WidgetNodeGraphItems>()
+                        .link_indices
+                        .get(&control.owner)
+                        .and_then(|links| links.get(&control.link_id))
+                        .map(|index| WidgetFragmentBatchGroup {
+                            owner: control.owner,
+                            chunk: (*index / 128) as u32,
+                        })
+                });
+            (*entity, group)
+        })
+        .collect();
+    let live_graph_owners: HashSet<_> = world
+        .resource::<WidgetNodeGraphItems>()
+        .items
+        .keys()
+        .copied()
+        .collect();
+    node_graph_chrome_stamps.retain(|owner, _| live_graph_owners.contains(owner));
+
     let mut display_list = world.resource_mut::<DisplayList>();
     let mut published_fragments = 0;
     for (_, fragment) in changed_outputs {
-        published_fragments += usize::from(display_list.upsert_widget_fragment(fragment));
+        let batch_group = graph_link_groups.get(&fragment.entity).copied().flatten();
+        published_fragments += usize::from(
+            display_list.upsert_widget_fragment_with_batch_group(fragment, batch_group),
+        );
     }
     for entity in removed_fragments {
         published_fragments += usize::from(display_list.remove_widget_fragment(entity));
@@ -13648,6 +15541,10 @@ fn collect_widget_paint_full(
     cache.paint_children = paint_children;
     cache.paint_roots = paint_roots;
     cache.paint_parents = paint_parents;
+    cache.node_graph_chrome_stamps = node_graph_chrome_stamps;
+    cache
+        .node_graph_output_measurements
+        .retain(|owner, _| live_graph_owners.contains(owner));
     cache.input_stamp = input_stamp;
     cache.rebuilt_frames = cache.rebuilt_frames.saturating_add(1);
     cache.repainted_entities = repainted_entities;
@@ -14751,6 +16648,17 @@ struct NodeGraphPaint<'a> {
     font: TextFont,
 }
 
+#[derive(Clone, Copy)]
+enum NodeGraphPaintTarget<'a> {
+    Chrome,
+    Node(&'a crate::NodeModel),
+    Link {
+        link: crate::NodeLink,
+        from: &'a crate::NodeModel,
+        to: &'a crate::NodeModel,
+    },
+}
+
 fn paint_hsv_color_editor(paint: HsvColorPaint<'_>, output: &mut Vec<DrawItem>) {
     let HsvColorPaint {
         editor,
@@ -15298,6 +17206,7 @@ fn paint_curve_editor(paint: CurveEditorPaint<'_>, output: &mut Vec<DrawItem>) {
     ));
 }
 
+#[cfg(test)]
 fn paint_node_graph(paint: NodeGraphPaint<'_>, output: &mut Vec<DrawItem>) {
     let NodeGraphPaint {
         graph,
@@ -15311,21 +17220,85 @@ fn paint_node_graph(paint: NodeGraphPaint<'_>, output: &mut Vec<DrawItem>) {
         theme,
         font,
     } = paint;
-    let spacing = &theme.spacing.node_graph;
-    output.push(item(
+    let make_paint = |output_label_widths| NodeGraphPaint {
+        graph,
+        state: state.clone(),
+        output_label_widths,
+        canvas_surface,
+        label,
+        rect,
         clip,
         z,
-        Primitive::RoundedRect {
-            rect: ClipRect::from(rect),
-            radius: theme.corner_radius,
-            color: canvas_surface,
-        },
-    ));
+        theme,
+        font: font.clone(),
+    };
+    paint_node_graph_target(
+        make_paint(output_label_widths.clone()),
+        NodeGraphPaintTarget::Chrome,
+        output,
+    );
+    let nodes_by_id: HashMap<_, _> = graph.nodes.iter().map(|node| (node.id, node)).collect();
+    for link in &graph.links {
+        let (Some(from), Some(to)) = (
+            nodes_by_id.get(&link.from_node).copied(),
+            nodes_by_id.get(&link.to_node).copied(),
+        ) else {
+            continue;
+        };
+        paint_node_graph_target(
+            make_paint(HashMap::new()),
+            NodeGraphPaintTarget::Link {
+                link: *link,
+                from,
+                to,
+            },
+            output,
+        );
+    }
+    for node in &graph.nodes {
+        paint_node_graph_target(
+            make_paint(output_label_widths.clone()),
+            NodeGraphPaintTarget::Node(node),
+            output,
+        );
+    }
+}
+
+fn paint_node_graph_target(
+    paint: NodeGraphPaint<'_>,
+    target: NodeGraphPaintTarget<'_>,
+    output: &mut Vec<DrawItem>,
+) {
+    let NodeGraphPaint {
+        graph,
+        state,
+        output_label_widths,
+        canvas_surface,
+        label,
+        rect,
+        clip,
+        z,
+        theme,
+        font,
+    } = paint;
+    let spacing = &theme.spacing.node_graph;
     let header = Rect {
         height: spacing.header_height.min(rect.height),
         ..rect
     };
-    if let Some(header_clip) = intersect_clip_rect(clip, header) {
+    let paints_chrome = matches!(target, NodeGraphPaintTarget::Chrome);
+    if paints_chrome {
+        output.push(item(
+            clip,
+            z,
+            Primitive::RoundedRect {
+                rect: ClipRect::from(rect),
+                radius: theme.corner_radius,
+                color: canvas_surface,
+            },
+        ));
+    }
+    if paints_chrome && let Some(header_clip) = intersect_clip_rect(clip, header) {
         output.push(item(
             header_clip,
             z.saturating_add(1),
@@ -15402,59 +17375,53 @@ fn paint_node_graph(paint: NodeGraphPaint<'_>, output: &mut Vec<DrawItem>) {
     let Some(viewport_clip) = intersect_clip_rect(clip, viewport) else {
         return;
     };
-    let grid_spacing = (spacing.grid_spacing * graph.zoom)
-        .clamp(spacing.grid_spacing_min, spacing.grid_spacing_max);
-    let grid = theme
-        .color(ThemeColorToken::NodeGraphGridLine)
-        .mix(canvas_surface, 0.6);
-    let dot_size = (2.0 * graph.zoom.sqrt()).clamp(1.5, 2.6);
-    let start_x = viewport.x + graph.pan[0].rem_euclid(grid_spacing);
-    let start_y = viewport.y + graph.pan[1].rem_euclid(grid_spacing);
-    let mut dot_x = start_x;
-    let mut columns = 0;
-    let mut dot_count = 0;
-    while dot_x <= viewport.x + viewport.width && columns < 48 && dot_count < 1024 {
-        let mut dot_y = start_y;
-        let mut rows = 0;
-        while dot_y <= viewport.y + viewport.height && rows < 48 && dot_count < 1024 {
-            output.push(item(
-                viewport_clip,
-                z.saturating_add(1),
-                Primitive::Ellipse {
-                    rect: ClipRect {
-                        x: dot_x - dot_size * 0.5,
-                        y: dot_y - dot_size * 0.5,
-                        width: dot_size,
-                        height: dot_size,
+    if paints_chrome {
+        let grid_spacing = (spacing.grid_spacing * graph.zoom)
+            .clamp(spacing.grid_spacing_min, spacing.grid_spacing_max);
+        let grid = theme
+            .color(ThemeColorToken::NodeGraphGridLine)
+            .mix(canvas_surface, 0.6);
+        let dot_size = (2.0 * graph.zoom.sqrt()).clamp(1.5, 2.6);
+        let start_x = viewport.x + graph.pan[0].rem_euclid(grid_spacing);
+        let start_y = viewport.y + graph.pan[1].rem_euclid(grid_spacing);
+        let mut dot_x = start_x;
+        let mut columns = 0;
+        let mut dot_count = 0;
+        while dot_x <= viewport.x + viewport.width && columns < 48 && dot_count < 1024 {
+            let mut dot_y = start_y;
+            let mut rows = 0;
+            while dot_y <= viewport.y + viewport.height && rows < 48 && dot_count < 1024 {
+                output.push(item(
+                    viewport_clip,
+                    z.saturating_add(1),
+                    Primitive::Ellipse {
+                        rect: ClipRect {
+                            x: dot_x - dot_size * 0.5,
+                            y: dot_y - dot_size * 0.5,
+                            width: dot_size,
+                            height: dot_size,
+                        },
+                        color: grid,
                     },
-                    color: grid,
-                },
-            ));
-            dot_y += grid_spacing;
-            rows += 1;
-            dot_count += 1;
+                ));
+                dot_y += grid_spacing;
+                rows += 1;
+                dot_count += 1;
+            }
+            dot_x += grid_spacing;
+            columns += 1;
         }
-        dot_x += grid_spacing;
-        columns += 1;
     }
-
-    let nodes_by_id: HashMap<_, _> = graph.nodes.iter().map(|node| (node.id, node)).collect();
-    for link in &graph.links {
-        let (Some(from), Some(to)) = (
-            nodes_by_id.get(&link.from_node),
-            nodes_by_id.get(&link.to_node),
-        ) else {
-            continue;
-        };
-        let Some(points) = node_graph_link_points_between(graph, rect, *link, from, to, spacing)
+    if let NodeGraphPaintTarget::Link { link, from, to } = target {
+        let Some(points) = node_graph_link_points_between(graph, rect, link, from, to, spacing)
         else {
-            continue;
+            return;
         };
         if node_graph_bezier_bounds(points, 8.0)
             .intersection(viewport)
             .is_none()
         {
-            continue;
+            return;
         }
         let selected = graph.selected_link == Some(link.id);
         output.push(item(
@@ -15476,10 +17443,10 @@ fn paint_node_graph(paint: NodeGraphPaint<'_>, output: &mut Vec<DrawItem>) {
         ));
     }
 
-    for node in &graph.nodes {
+    if let NodeGraphPaintTarget::Node(node) = target {
         let node_rect = node_graph_node_rect(graph, rect, node, spacing);
         let Some(node_clip) = intersect_clip_rect(viewport_clip, node_rect) else {
-            continue;
+            return;
         };
         let selected = graph.selected.contains(&node.id);
         output.push(item(
@@ -15657,7 +17624,9 @@ fn paint_node_graph(paint: NodeGraphPaint<'_>, output: &mut Vec<DrawItem>) {
         );
     }
 
-    if let Some(gesture) = state.gesture {
+    if matches!(target, NodeGraphPaintTarget::Chrome)
+        && let Some(gesture) = state.gesture
+    {
         match gesture {
             NodeGraphGesture::LinkDrag {
                 start_node,
@@ -15850,59 +17819,86 @@ fn node_graph_canvas_surface(world: &World, entity: Entity, theme: &Theme) -> Rg
         .unwrap_or(token_surface)
 }
 
-fn measure_node_graph_output_label_widths(
+fn cached_node_graph_output_label_widths(
     world: &mut World,
-    graph: &NodeGraph,
+    owner: Entity,
+    node_id: NodeId,
+    labels: &[(usize, String)],
     font: &TextFont,
     theme: &Theme,
+    zoom: f32,
 ) -> HashMap<(NodeId, usize), f32> {
-    let labels = graph
-        .nodes
-        .iter()
-        .flat_map(|node| {
-            node.sockets
-                .iter()
-                .enumerate()
-                .filter(|(_, socket)| socket.direction == SocketDirection::Output)
-                .map(|(index, socket)| ((node.id, index), socket.name.clone()))
-        })
-        .collect::<Vec<_>>();
-    if labels.is_empty()
-        || !world.contains_resource::<TextPipeline>()
-        || !world.contains_resource::<Assets<Font>>()
-        || !world.contains_resource::<FontCx>()
-        || !world.contains_resource::<LayoutCx>()
+    let layout_available = world.contains_resource::<TextPipeline>()
+        && world.contains_resource::<Assets<Font>>()
+        && world.contains_resource::<FontCx>()
+        && world.contains_resource::<LayoutCx>();
+    let signature = format!(
+        "font={font:?};size={:08x};line={:08x};zoom={:08x};available={layout_available};labels={labels:?}",
+        theme.font_size.to_bits(),
+        theme.line_height.to_bits(),
+        zoom.to_bits(),
+    );
+    if let Some(measurements) = world
+        .resource::<WidgetPaintCache>()
+        .node_graph_output_measurements
+        .get(&owner)
+        .and_then(|nodes| nodes.get(&node_id))
+        .filter(|measurements| measurements.signature == signature)
     {
-        return HashMap::new();
+        return measurements
+            .widths
+            .iter()
+            .map(|(index, width)| ((node_id, *index), *width))
+            .collect();
     }
 
-    let font = font
-        .clone()
-        .with_font_size(theme.font_size * graph.zoom.max(0.01));
-    world.resource_scope(|world, mut pipeline: Mut<TextPipeline>| {
-        world.resource_scope(|world, fonts: Mut<Assets<Font>>| {
-            world.resource_scope(|world, mut font_cx: Mut<FontCx>| {
-                world.resource_scope(|_, mut layout_cx: Mut<LayoutCx>| {
-                    labels
-                        .into_iter()
-                        .filter_map(|(key, text)| {
-                            let layout = TextLayout::shape_with_bevy(
-                                &text,
-                                f32::INFINITY,
-                                &font,
-                                &mut pipeline,
-                                &fonts,
-                                &mut font_cx,
-                                &mut layout_cx,
-                            )
-                            .ok()?;
-                            Some((key, layout.bounds().width.max(0.0)))
-                        })
-                        .collect()
+    let widths = if labels.is_empty() || !layout_available {
+        HashMap::new()
+    } else {
+        let font = font
+            .clone()
+            .with_font_size(theme.font_size * zoom.max(0.01));
+        world.resource_scope(|world, mut pipeline: Mut<TextPipeline>| {
+            world.resource_scope(|world, fonts: Mut<Assets<Font>>| {
+                world.resource_scope(|world, mut font_cx: Mut<FontCx>| {
+                    world.resource_scope(|_, mut layout_cx: Mut<LayoutCx>| {
+                        labels
+                            .iter()
+                            .filter_map(|(index, text)| {
+                                let layout = TextLayout::shape_with_bevy(
+                                    text,
+                                    f32::INFINITY,
+                                    &font,
+                                    &mut pipeline,
+                                    &fonts,
+                                    &mut font_cx,
+                                    &mut layout_cx,
+                                )
+                                .ok()?;
+                                Some((*index, layout.bounds().width.max(0.0)))
+                            })
+                            .collect()
+                    })
                 })
             })
         })
-    })
+    };
+    world
+        .resource_mut::<WidgetPaintCache>()
+        .node_graph_output_measurements
+        .entry(owner)
+        .or_default()
+        .insert(
+            node_id,
+            NodeGraphOutputLabelMeasurements {
+                signature,
+                widths: widths.clone(),
+            },
+        );
+    widths
+        .into_iter()
+        .map(|(index, width)| ((node_id, index), width))
+        .collect()
 }
 
 fn socket_type_color(socket_type: crate::SocketType, theme: &Theme) -> Rgba {
@@ -16408,6 +18404,246 @@ mod tests {
                 .collect(),
             ..DataTable::default()
         }
+    }
+
+    #[test]
+    fn virtual_collection_and_browser_sync_skip_idle_work_and_only_rewrite_selected_rows() {
+        let mut world = World::new();
+        world.init_resource::<Theme>();
+        world.init_resource::<WidgetCollectionItems>();
+        world.init_resource::<WidgetFileBrowserItems>();
+        let window = world.spawn_empty().id();
+        let list = ListModel {
+            items: (0..10_000)
+                .map(|id| ListItem {
+                    id,
+                    value: format!("Item {id}"),
+                    enabled: true,
+                })
+                .collect(),
+            ..ListModel::default()
+        };
+        let collection_rect = UiRect::new(0.0, 0.0, 400.0, 300.0);
+        let collection_owner = world
+            .spawn((
+                list,
+                UiLayoutResult {
+                    window,
+                    rect: collection_rect,
+                    clip: None,
+                    z: 1,
+                    content_size: [collection_rect.width, collection_rect.height],
+                    dpi_scale: 1.0,
+                },
+            ))
+            .id();
+
+        let directory = std::env::temp_dir().join(format!(
+            "bui-virtual-browser-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        for index in 0..32 {
+            std::fs::write(directory.join(format!("entry-{index:02}.txt")), b"entry").unwrap();
+        }
+        let browser = FileBrowser::new(&directory).unwrap();
+        let browser_rect = UiRect::new(500.0, 0.0, 400.0, 300.0);
+        let browser_owner = world
+            .spawn((
+                browser,
+                FileBrowserViewState::default(),
+                UiLayoutResult {
+                    window,
+                    rect: browser_rect,
+                    clip: None,
+                    z: 1,
+                    content_size: [browser_rect.width, browser_rect.height],
+                    dpi_scale: 1.0,
+                },
+            ))
+            .id();
+
+        sync_collection_views(&mut world);
+        sync_file_browser_items(&mut world);
+        let collection_items = world
+            .resource::<WidgetCollectionItems>()
+            .items
+            .get(&collection_owner)
+            .unwrap()
+            .clone();
+        let browser_items = world
+            .resource::<WidgetFileBrowserItems>()
+            .items
+            .get(&browser_owner)
+            .unwrap()
+            .clone();
+        assert!(
+            collection_items.len() < 32,
+            "only viewport rows are mounted"
+        );
+        assert!(browser_items.len() < 32, "only viewport rows are mounted");
+
+        let collection_ticks: HashMap<_, _> = collection_items
+            .iter()
+            .map(|(id, entity)| {
+                (
+                    *id,
+                    entity_component_changed_tick::<CollectionItemControl>(&world, *entity)
+                        .unwrap(),
+                )
+            })
+            .collect();
+        let browser_ticks: HashMap<_, _> = browser_items
+            .iter()
+            .map(|(path, entity)| {
+                (
+                    path.clone(),
+                    entity_component_changed_tick::<FileBrowserItem>(&world, *entity).unwrap(),
+                )
+            })
+            .collect();
+        let collection_cache_tick = world
+            .get_resource_change_ticks::<WidgetCollectionItems>()
+            .unwrap()
+            .changed
+            .get();
+        let browser_cache_tick = world
+            .get_resource_change_ticks::<WidgetFileBrowserItems>()
+            .unwrap()
+            .changed
+            .get();
+
+        world.increment_change_tick();
+        sync_collection_views(&mut world);
+        sync_file_browser_items(&mut world);
+        assert_eq!(
+            world
+                .get_resource_change_ticks::<WidgetCollectionItems>()
+                .unwrap()
+                .changed
+                .get(),
+            collection_cache_tick,
+            "idle collection sync does not mutate its cache"
+        );
+        assert_eq!(
+            world
+                .get_resource_change_ticks::<WidgetFileBrowserItems>()
+                .unwrap()
+                .changed
+                .get(),
+            browser_cache_tick,
+            "idle file-browser sync does not mutate its cache"
+        );
+        for (id, entity) in &collection_items {
+            assert_eq!(
+                entity_component_changed_tick::<CollectionItemControl>(&world, *entity),
+                collection_ticks.get(id).copied()
+            );
+        }
+        for (path, entity) in &browser_items {
+            assert_eq!(
+                entity_component_changed_tick::<FileBrowserItem>(&world, *entity),
+                browser_ticks.get(path).copied()
+            );
+        }
+
+        let selected_id = *collection_items.keys().min().unwrap();
+        let selected_path = browser_items.keys().next().unwrap().clone();
+        world.increment_change_tick();
+        assert!(
+            world
+                .get_mut::<ListModel<String>>(collection_owner)
+                .unwrap()
+                .select(selected_id, false, false)
+        );
+        world
+            .get_mut::<FileBrowser>(browser_owner)
+            .unwrap()
+            .selected
+            .insert(selected_path.clone());
+        world.increment_change_tick();
+        sync_collection_views(&mut world);
+        sync_file_browser_items(&mut world);
+
+        let changed_collection_rows = collection_items
+            .iter()
+            .filter(|(id, entity)| {
+                entity_component_changed_tick::<CollectionItemControl>(&world, **entity)
+                    != collection_ticks.get(id).copied()
+            })
+            .map(|(id, _)| *id)
+            .collect::<Vec<_>>();
+        assert_eq!(changed_collection_rows, [selected_id]);
+        let changed_browser_rows = browser_items
+            .iter()
+            .filter(|(path, entity)| {
+                entity_component_changed_tick::<FileBrowserItem>(&world, **entity)
+                    != browser_ticks.get(*path).copied()
+            })
+            .map(|(path, _)| path.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(changed_browser_rows, [selected_path]);
+
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn data_table_sync_prunes_keys_for_a_wide_and_tall_viewport() {
+        let mut app = App::new();
+        app.add_plugins(WidgetPlugin);
+        let window = app.world_mut().spawn_empty().id();
+        let mut table = sample_table(96);
+        table.columns = (0..48)
+            .map(|column| crate::TableColumn::new(format!("Column {column}"), 30.0))
+            .collect();
+        for row in &mut table.rows {
+            row.cells = (0..48)
+                .map(|column| format!("Row {} Column {column}", row.id))
+                .collect();
+        }
+        let owner = WidgetTree::new(WidgetNode::data_table("Wide", table))
+            .spawn(app.world_mut(), None)
+            .unwrap();
+        let rect = UiRect::new(0.0, 0.0, 1_000.0, 800.0);
+        app.world_mut().entity_mut(owner).insert(UiLayoutResult {
+            window,
+            rect,
+            clip: None,
+            z: 3,
+            content_size: [rect.width, rect.height],
+            dpi_scale: 1.0,
+        });
+
+        sync_data_table_views(app.world_mut());
+        let initial_cells = data_table_cells(app.world_mut(), owner);
+        assert!(
+            initial_cells.len() > 1_000,
+            "the viewport is both wide and tall"
+        );
+
+        {
+            let mut table = app.world_mut().get_mut::<DataTable>(owner).unwrap();
+            table.scroll_rows = 12;
+            table.scroll_x = 120.0;
+        }
+        app.world_mut().increment_change_tick();
+        sync_data_table_views(app.world_mut());
+
+        let cells = data_table_cells(app.world_mut(), owner);
+        let headers = data_table_headers(app.world_mut(), owner);
+        let cached_count = app
+            .world()
+            .resource::<WidgetDataTableItems>()
+            .items
+            .get(&owner)
+            .unwrap()
+            .len();
+        assert_eq!(cached_count, cells.len() + headers.len());
+        assert!(cells.len() > 1_000);
     }
 
     #[derive(Resource, Debug, Default, PartialEq, Eq)]
@@ -17934,6 +20170,40 @@ mod tests {
             .unwrap()
             .open(None);
         sync_menu_popups(app.world_mut());
+        let stable_menu_tick =
+            entity_component_changed_tick::<MenuControl>(app.world(), owner).unwrap();
+        let stable_owner_hitbox_tick =
+            entity_component_changed_tick::<UiHitBox>(app.world(), owner).unwrap();
+        let stable_row_control_tick =
+            entity_component_changed_tick::<MenuItemControl>(app.world(), row).unwrap();
+        let stable_row_layout_tick =
+            entity_component_changed_tick::<UiLayoutResult>(app.world(), row).unwrap();
+        app.world_mut().increment_change_tick();
+        sync_menu_popups(app.world_mut());
+        assert_eq!(
+            entity_component_changed_tick::<MenuControl>(app.world(), owner),
+            Some(stable_menu_tick),
+            "idle menu sync must not touch its source component"
+        );
+        assert_eq!(
+            entity_component_changed_tick::<UiHitBox>(app.world(), owner),
+            Some(stable_owner_hitbox_tick),
+            "idle menu sync must not rewrite the owner hitbox"
+        );
+        assert_eq!(
+            entity_component_changed_tick::<MenuItemControl>(app.world(), row),
+            Some(stable_row_control_tick)
+        );
+        assert_eq!(
+            entity_component_changed_tick::<UiLayoutResult>(app.world(), row),
+            Some(stable_row_layout_tick)
+        );
+        app.world_mut()
+            .get_mut::<MenuItemControl>(row)
+            .unwrap()
+            .enabled = false;
+        sync_menu_popups(app.world_mut());
+        assert!(!app.world().get::<UiEnabled>(row).unwrap().0);
         advance_menu_animations_by(app.world_mut(), 0.05);
 
         let popup = app.world().get::<MenuControl>(owner).unwrap().popup.bounds;
@@ -20952,6 +23222,123 @@ mod tests {
     }
 
     #[test]
+    fn option_views_skip_idle_rows_and_track_direct_model_writes() {
+        let mut world = World::new();
+        world.init_resource::<Theme>();
+        world.init_resource::<WidgetControlOptionItems>();
+        let window = world.spawn_empty().id();
+        let viewport = Rect::new(0.0, 0.0, 500.0, 320.0);
+        world.spawn(UiLayoutRoot::new(window, viewport, 1.0));
+        let dropdown_rect = Rect::new(20.0, 20.0, 180.0, 24.0);
+        let mut dropdown = Dropdown::new(["First", "Second", "Third"], Some(0));
+        dropdown.open();
+        let dropdown_owner = world
+            .spawn((
+                UiNode,
+                dropdown,
+                UiLayoutResult {
+                    window,
+                    rect: dropdown_rect,
+                    clip: None,
+                    z: 1,
+                    content_size: [dropdown_rect.width, dropdown_rect.height],
+                    dpi_scale: 1.0,
+                },
+            ))
+            .id();
+        let radio_rect = Rect::new(20.0, 140.0, 180.0, 100.0);
+        let radio_owner = world
+            .spawn((
+                UiNode,
+                RadioGroup::new(["A", "B", "C"], Some(0)),
+                UiLayoutResult {
+                    window,
+                    rect: radio_rect,
+                    clip: None,
+                    z: 1,
+                    content_size: [radio_rect.width, radio_rect.height],
+                    dpi_scale: 1.0,
+                },
+            ))
+            .id();
+
+        sync_control_option_views(&mut world);
+        let dropdown_rows =
+            world.resource::<WidgetControlOptionItems>().dropdowns[&dropdown_owner].clone();
+        let radio_rows = world.resource::<WidgetControlOptionItems>().radios[&radio_owner].clone();
+        let dropdown_ticks = dropdown_rows
+            .iter()
+            .map(|entity| {
+                (
+                    entity_component_changed_tick::<DropdownOptionControl>(&world, *entity),
+                    entity_component_changed_tick::<UiVisible>(&world, *entity),
+                    entity_component_changed_tick::<UiEnabled>(&world, *entity),
+                    entity_component_changed_tick::<UiLayoutResult>(&world, *entity),
+                    entity_component_changed_tick::<UiHitBox>(&world, *entity),
+                )
+            })
+            .collect::<Vec<_>>();
+        let radio_ticks = radio_rows
+            .iter()
+            .map(|entity| {
+                (
+                    entity_component_changed_tick::<RadioOptionControl>(&world, *entity),
+                    entity_component_changed_tick::<UiVisible>(&world, *entity),
+                    entity_component_changed_tick::<UiEnabled>(&world, *entity),
+                    entity_component_changed_tick::<UiLayoutResult>(&world, *entity),
+                    entity_component_changed_tick::<UiHitBox>(&world, *entity),
+                )
+            })
+            .collect::<Vec<_>>();
+        world.increment_change_tick();
+        sync_control_option_views(&mut world);
+        assert_eq!(
+            dropdown_rows
+                .iter()
+                .map(|entity| (
+                    entity_component_changed_tick::<DropdownOptionControl>(&world, *entity),
+                    entity_component_changed_tick::<UiVisible>(&world, *entity),
+                    entity_component_changed_tick::<UiEnabled>(&world, *entity),
+                    entity_component_changed_tick::<UiLayoutResult>(&world, *entity),
+                    entity_component_changed_tick::<UiHitBox>(&world, *entity),
+                ))
+                .collect::<Vec<_>>(),
+            dropdown_ticks,
+            "idle dropdown sync must not rewrite option components"
+        );
+        assert_eq!(
+            radio_rows
+                .iter()
+                .map(|entity| (
+                    entity_component_changed_tick::<RadioOptionControl>(&world, *entity),
+                    entity_component_changed_tick::<UiVisible>(&world, *entity),
+                    entity_component_changed_tick::<UiEnabled>(&world, *entity),
+                    entity_component_changed_tick::<UiLayoutResult>(&world, *entity),
+                    entity_component_changed_tick::<UiHitBox>(&world, *entity),
+                ))
+                .collect::<Vec<_>>(),
+            radio_ticks,
+            "idle radio sync must not rewrite option components"
+        );
+
+        world.get_mut::<Dropdown>(dropdown_owner).unwrap().selected = Some(1);
+        world.get_mut::<RadioGroup>(radio_owner).unwrap().selected = Some(1);
+        sync_control_option_views(&mut world);
+        assert!(
+            world
+                .get::<DropdownOptionControl>(dropdown_rows[1])
+                .unwrap()
+                .selected
+        );
+        assert!(
+            world
+                .get::<RadioOptionControl>(radio_rows[1])
+                .unwrap()
+                .selected
+        );
+    }
+
+    #[test]
     fn focus_departure_commits_composite_edits_and_text_ime_keeps_local_undo() {
         let mut app = App::new();
         app.add_plugins((CorePlugin, bui_text::TextPlugin, WidgetPlugin));
@@ -22594,6 +24981,191 @@ mod tests {
     }
 
     #[test]
+    fn panel_clip_sync_is_idle_safe_and_restores_clips_after_reopen_or_reparent() {
+        let mut app = App::new();
+        app.init_resource::<Theme>()
+            .init_resource::<WidgetPanelSyncCache>()
+            .init_resource::<WidgetPanelSyncInvalidations>()
+            .add_systems(
+                Update,
+                (collect_panel_descendant_invalidations, sync_panel_children).chain(),
+            );
+        let window = app.world_mut().spawn_empty().id();
+        let panel_rect = Rect::new(0.0, 0.0, 160.0, 120.0);
+        let panel = app
+            .world_mut()
+            .spawn((
+                UiNode,
+                Panel::new("Details", false),
+                UiLayoutResult {
+                    window,
+                    rect: panel_rect,
+                    clip: None,
+                    z: 1,
+                    content_size: [panel_rect.width, panel_rect.height],
+                    dpi_scale: 1.0,
+                },
+            ))
+            .id();
+        let child_rect = Rect::new(8.0, 32.0, 140.0, 24.0);
+        let child = app
+            .world_mut()
+            .spawn((
+                UiNode,
+                UiVisible(true),
+                crate::WidgetElement {
+                    key: None,
+                    spec: crate::declarative::WidgetSpec::Label {
+                        text: "Child".into(),
+                    },
+                },
+                UiLayoutResult {
+                    window,
+                    rect: child_rect,
+                    clip: None,
+                    z: 2,
+                    content_size: [child_rect.width, child_rect.height],
+                    dpi_scale: 1.0,
+                },
+                UiHitBox {
+                    window: Some(window),
+                    rect: to_ui_rect(child_rect),
+                    clip: None,
+                    z_index: 2,
+                },
+            ))
+            .id();
+        set_parent(app.world_mut(), child, panel).unwrap();
+
+        app.update();
+        let collapsed_clip = app
+            .world()
+            .get::<UiLayoutResult>(child)
+            .unwrap()
+            .clip
+            .unwrap();
+        assert_eq!(collapsed_clip.height, 0.0);
+        app.update();
+        app.update();
+        let stable_layout_tick =
+            entity_component_changed_tick::<UiLayoutResult>(app.world(), child).unwrap();
+        let stable_hitbox_tick =
+            entity_component_changed_tick::<UiHitBox>(app.world(), child).unwrap();
+        app.update();
+        assert_eq!(
+            entity_component_changed_tick::<UiLayoutResult>(app.world(), child),
+            Some(stable_layout_tick),
+            "idle collapsed panels must not rewrite descendant layouts"
+        );
+        assert_eq!(
+            entity_component_changed_tick::<UiHitBox>(app.world(), child),
+            Some(stable_hitbox_tick),
+            "idle collapsed panels must not rewrite descendant hitboxes"
+        );
+
+        {
+            let mut layout = app.world_mut().get_mut::<UiLayoutResult>(child).unwrap();
+            layout.rect.y += 4.0;
+            layout.clip = None;
+        }
+        app.update();
+        let direct_edit_clip = app
+            .world()
+            .get::<UiLayoutResult>(child)
+            .unwrap()
+            .clip
+            .unwrap();
+        assert_eq!(direct_edit_clip.height, 0.0);
+        assert_eq!(
+            app.world().get::<UiLayoutResult>(child).unwrap().rect.y,
+            36.0
+        );
+
+        app.world_mut()
+            .get_mut::<Panel>(panel)
+            .unwrap()
+            .state
+            .progress = 0.25;
+        app.world_mut()
+            .get_mut::<Panel>(panel)
+            .unwrap()
+            .state
+            .target_expanded = true;
+        app.update();
+        let quarter_clip = app
+            .world()
+            .get::<UiLayoutResult>(child)
+            .unwrap()
+            .clip
+            .unwrap();
+        assert!(quarter_clip.height > 0.0);
+        app.world_mut()
+            .get_mut::<Panel>(panel)
+            .unwrap()
+            .state
+            .progress = 0.5;
+        app.update();
+        let half_clip = app
+            .world()
+            .get::<UiLayoutResult>(child)
+            .unwrap()
+            .clip
+            .unwrap();
+        assert!(half_clip.height > quarter_clip.height);
+        app.world_mut()
+            .get_mut::<Panel>(panel)
+            .unwrap()
+            .state
+            .progress = 1.0;
+        app.update();
+        assert_eq!(app.world().get::<UiLayoutResult>(child).unwrap().clip, None);
+        assert_eq!(app.world().get::<UiHitBox>(child).unwrap().clip, None);
+
+        app.world_mut()
+            .get_mut::<Panel>(panel)
+            .unwrap()
+            .state
+            .progress = 0.0;
+        app.world_mut()
+            .get_mut::<Panel>(panel)
+            .unwrap()
+            .state
+            .target_expanded = false;
+        app.update();
+        app.world_mut()
+            .get_mut::<Panel>(panel)
+            .unwrap()
+            .state
+            .progress = 0.25;
+        app.world_mut()
+            .get_mut::<Panel>(panel)
+            .unwrap()
+            .state
+            .target_expanded = true;
+        app.update();
+        assert!(
+            app.world()
+                .get::<UiLayoutResult>(child)
+                .unwrap()
+                .clip
+                .unwrap()
+                .height
+                > 0.0
+        );
+
+        detach_from_parent(app.world_mut(), child);
+        app.update();
+        assert_eq!(app.world().get::<UiLayoutResult>(child).unwrap().clip, None);
+        assert_eq!(app.world().get::<UiHitBox>(child).unwrap().clip, None);
+        assert!(
+            !app.world()
+                .resource::<WidgetPanelSyncCache>()
+                .clips
+                .contains_key(&child)
+        );
+    }
+
+    #[test]
     fn menu_and_node_graph_painters_consume_semantic_theme_tokens() {
         for kind in [bui_style::ThemeKind::Dark, bui_style::ThemeKind::Light] {
             let theme = Theme::new(kind);
@@ -22690,21 +25262,20 @@ mod tests {
         let node = graph.nodes.iter().find(|node| node.id == node_id).unwrap();
         let node_rect = node_graph_node_rect(&graph, rect, node, &theme.spacing.node_graph);
         let mut items = Vec::new();
-        paint_node_graph(
-            NodeGraphPaint {
-                graph: &graph,
-                state: NodeGraphEditorState::default(),
-                output_label_widths: HashMap::from([((node_id, 1), 44.0)]),
-                canvas_surface: theme.color(ThemeColorToken::NodeGraphSurface),
-                label: "Texture graph",
-                rect,
-                clip,
-                z: 1,
-                theme: &theme,
-                font: ui_default_text_font(theme.font_size),
-            },
-            &mut items,
-        );
+        let paint = || NodeGraphPaint {
+            graph: &graph,
+            state: NodeGraphEditorState::default(),
+            output_label_widths: HashMap::from([((node_id, 1), 44.0)]),
+            canvas_surface: theme.color(ThemeColorToken::NodeGraphSurface),
+            label: "Texture graph",
+            rect,
+            clip,
+            z: 1,
+            theme: &theme,
+            font: ui_default_text_font(theme.font_size),
+        };
+        paint_node_graph_target(paint(), NodeGraphPaintTarget::Chrome, &mut items);
+        paint_node_graph_target(paint(), NodeGraphPaintTarget::Node(node), &mut items);
 
         let category_header = node_graph_category_color(NodeCategory::Texture, &theme);
         assert!(items.iter().any(|item| matches!(
@@ -23722,7 +26293,7 @@ mod tests {
         }];
         app.update();
         assert_eq!(
-            app.world().get::<FileBrowser>(owner).unwrap().filter,
+            app.world().get::<FileBrowser>(owner).unwrap().filter(),
             "alpha"
         );
         assert_eq!(browser_items(app.world_mut(), owner).len(), 2); // Directories stay visible while filtering.
@@ -23817,7 +26388,7 @@ mod tests {
         assert_eq!(
             app.world()
                 .resource::<WidgetCollectionItems>()
-                .0
+                .items
                 .get(&owner)
                 .and_then(|items| items.get(&5)),
             Some(&stable_id)
@@ -24751,6 +27322,251 @@ mod tests {
         assert_eq!(changes.graph_links, 0);
         assert_eq!(changes.layout_results, 0);
         assert_eq!(changes.hit_boxes, 0);
+    }
+
+    #[test]
+    fn node_graph_moves_and_direct_edits_repaint_only_changed_node_and_links() {
+        fn graph_fragments(
+            app: &App,
+            owner: Entity,
+        ) -> HashMap<NodeGraphItemKey, bui_render::WidgetRenderFragment> {
+            let entities = &app.world().resource::<WidgetNodeGraphItems>().items[&owner];
+            let fragments = app.world().resource::<DisplayList>().widget_fragments();
+            entities
+                .iter()
+                .filter_map(|(key, entity)| {
+                    fragments
+                        .get(entity)
+                        .cloned()
+                        .map(|fragment| (*key, fragment))
+                })
+                .collect()
+        }
+
+        fn changed_keys(
+            before: &HashMap<NodeGraphItemKey, bui_render::WidgetRenderFragment>,
+            after: &HashMap<NodeGraphItemKey, bui_render::WidgetRenderFragment>,
+        ) -> HashSet<NodeGraphItemKey> {
+            before
+                .keys()
+                .chain(after.keys())
+                .copied()
+                .collect::<HashSet<_>>()
+                .into_iter()
+                .filter(|key| before.get(key) != after.get(key))
+                .collect()
+        }
+
+        let mut app = App::new();
+        app.add_plugins(WidgetPlugin);
+        let window = app.world_mut().spawn_empty().id();
+        let mut graph = NodeGraph::default();
+        let moved = graph.add_node(
+            "Moved",
+            [40.0, 40.0],
+            vec![NodeSocket::output("out", crate::SocketType::Float)],
+        );
+        let first_sink = graph.add_node(
+            "First sink",
+            [300.0, 30.0],
+            vec![
+                NodeSocket::input("in", crate::SocketType::Float),
+                NodeSocket::output("out", crate::SocketType::Float),
+            ],
+        );
+        let second_sink = graph.add_node(
+            "Second sink",
+            [300.0, 180.0],
+            vec![NodeSocket::input("in", crate::SocketType::Float)],
+        );
+        let distant_sink = graph.add_node(
+            "Distant sink",
+            [560.0, 30.0],
+            vec![NodeSocket::input("in", crate::SocketType::Float)],
+        );
+        let first_link = graph.create_link(moved, 0, first_sink, 0).unwrap();
+        let second_link = graph.create_link(moved, 0, second_sink, 0).unwrap();
+        let distant_link = graph.create_link(first_sink, 1, distant_sink, 0).unwrap();
+        graph.selected.insert(moved);
+        let owner = WidgetTree::new(WidgetNode::node_graph("Graph", graph))
+            .spawn(app.world_mut(), None)
+            .unwrap();
+        let rect = UiRect::new(20.0, 30.0, 720.0, 500.0);
+        app.world_mut().entity_mut(owner).insert(UiLayoutResult {
+            window,
+            rect,
+            clip: Some(UiRect::new(26.0, 34.0, 700.0, 480.0)),
+            z: 8,
+            content_size: [rect.width, rect.height],
+            dpi_scale: 1.5,
+        });
+        app.update();
+
+        let initial = graph_fragments(&app, owner);
+        let spacing = app.world().resource::<Theme>().spacing.node_graph;
+        let graph_model = app.world().get::<NodeGraph>(owner).unwrap();
+        let moved_node = graph_model
+            .nodes
+            .iter()
+            .find(|node| node.id == moved)
+            .unwrap();
+        let moved_rect = node_graph_node_rect(graph_model, rect, moved_node, &spacing);
+        let start = [moved_rect.x + 48.0, moved_rect.y + 10.0];
+        app.world_mut().resource_mut::<UiRoutedEvents>().events =
+            vec![UiRoutedEvent::PointerDown {
+                window,
+                target: owner,
+                button: UiPointerButton::Primary,
+                position: start,
+            }];
+        app.update();
+
+        let root_before = app
+            .world()
+            .resource::<DisplayList>()
+            .widget_fragments()
+            .get(&owner)
+            .cloned();
+        let before_gesture = graph_fragments(&app, owner);
+        let end = [start[0] + 26.0, start[1] + 18.0];
+        app.world_mut().resource_mut::<UiRoutedEvents>().events =
+            vec![UiRoutedEvent::PointerMoved {
+                window,
+                target: owner,
+                position: end,
+                delta: [26.0, 18.0],
+                dragging: true,
+            }];
+        app.update();
+        let after_gesture = graph_fragments(&app, owner);
+        assert_eq!(
+            changed_keys(&before_gesture, &after_gesture),
+            HashSet::from([
+                NodeGraphItemKey::Node(moved),
+                NodeGraphItemKey::Link(first_link),
+                NodeGraphItemKey::Link(second_link),
+            ]),
+            "a routed node drag republishes that node and its incident links"
+        );
+        assert_eq!(
+            app.world()
+                .resource::<DisplayList>()
+                .widget_fragments()
+                .get(&owner),
+            root_before.as_ref(),
+            "moving a node leaves graph chrome unchanged"
+        );
+        assert_eq!(
+            app.world()
+                .resource::<WidgetPaintCache>()
+                .published_fragments,
+            3
+        );
+
+        let before_tracked = graph_fragments(&app, owner);
+        assert!(move_node_graph_node(
+            app.world_mut(),
+            owner,
+            distant_sink,
+            [574.0, 30.0],
+        ));
+        app.update();
+        let after_tracked = graph_fragments(&app, owner);
+        assert_eq!(
+            changed_keys(&before_tracked, &after_tracked),
+            HashSet::from([
+                NodeGraphItemKey::Node(distant_sink),
+                NodeGraphItemKey::Link(distant_link),
+            ]),
+            "a tracked node edit republishes only that node and its incident link"
+        );
+        assert_eq!(
+            app.world()
+                .resource::<WidgetPaintCache>()
+                .published_fragments,
+            2
+        );
+
+        let before_direct = graph_fragments(&app, owner);
+        app.world_mut()
+            .get_mut::<NodeGraph>(owner)
+            .unwrap()
+            .nodes
+            .iter_mut()
+            .find(|node| node.id == distant_sink)
+            .unwrap()
+            .position[0] += 14.0;
+        app.update();
+        let after_direct = graph_fragments(&app, owner);
+        assert_eq!(
+            changed_keys(&before_direct, &after_direct),
+            HashSet::from([
+                NodeGraphItemKey::Node(distant_sink),
+                NodeGraphItemKey::Link(distant_link),
+            ]),
+            "a direct public ECS edit is diffed to the changed node and its adjacency"
+        );
+        assert_eq!(
+            app.world()
+                .resource::<DisplayList>()
+                .widget_fragments()
+                .get(&owner),
+            root_before.as_ref()
+        );
+
+        let before_mixed = graph_fragments(&app, owner);
+        app.world_mut()
+            .get_mut::<NodeGraph>(owner)
+            .unwrap()
+            .nodes
+            .iter_mut()
+            .find(|node| node.id == second_sink)
+            .unwrap()
+            .position[1] += 12.0;
+        let next = [end[0] + 12.0, end[1]];
+        app.world_mut().resource_mut::<UiRoutedEvents>().events =
+            vec![UiRoutedEvent::PointerMoved {
+                window,
+                target: owner,
+                position: next,
+                delta: [12.0, 0.0],
+                dragging: true,
+            }];
+        app.update();
+        let after_mixed = graph_fragments(&app, owner);
+        assert_eq!(
+            changed_keys(&before_mixed, &after_mixed),
+            HashSet::from([
+                NodeGraphItemKey::Node(moved),
+                NodeGraphItemKey::Node(second_sink),
+                NodeGraphItemKey::Link(first_link),
+                NodeGraphItemKey::Link(second_link),
+            ]),
+            "a public edit between journaled drag updates is included by signature diff"
+        );
+        assert_eq!(
+            app.world()
+                .resource::<DisplayList>()
+                .widget_fragments()
+                .get(&owner),
+            root_before.as_ref()
+        );
+        assert_eq!(initial.len(), after_mixed.len());
+        assert!(initial.contains_key(&NodeGraphItemKey::Node(first_sink)));
+        assert!(initial.contains_key(&NodeGraphItemKey::Link(distant_link)));
+
+        app.world_mut()
+            .get_mut::<NodeGraph>(owner)
+            .unwrap()
+            .nodes
+            .swap(0, 1);
+        app.update();
+        let reordered = graph_fragments(&app, owner);
+        assert!(
+            reordered[&NodeGraphItemKey::Node(first_sink)].order
+                < reordered[&NodeGraphItemKey::Node(moved)].order,
+            "a model node reorder is reflected in stable virtual fragment rank"
+        );
     }
 
     #[test]
@@ -25702,7 +28518,7 @@ mod tests {
         app.update();
         send_key(&mut app, UiKeyCode::Backspace, UiModifiers::default());
         assert_eq!(
-            app.world().get::<FileBrowser>(owner).unwrap().filter,
+            app.world().get::<FileBrowser>(owner).unwrap().filter(),
             "entr"
         );
         send_key(&mut app, UiKeyCode::Escape, UiModifiers::default());
@@ -25710,7 +28526,7 @@ mod tests {
             app.world()
                 .get::<FileBrowser>(owner)
                 .unwrap()
-                .filter
+                .filter()
                 .is_empty()
         );
         assert!(
@@ -25776,7 +28592,7 @@ mod tests {
         }];
         app.update();
         assert_eq!(
-            app.world().get::<FileBrowser>(browser).unwrap().filter,
+            app.world().get::<FileBrowser>(browser).unwrap().filter(),
             "cube"
         );
         assert_eq!(app.world().resource::<bui_core::UiHistory>().undo_len(), 1);
@@ -25802,7 +28618,7 @@ mod tests {
             app.world()
                 .get::<FileBrowser>(browser)
                 .unwrap()
-                .filter
+                .filter()
                 .is_empty()
         );
         assert_eq!(
@@ -25813,7 +28629,7 @@ mod tests {
         assert_eq!(app.world().resource::<bui_core::UiHistory>().undo_len(), 1);
         route_history_key(&mut app, true);
         assert_eq!(
-            app.world().get::<FileBrowser>(browser).unwrap().filter,
+            app.world().get::<FileBrowser>(browser).unwrap().filter(),
             "cube",
             "redo should restore a locally cancelled filter draft"
         );
@@ -25823,7 +28639,7 @@ mod tests {
             app.world()
                 .get::<FileBrowser>(browser)
                 .unwrap()
-                .filter
+                .filter()
                 .is_empty()
         );
         route_history_key(&mut app, false);

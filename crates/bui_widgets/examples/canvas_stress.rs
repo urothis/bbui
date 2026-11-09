@@ -9,7 +9,7 @@ use std::time::Instant;
 use bui_core::UiRect;
 use bui_render::{ClipRect, DrawItem};
 use bui_style::Theme;
-use bui_widgets::canvas::paint_canvas;
+use bui_widgets::canvas::{CanvasSpatialIndex, paint_canvas_indexed};
 use bui_widgets::{Canvas, CanvasShape};
 
 struct TrackingAllocator;
@@ -67,14 +67,36 @@ fn main() {
     let viewport = UiRect::new(0.0, 0.0, 100.0, 100.0);
     let clip = ClipRect::from(viewport);
     let theme = Theme::default();
+    let index = CanvasSpatialIndex::new(&canvas);
+    let visible = index
+        .visible_indices(&canvas, viewport, clip, 8.0)
+        .expect("valid stress-scene index");
     let mut output = Vec::<DrawItem>::new();
-    paint_canvas(&canvas, viewport, clip, 0, &theme, None, &mut output);
+    paint_canvas_indexed(
+        &canvas,
+        &visible,
+        viewport,
+        clip,
+        0,
+        &theme,
+        None,
+        &mut output,
+    );
 
     let started = Instant::now();
     let mut draw_items = 0;
     for _ in 0..FRAMES {
         output.clear();
-        paint_canvas(&canvas, viewport, clip, 0, &theme, None, &mut output);
+        paint_canvas_indexed(
+            &canvas,
+            &visible,
+            viewport,
+            clip,
+            0,
+            &theme,
+            None,
+            &mut output,
+        );
         draw_items = black_box(output.len());
     }
     let paint = started.elapsed();
@@ -82,7 +104,7 @@ fn main() {
     let started = Instant::now();
     let mut hits = 0;
     for _ in 0..FRAMES {
-        if black_box(canvas.hit_test([4.0, 4.0], viewport)).is_some() {
+        if black_box(canvas.hit_test_indexed(&index, [4.0, 4.0], viewport)).is_some() {
             hits += 1;
         }
     }
@@ -92,14 +114,24 @@ fn main() {
     TRACK.store(true, Ordering::Relaxed);
     for _ in 0..FRAMES {
         output.clear();
-        paint_canvas(&canvas, viewport, clip, 0, &theme, None, &mut output);
-        black_box(canvas.hit_test([4.0, 4.0], viewport));
+        paint_canvas_indexed(
+            &canvas,
+            &visible,
+            viewport,
+            clip,
+            0,
+            &theme,
+            None,
+            &mut output,
+        );
+        black_box(canvas.hit_test_indexed(&index, [4.0, 4.0], viewport));
     }
     TRACK.store(false, Ordering::Relaxed);
     let allocations = ALLOCATIONS.load(Ordering::Relaxed);
     let bytes = BYTES.load(Ordering::Relaxed);
     println!(
-        "canvas objects={OBJECTS} visible=100 frames={FRAMES} draw_items={draw_items} hits={hits} paint_ms/frame={:.3} hit_test_ms/frame={:.3} allocations={allocations} allocated_bytes={bytes} draw_buffer_bytes={}",
+        "canvas objects={OBJECTS} indexed_visible={} frames={FRAMES} draw_items={draw_items} hits={hits} paint_ms/frame={:.3} hit_test_ms/frame={:.3} allocations={allocations} allocated_bytes={bytes} draw_buffer_bytes={}",
+        visible.len(),
         paint.as_secs_f64() * 1_000.0 / FRAMES as f64,
         hit_test.as_secs_f64() * 1_000.0 / FRAMES as f64,
         output.capacity() * std::mem::size_of::<DrawItem>()

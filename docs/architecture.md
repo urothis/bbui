@@ -35,6 +35,8 @@ Dropdowns expose listbox expansion, panels expose their expansion state, and pro
 
 `UiNode` marks each logical control. `UiParent`/`UiChildren` own hierarchy and paint order; `UiKey` supplies identity across tree rebuilds and history restoration. `UiFocus` and routed pointer capture are per window. Widgets own their values and editor selections, while `UiLayoutResult` owns the resolved rectangle, clip, stacking depth, window, and DPI for layout, hit testing, accessibility, and paint. Popup and virtual row entities belong to their editor and are removed when they leave the visible viewport.
 
+Lists, trees, preview grids, and the file browser mount only rows in their current viewport. Their child entities keep stable model IDs or paths while scrolling, filtering, and sorting. `FileBrowser` exposes its current snapshot and filter/sort state through `entries()`, `filter()`, `sort()`, and `ascending()`; use `set_filter`, `set_sort`, `refresh`, and navigation methods to update that state and keep its filtered index consistent.
+
 `WidgetNode` declarations expose row, column, overlay, fixed and responsive grid, flex, inline, boxed, property-row, and scroll containers. Per-node layout overrides feed `UiLayoutNode`; `box`, `property-row`, and `property-label` roles obtain spacing from the active theme. The same resolved rectangles drive paint clips and hit boxes after resize, scroll, or DPI changes.
 Applications can pass a typed `UiInlineStyle` to `WidgetNode::with_style` and use `UiRole`/`UiClasses` with `UiStyleSheet` for shared rules. The `bui::prelude` exports these style types, computed values, transitions, and reduced-motion settings.
 

@@ -9,6 +9,7 @@ mod suite;
 
 fn workspace_benchmarks(c: &mut Criterion) {
     suite::layout::bench(c);
+    suite::input::bench(c);
     suite::integration::bench(c);
     suite::render::bench(c);
     suite::widgets::bench(c);

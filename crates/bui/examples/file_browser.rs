@@ -172,7 +172,7 @@ fn dispatch_controls(
                     }),
                     Some("sort") => browsers.get(ui.browser).ok().map(|browser| {
                         WidgetActionKind::FileSetSort(
-                            match browser.sort {
+                            match browser.sort() {
                                 FileSort::Name => FileSort::Kind,
                                 FileSort::Kind => FileSort::Size,
                                 FileSort::Size => FileSort::Modified,
@@ -408,7 +408,7 @@ mod tests {
             });
         app.update();
         assert_eq!(
-            app.world().get::<FileBrowser>(browser).unwrap().filter,
+            app.world().get::<FileBrowser>(browser).unwrap().filter(),
             "Cre"
         );
         std::fs::remove_dir_all(directory).unwrap();

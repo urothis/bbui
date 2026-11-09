@@ -33,7 +33,7 @@ use bui::{
 };
 use bui_core::{UiHitBox, UiKey, UiNode};
 use bui_layout::{Rect, UiEdges, UiLayoutNode, UiLayoutResult, UiLayoutRoot, UiLength};
-use bui_render::{ClipRect, Primitive, UiPaint};
+use bui_render::{ClipRect, DisplayList, Primitive, UiPaint};
 use bui_style::{Rgba, Theme, ThemeColorToken, ThemeKind};
 use image::ImageEncoder;
 
@@ -444,6 +444,34 @@ fn node_graph_renders_nodes_typed_sockets_links_selection_and_collapse() {
             for _ in 0..3 {
                 app.update();
             }
+            let chrome = app
+                .world()
+                .resource::<DisplayList>()
+                .widget_fragments()
+                .get(&root)
+                .expect("graph root should publish a chrome fragment after theme/layout repaint");
+            assert!(
+                chrome.items.len() > 2,
+                "graph chrome has too few draw items: {}",
+                chrome.items.len()
+            );
+            let header_rect = ClipRect {
+                x: GRAPH_RECT.x,
+                y: GRAPH_RECT.y,
+                width: GRAPH_RECT.width,
+                height: theme
+                    .spacing
+                    .node_graph
+                    .header_height
+                    .min(GRAPH_RECT.height),
+            };
+            assert!(
+                chrome.items.iter().any(|item| matches!(
+                    &item.primitive,
+                    Primitive::RoundedRect { rect, .. } if *rect == header_rect
+                )),
+                "graph root fragment is missing its header surface"
+            );
             let readback = app
                 .world_mut()
                 .spawn(Readback::texture(target.clone()))
@@ -802,6 +830,34 @@ fn node_graph_example_composition_renders_dark_and_light_review_captures() {
         for _ in 0..3 {
             app.update();
         }
+        let chrome = app
+            .world()
+            .resource::<DisplayList>()
+            .widget_fragments()
+            .get(&graph_entity)
+            .expect("example graph should publish a chrome fragment after theme repaint");
+        assert!(
+            chrome.items.len() > 2,
+            "example graph chrome has too few draw items: {}",
+            chrome.items.len()
+        );
+        let header_rect = ClipRect {
+            x: graph_rect.x,
+            y: graph_rect.y,
+            width: graph_rect.width,
+            height: theme
+                .spacing
+                .node_graph
+                .header_height
+                .min(graph_rect.height),
+        };
+        assert!(
+            chrome.items.iter().any(|item| matches!(
+                &item.primitive,
+                Primitive::RoundedRect { rect, .. } if *rect == header_rect
+            )),
+            "example graph root fragment is missing its header surface"
+        );
         let readback = app
             .world_mut()
             .spawn(Readback::texture(target.clone()))

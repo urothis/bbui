@@ -138,20 +138,31 @@ pub fn resolve_text_font(world: &World, entity: Entity, fallback: TextFont) -> T
 pub fn sync_ui_font_assets(world: &mut World) {
     let mut query = world.query_filtered::<Entity, bevy_ecs::query::With<UiFontAsset>>();
     let entities = query.iter(world).collect::<Vec<_>>();
-    let asset_server = world.get_resource::<AssetServer>().cloned();
+    let mut asset_server = None;
+    let mut asset_server_checked = false;
+    let has_asset_server_resource = world.contains_resource::<AssetServer>();
     let has_font_assets = world.contains_resource::<Assets<Font>>();
 
     for entity in entities {
-        let Some(snapshot) = world.get::<UiFontAsset>(entity).cloned() else {
+        if world.get::<UiFontAsset>(entity).is_none() {
             continue;
-        };
+        }
         if world.get::<UiFontAssetState>(entity).is_none() {
-            world.entity_mut(entity).insert(UiFontAssetState {
-                status: snapshot.status.clone(),
-            });
+            let Some(status) = world
+                .get::<UiFontAsset>(entity)
+                .map(|font_asset| font_asset.status.clone())
+            else {
+                continue;
+            };
+            world.entity_mut(entity).insert(UiFontAssetState { status });
         }
         if !font_owner_is_visible(world, entity) {
-            if let Some(mut font_asset) = world.get_mut::<UiFontAsset>(entity) {
+            let needs_reset = world.get::<UiFontAsset>(entity).is_some_and(|font_asset| {
+                font_asset.handle.is_some()
+                    || font_asset.requested_path.as_deref() != Some(font_asset.path.as_str())
+                    || font_asset.requested_retry_generation != font_asset.retry_generation
+            });
+            if needs_reset && let Some(mut font_asset) = world.get_mut::<UiFontAsset>(entity) {
                 font_asset.handle = None;
                 font_asset.requested_path = Some(font_asset.path.clone());
                 font_asset.requested_retry_generation = font_asset.retry_generation;
@@ -160,10 +171,31 @@ pub fn sync_ui_font_assets(world: &mut World) {
             continue;
         }
 
+        let ready_request_is_unchanged =
+            world.get::<UiFontAsset>(entity).is_some_and(|font_asset| {
+                font_asset.status == UiFontAssetStatus::Ready
+                    && font_asset.requested_path.as_deref() == Some(font_asset.path.as_str())
+                    && font_asset.requested_retry_generation == font_asset.retry_generation
+                    && font_asset.handle.is_some()
+            }) && has_asset_server_resource
+                && has_font_assets;
+        if ready_request_is_unchanged {
+            // Ready assets are stable until their path, retry generation, or visibility changes.
+            // Reconcile the status mirror without cloning the handle or polling AssetServer.
+            set_status(world, entity, UiFontAssetStatus::Ready);
+            continue;
+        }
+
+        let Some(snapshot) = world.get::<UiFontAsset>(entity).cloned() else {
+            continue;
+        };
+
+        if !asset_server_checked {
+            asset_server = world.get_resource::<AssetServer>().cloned();
+            asset_server_checked = true;
+        }
         let Some(asset_server) = asset_server.as_ref() else {
-            if let Some(mut font_asset) = world.get_mut::<UiFontAsset>(entity) {
-                font_asset.handle = None;
-            }
+            clear_font_handle(world, entity);
             set_status(
                 world,
                 entity,
@@ -172,9 +204,7 @@ pub fn sync_ui_font_assets(world: &mut World) {
             continue;
         };
         if !has_font_assets {
-            if let Some(mut font_asset) = world.get_mut::<UiFontAsset>(entity) {
-                font_asset.handle = None;
-            }
+            clear_font_handle(world, entity);
             set_status(
                 world,
                 entity,
@@ -184,7 +214,12 @@ pub fn sync_ui_font_assets(world: &mut World) {
         }
 
         if snapshot.path.trim().is_empty() {
-            if let Some(mut font_asset) = world.get_mut::<UiFontAsset>(entity) {
+            let needs_reset = world.get::<UiFontAsset>(entity).is_some_and(|font_asset| {
+                font_asset.handle.is_some()
+                    || font_asset.requested_path.as_deref() != Some(snapshot.path.as_str())
+                    || font_asset.requested_retry_generation != snapshot.retry_generation
+            });
+            if needs_reset && let Some(mut font_asset) = world.get_mut::<UiFontAsset>(entity) {
                 font_asset.handle = None;
                 font_asset.requested_path = Some(snapshot.path);
                 font_asset.requested_retry_generation = snapshot.retry_generation;
@@ -233,12 +268,20 @@ pub fn sync_ui_font_assets(world: &mut World) {
             ),
             _ => UiFontAssetStatus::Loading,
         };
-        if matches!(status, UiFontAssetStatus::Failed(_))
-            && let Some(mut font_asset) = world.get_mut::<UiFontAsset>(entity)
-        {
-            font_asset.handle = None;
+        if matches!(status, UiFontAssetStatus::Failed(_)) {
+            clear_font_handle(world, entity);
         }
         set_status(world, entity, status);
+    }
+}
+
+fn clear_font_handle(world: &mut World, entity: Entity) {
+    if world
+        .get::<UiFontAsset>(entity)
+        .is_some_and(|font_asset| font_asset.handle.is_some())
+        && let Some(mut font_asset) = world.get_mut::<UiFontAsset>(entity)
+    {
+        font_asset.handle = None;
     }
 }
 
@@ -286,4 +329,76 @@ fn font_owner_is_visible(world: &World, entity: Entity) -> bool {
         });
     let clip = layout.clip.or(viewport);
     clip.is_none_or(|clip| layout.rect.intersection(clip).is_some())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::asset::AssetPlugin;
+    use bevy::prelude::{App, MinimalPlugins};
+    use bevy_text::TextPlugin as BevyTextPlugin;
+
+    #[test]
+    fn stable_ready_font_skips_load_state_poll_and_component_writes() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default(), BevyTextPlugin));
+
+        let mut font_asset = UiFontAsset::new("idle.ttf");
+        font_asset.status = UiFontAssetStatus::Ready;
+        font_asset.requested_path = Some("idle.ttf".to_owned());
+        font_asset.handle = Some(Handle::default());
+        let entity = app
+            .world_mut()
+            .spawn((
+                font_asset,
+                UiFontAssetState {
+                    status: UiFontAssetStatus::Ready,
+                },
+            ))
+            .id();
+        let asset_changed = app
+            .world()
+            .get_entity(entity)
+            .unwrap()
+            .get_change_ticks::<UiFontAsset>()
+            .unwrap()
+            .changed;
+        let state_changed = app
+            .world()
+            .get_entity(entity)
+            .unwrap()
+            .get_change_ticks::<UiFontAssetState>()
+            .unwrap()
+            .changed;
+
+        for _ in 0..2 {
+            app.world_mut().increment_change_tick();
+            sync_ui_font_assets(app.world_mut());
+            assert_eq!(
+                app.world().get::<UiFontAsset>(entity).unwrap().status,
+                UiFontAssetStatus::Ready,
+                "polling this deliberately unloaded handle would demote it to Loading"
+            );
+            assert_eq!(
+                app.world()
+                    .get_entity(entity)
+                    .unwrap()
+                    .get_change_ticks::<UiFontAsset>()
+                    .unwrap()
+                    .changed,
+                asset_changed,
+                "idle ready fonts must not write their source component"
+            );
+            assert_eq!(
+                app.world()
+                    .get_entity(entity)
+                    .unwrap()
+                    .get_change_ticks::<UiFontAssetState>()
+                    .unwrap()
+                    .changed,
+                state_changed,
+                "idle ready fonts must not rewrite their status mirror"
+            );
+        }
+    }
 }

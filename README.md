@@ -111,6 +111,8 @@ The example's tiny field shows a nonzero value in scientific notation. `NumericF
 
 The file browser example opens the current directory. Use **Path** and **Go** to open a directory directly, or choose an ancestor or saved bookmark from **Ancestors and bookmarks**. **Bookmark** saves the current directory and **Remove bookmark** removes it. Type in **Filter** to narrow entries, select rows with Ctrl or Shift, and use the toolbar for sorting, list/grid view, and file operations. Arrow keys move the cursor, Page Up/Down move a viewport, Enter opens the selection, Ctrl+A selects all visible entries, and Home/End jump to the first/last visible entry. Backspace goes up when the filter is empty; Escape clears the filter. **Name** supplies a new folder or rename target; **Destination** supplies an existing directory for copy or move. Filesystem errors appear in the status line.
 
+Library callers read browser state with `entries()`, `filter()`, `sort()`, and `ascending()`. Change the filter and sort with `set_filter` and `set_sort`, and update the directory snapshot with navigation methods or `refresh`; these methods keep the indexed visible view consistent.
+
 Browser navigation, bookmarks, selection, filter, sort, and view changes have undo/redo snapshots. Restoring a missing directory reports an error and keeps the undo step available. File creation, deletion, copy, move, and rename are external filesystem changes and emit explicit irreversible-operation events.
 
 ## Menus and popups example

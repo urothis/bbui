@@ -6,7 +6,7 @@
 
 use std::{
     cmp::Reverse,
-    collections::BTreeSet,
+    collections::{BTreeSet, HashMap},
     fs, io,
     path::{Path, PathBuf},
     time::SystemTime,
@@ -96,20 +96,25 @@ fn failure(operation: &'static str, path: &Path, source: io::Error) -> FileBrows
 }
 
 /// Persistent browser state. `entries` are the current directory snapshot; call `refresh` after
-/// external filesystem changes. Selection and keyboard cursor use paths, so sorting does not
-/// change object identity.
+/// external filesystem changes. Read the snapshot and active filter/sort through accessors, and
+/// use `set_filter`, `set_sort`, navigation, and refresh methods to keep its virtual index current.
+/// Selection and keyboard cursor use paths, so sorting does not change object identity.
 #[derive(Component, Debug, Clone)]
 pub struct FileBrowser {
     pub directory: PathBuf,
-    pub entries: Vec<FileEntry>,
+    entries: Vec<FileEntry>,
     pub bookmarks: Vec<PathBuf>,
-    pub filter: String,
-    pub sort: FileSort,
-    pub ascending: bool,
+    filter: String,
+    sort: FileSort,
+    ascending: bool,
     pub view: FileView,
     pub selected: BTreeSet<PathBuf>,
     pub cursor: Option<PathBuf>,
     anchor: Option<PathBuf>,
+    visible_indices: Vec<usize>,
+    visible_positions: HashMap<PathBuf, usize>,
+    visible_filter: String,
+    indexed_entries_len: usize,
 }
 
 impl FileBrowser {
@@ -127,9 +132,33 @@ impl FileBrowser {
             selected: BTreeSet::new(),
             cursor: None,
             anchor: None,
+            visible_indices: Vec::new(),
+            visible_positions: HashMap::new(),
+            visible_filter: String::new(),
+            indexed_entries_len: 0,
         };
         browser.sort_entries();
         Ok(browser)
+    }
+
+    /// Current filesystem snapshot, in the active sort order.
+    pub fn entries(&self) -> &[FileEntry] {
+        &self.entries
+    }
+
+    /// Current case-insensitive name filter.
+    pub fn filter(&self) -> &str {
+        &self.filter
+    }
+
+    /// Active entry sort key.
+    pub fn sort(&self) -> FileSort {
+        self.sort
+    }
+
+    /// Whether the active sort order is ascending.
+    pub fn ascending(&self) -> bool {
+        self.ascending
     }
 
     pub fn navigate(&mut self, directory: impl AsRef<Path>) -> BrowserResult<()> {
@@ -141,6 +170,7 @@ impl FileBrowser {
         self.selected.clear();
         self.cursor = None;
         self.anchor = None;
+        self.rebuild_visible_index();
         Ok(())
     }
 
@@ -190,11 +220,19 @@ impl FileBrowser {
     }
 
     pub fn set_filter(&mut self, filter: impl Into<String>) {
-        self.filter = filter.into();
+        let filter = filter.into();
+        if self.filter == filter && self.visible_index_is_current() {
+            return;
+        }
+        self.filter = filter;
+        self.rebuild_visible_index();
         self.retain_visible_selection();
     }
 
     pub fn set_sort(&mut self, sort: FileSort, ascending: bool) {
+        if self.sort == sort && self.ascending == ascending {
+            return;
+        }
         self.sort = sort;
         self.ascending = ascending;
         self.sort_entries();
@@ -203,23 +241,44 @@ impl FileBrowser {
     /// Return entries matching the current filter. Directories remain visible so they can still
     /// be opened while searching for files.
     pub fn visible_entries(&self) -> Vec<&FileEntry> {
-        let query = self.filter.to_lowercase();
-        self.entries
-            .iter()
-            .filter(|entry| entry_matches_filter(entry, &query))
-            .collect()
+        if self.visible_index_is_current() {
+            self.visible_indices
+                .iter()
+                .filter_map(|index| self.entries.get(*index))
+                .collect()
+        } else {
+            let query = self.filter.to_lowercase();
+            self.entries
+                .iter()
+                .filter(|entry| entry_matches_filter(entry, &query))
+                .collect()
+        }
     }
 
     pub fn visible_count(&self) -> usize {
-        let query = self.filter.to_lowercase();
-        self.entries
-            .iter()
-            .filter(|entry| entry_matches_filter(entry, &query))
-            .count()
+        if self.visible_index_is_current() {
+            self.visible_indices.len()
+        } else {
+            let query = self.filter.to_lowercase();
+            self.entries
+                .iter()
+                .filter(|entry| entry_matches_filter(entry, &query))
+                .count()
+        }
     }
 
     /// Return only the rows needed by a virtualized list/grid viewport.
     pub fn visible_range(&self, start: usize, count: usize) -> Vec<&FileEntry> {
+        if self.visible_index_is_current() {
+            let end = start.saturating_add(count).min(self.visible_indices.len());
+            return self
+                .visible_indices
+                .get(start..end)
+                .unwrap_or_default()
+                .iter()
+                .filter_map(|index| self.entries.get(*index))
+                .collect();
+        }
         let query = self.filter.to_lowercase();
         self.entries
             .iter()
@@ -356,6 +415,7 @@ impl FileBrowser {
         let mut entries = read_entries(&self.directory)?;
         sort_entries(&mut entries, self.sort, self.ascending);
         self.entries = entries;
+        self.rebuild_visible_index();
         self.retain_visible_selection();
         Ok(())
     }
@@ -424,6 +484,7 @@ impl FileBrowser {
         self.selected = selected;
         self.cursor = cursor;
         self.anchor = anchor;
+        self.rebuild_visible_index();
         Ok(())
     }
 
@@ -687,14 +748,39 @@ impl FileBrowser {
 
     fn sort_entries(&mut self) {
         sort_entries(&mut self.entries, self.sort, self.ascending);
+        self.rebuild_visible_index();
     }
 
     fn visible_index_of(&self, path: &Path) -> Option<usize> {
+        if self.visible_index_is_current() {
+            self.visible_positions.get(path).copied()
+        } else {
+            let query = self.filter.to_lowercase();
+            self.entries
+                .iter()
+                .filter(|entry| entry_matches_filter(entry, &query))
+                .position(|entry| entry.path == path)
+        }
+    }
+
+    fn visible_index_is_current(&self) -> bool {
+        self.visible_filter == self.filter && self.indexed_entries_len == self.entries.len()
+    }
+
+    fn rebuild_visible_index(&mut self) {
         let query = self.filter.to_lowercase();
-        self.entries
-            .iter()
-            .filter(|entry| entry_matches_filter(entry, &query))
-            .position(|entry| entry.path == path)
+        self.visible_indices.clear();
+        self.visible_positions.clear();
+        for (index, entry) in self.entries.iter().enumerate() {
+            if entry_matches_filter(entry, &query) {
+                let visible_index = self.visible_indices.len();
+                self.visible_indices.push(index);
+                self.visible_positions
+                    .insert(entry.path.clone(), visible_index);
+            }
+        }
+        self.visible_filter.clone_from(&self.filter);
+        self.indexed_entries_len = self.entries.len();
     }
 }
 
@@ -1013,6 +1099,66 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn indexed_visible_ranges_scale_to_large_snapshots_and_follow_filter_sort_changes() {
+        let scratch = Scratch::new();
+        let mut browser = FileBrowser::new(&scratch.0).unwrap();
+        browser.entries = (0..10_000)
+            .map(|index| FileEntry {
+                path: scratch.0.join(format!("item-{index:05}.bin")),
+                name: format!("item-{index:05}.bin"),
+                directory: false,
+                size: index as u64,
+                modified: None,
+                preview: PreviewKind::Other,
+            })
+            .collect();
+        browser.entries[9_000].directory = true;
+        browser.entries[9_000].name = "wanted-directory".to_owned();
+        browser.rebuild_visible_index();
+
+        assert_eq!(browser.visible_count(), 10_000);
+        assert_eq!(
+            browser
+                .visible_range(5_000, 3)
+                .iter()
+                .map(|entry| entry.name.as_str())
+                .collect::<Vec<_>>(),
+            ["item-05000.bin", "item-05001.bin", "item-05002.bin"]
+        );
+
+        browser.set_filter("item-0099");
+        assert_eq!(browser.visible_count(), 11);
+        assert_eq!(browser.visible_range(0, 2)[0].name, "item-00990.bin");
+        browser.set_sort(FileSort::Size, false);
+        assert_eq!(browser.visible_range(0, 1)[0].name, "wanted-directory");
+        assert_eq!(browser.visible_range(1, 1)[0].name, "item-00999.bin");
+
+        // Internal direct edits fall back to filtering until the private index is rebuilt.
+        browser.filter = "wanted".to_owned();
+        assert_eq!(browser.visible_count(), 1);
+        browser.rebuild_visible_index();
+        assert_eq!(browser.visible_range(0, 1)[0].name, "wanted-directory");
+    }
+
+    #[test]
+    fn refresh_reindexes_same_length_entry_replacements() {
+        let scratch = Scratch::new();
+        fs::write(scratch.0.join("match-old.txt"), b"old").unwrap();
+        fs::write(scratch.0.join("other.txt"), b"other").unwrap();
+        let mut browser = FileBrowser::new(&scratch.0).unwrap();
+        browser.set_filter("match");
+        assert_eq!(browser.visible_count(), 1);
+
+        fs::remove_file(scratch.0.join("match-old.txt")).unwrap();
+        fs::write(scratch.0.join("match-new.txt"), b"new").unwrap();
+        browser.refresh().unwrap();
+
+        assert_eq!(browser.entries.len(), 2);
+        assert_eq!(browser.visible_count(), 1);
+        assert_eq!(browser.visible_range(0, 1)[0].name, "match-new.txt");
     }
 
     #[test]

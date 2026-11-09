@@ -5,7 +5,8 @@ use std::collections::{HashMap, HashSet};
 use bevy_app::{App, Update};
 use bevy_asset::{AssetServer, Assets, Handle, LoadState};
 use bevy_camera::Camera;
-use bevy_ecs::prelude::{Entity, Resource, World};
+use bevy_ecs::change_detection::Tick;
+use bevy_ecs::prelude::{Component, Entity, On, Remove, ResMut, Resource, World};
 use bevy_ecs::schedule::IntoScheduleConfigs;
 use bevy_image::Image;
 use bui_core::{UiEnabled, UiNode, UiParent, UiSystems, UiVisible};
@@ -45,6 +46,18 @@ pub struct IconButtonAssetCache {
     overlay_cameras: HashSet<Entity>,
 }
 
+#[derive(Resource, Default)]
+struct IconSyncGate {
+    cursor: Tick,
+    initialized: bool,
+    force: bool,
+    configured: HashSet<Entity>,
+    ancestors: HashSet<Entity>,
+    camera_windows: HashMap<Entity, bool>,
+    resource_presence: [bool; 4],
+    sync_passes: usize,
+}
+
 impl IconButtonAssetCache {
     pub fn status(&self, entity: Entity) -> Option<&IconButtonAssetStatus> {
         self.entries.get(&entity).map(|entry| &entry.status)
@@ -60,18 +73,37 @@ impl IconButtonAssetCache {
 }
 
 pub fn install(app: &mut App) {
-    app.init_resource::<IconButtonAssetCache>().add_systems(
-        Update,
-        sync_icon_button_assets
-            .in_set(UiSystems::Widgets)
-            .after(crate::actions::collect_widget_paint),
-    );
+    app.init_resource::<IconButtonAssetCache>()
+        .init_resource::<IconSyncGate>()
+        .add_observer(force_icon_sync_on_remove::<IconButtonAsset>)
+        .add_observer(force_icon_sync_on_remove::<IconButton>)
+        .add_observer(force_icon_sync_on_remove::<UiLayoutResult>)
+        .add_observer(force_icon_sync_on_remove::<UiComputedStyle>)
+        .add_observer(force_icon_sync_on_remove::<UiEnabled>)
+        .add_observer(force_icon_sync_on_remove::<UiVisible>)
+        .add_observer(force_icon_sync_on_remove::<UiParent>)
+        .add_observer(force_icon_sync_on_remove::<UiNode>)
+        .add_observer(force_icon_sync_on_remove::<Camera>)
+        .add_systems(
+            Update,
+            sync_icon_button_assets
+                .in_set(UiSystems::Widgets)
+                .after(crate::actions::collect_widget_paint),
+        );
+}
+
+fn force_icon_sync_on_remove<T: Component>(_on: On<Remove<T>>, mut gate: ResMut<IconSyncGate>) {
+    gate.force = true;
 }
 
 /// Loads only mounted icons whose widget and clipped layout are visible, then paints the image
 /// through the shared GPU-native `Primitive::Icon` path.
 pub fn sync_icon_button_assets(world: &mut World) {
     world.init_resource::<IconButtonAssetCache>();
+    world.init_resource::<IconSyncGate>();
+    if !icon_inputs_changed(world) {
+        return;
+    }
     let visible = collect_visible_icons(world);
     let configured = collect_configured_icon_entities(world);
     let Some(asset_server) = world.get_resource::<AssetServer>().cloned() else {
@@ -88,6 +120,7 @@ pub fn sync_icon_button_assets(world: &mut World) {
                 },
             );
         }
+        settle_icon_gate(world);
         return;
     };
     if !world.contains_resource::<Assets<Image>>() || !world.contains_resource::<ImageRegistry>() {
@@ -106,6 +139,7 @@ pub fn sync_icon_button_assets(world: &mut World) {
                 },
             );
         }
+        settle_icon_gate(world);
         return;
     }
 
@@ -161,6 +195,129 @@ pub fn sync_icon_button_assets(world: &mut World) {
     paint_icon_overlays(world, &visible, &cache);
     cache.overlay_cameras = visible.iter().filter_map(|icon| icon.camera).collect();
     world.insert_resource(cache);
+    settle_icon_gate(world);
+}
+
+fn icon_inputs_changed(world: &mut World) -> bool {
+    let mut configured = world.query::<(Entity, &IconButtonAsset)>();
+    let now = world.read_change_tick();
+    let gate = world.resource::<IconSyncGate>();
+    if !gate.initialized || gate.force {
+        return true;
+    }
+    let presence = [
+        world.contains_resource::<AssetServer>(),
+        world.contains_resource::<Assets<Image>>(),
+        world.contains_resource::<ImageRegistry>(),
+        world.contains_resource::<Theme>(),
+    ];
+    if presence != gate.resource_presence
+        || world
+            .resource::<IconButtonAssetCache>()
+            .entries
+            .values()
+            .any(|entry| entry.status == IconButtonAssetStatus::Loading)
+        || world
+            .get_resource_change_ticks::<Theme>()
+            .is_some_and(|ticks| ticks.changed.is_newer_than(gate.cursor, now))
+        || world
+            .get_resource_change_ticks::<Assets<Image>>()
+            .is_some_and(|ticks| ticks.changed.is_newer_than(gate.cursor, now))
+        || world
+            .get_resource_change_ticks::<ImageRegistry>()
+            .is_some_and(|ticks| ticks.changed.is_newer_than(gate.cursor, now))
+    {
+        return true;
+    }
+    for ancestor in &gate.ancestors {
+        let Ok(ancestor) = world.get_entity(*ancestor) else {
+            return true;
+        };
+        if [
+            ancestor.get_change_ticks::<UiVisible>(),
+            ancestor.get_change_ticks::<UiParent>(),
+            ancestor.get_change_ticks::<UiNode>(),
+        ]
+        .into_iter()
+        .flatten()
+        .any(|ticks| ticks.changed.is_newer_than(gate.cursor, now))
+        {
+            return true;
+        }
+    }
+    if gate.camera_windows.iter().any(|(window, was_camera)| {
+        world
+            .get_entity(*window)
+            .is_ok_and(|entity| entity.contains::<Camera>())
+            != *was_camera
+    }) {
+        return true;
+    }
+    let mut count = 0;
+    for (entity, _) in configured.iter(world) {
+        count += 1;
+        if !gate.configured.contains(&entity) {
+            return true;
+        }
+        let Ok(entry) = world.get_entity(entity) else {
+            return true;
+        };
+        if [
+            entry.get_change_ticks::<IconButtonAsset>(),
+            entry.get_change_ticks::<IconButton>(),
+            entry.get_change_ticks::<UiLayoutResult>(),
+            entry.get_change_ticks::<UiComputedStyle>(),
+            entry.get_change_ticks::<UiEnabled>(),
+        ]
+        .into_iter()
+        .flatten()
+        .any(|ticks| ticks.changed.is_newer_than(gate.cursor, now))
+        {
+            return true;
+        }
+    }
+    count != gate.configured.len()
+}
+
+fn settle_icon_gate(world: &mut World) {
+    let cursor = world.read_change_tick();
+    let configured = collect_configured_icon_entities(world);
+    let mut ancestors = HashSet::new();
+    let mut camera_windows = HashMap::new();
+    for entity in &configured {
+        let mut current = Some(*entity);
+        let mut remaining = world.entities().len();
+        while let Some(at) = current {
+            if remaining == 0 || !ancestors.insert(at) {
+                break;
+            }
+            remaining -= 1;
+            current = world.get::<UiParent>(at).map(|parent| parent.0);
+        }
+        if let Some(layout) = world.get::<UiLayoutResult>(*entity) {
+            camera_windows.insert(
+                layout.window,
+                world
+                    .get_entity(layout.window)
+                    .is_ok_and(|window| window.contains::<Camera>()),
+            );
+        }
+    }
+    let presence = [
+        world.contains_resource::<AssetServer>(),
+        world.contains_resource::<Assets<Image>>(),
+        world.contains_resource::<ImageRegistry>(),
+        world.contains_resource::<Theme>(),
+    ];
+    let mut gate = world.resource_mut::<IconSyncGate>();
+    gate.cursor = cursor;
+    gate.configured = configured;
+    gate.ancestors = ancestors;
+    gate.camera_windows = camera_windows;
+    gate.resource_presence = presence;
+    gate.initialized = true;
+    gate.force = false;
+    gate.sync_passes += 1;
 }
 
 fn collect_configured_icon_entities(world: &mut World) -> HashSet<Entity> {
@@ -435,7 +592,7 @@ mod tests {
     use super::*;
     use crate::{IconButton, IconButtonAsset, IconButtonAssetState, WidgetPlugin};
     use bevy_app::App;
-    use bui_core::{UiEnabled, UiNode, UiVisible};
+    use bui_core::{UiEnabled, UiNode, UiVisible, set_parent};
 
     fn spawn_test_icon(world: &mut World) -> Entity {
         world
@@ -495,5 +652,43 @@ mod tests {
         assert_eq!(icon.retry_generation, 1);
         icon.retry();
         assert_eq!(icon.retry_generation, 2);
+    }
+
+    #[test]
+    fn settled_icons_skip_idle_scans_and_follow_ancestor_visibility() {
+        let mut app = App::new();
+        app.add_plugins(WidgetPlugin);
+        let parent = app.world_mut().spawn((UiNode, UiVisible(true))).id();
+        let icon = spawn_test_icon(app.world_mut());
+        set_parent(app.world_mut(), icon, parent).unwrap();
+
+        app.update();
+        let passes = app.world().resource::<IconSyncGate>().sync_passes;
+        app.update();
+        assert_eq!(app.world().resource::<IconSyncGate>().sync_passes, passes);
+
+        app.world_mut().get_mut::<UiVisible>(parent).unwrap().0 = false;
+        app.update();
+        assert_eq!(
+            app.world()
+                .get::<IconButtonAssetState>(icon)
+                .unwrap()
+                .status,
+            IconButtonAssetStatus::Hidden
+        );
+        let passes = app.world().resource::<IconSyncGate>().sync_passes;
+        app.update();
+        assert_eq!(app.world().resource::<IconSyncGate>().sync_passes, passes);
+
+        app.world_mut().get_mut::<UiVisible>(parent).unwrap().0 = true;
+        app.update();
+        assert!(matches!(
+            &app.world().get::<IconButtonAssetState>(icon).unwrap().status,
+            IconButtonAssetStatus::Failed(message) if message == "AssetServer is not installed"
+        ));
+        assert_eq!(
+            app.world().resource::<IconSyncGate>().sync_passes,
+            passes + 1
+        );
     }
 }

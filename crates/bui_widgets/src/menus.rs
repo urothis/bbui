@@ -89,6 +89,10 @@ impl MenuTree {
     pub fn search<'a>(&'a self, search: &MenuSearch, query: &str) -> Vec<&'a MenuEntry> {
         let mut all = Vec::new();
         flatten_paths(&self.entries, "", &mut all);
+        let mut entries_by_id = std::collections::HashMap::with_capacity(all.len());
+        for (entry, _) in &all {
+            entries_by_id.entry(entry.id.as_str()).or_insert(*entry);
+        }
         let ranked = search.rank(
             query,
             all.iter().flat_map(|(entry, path)| {
@@ -102,11 +106,7 @@ impl MenuTree {
         ranked
             .into_iter()
             .filter(|id| seen.insert(*id))
-            .filter_map(|id| {
-                all.iter()
-                    .find(|(entry, _)| entry.id == id)
-                    .map(|(entry, _)| *entry)
-            })
+            .filter_map(|id| entries_by_id.get(id).copied())
             .collect()
     }
 
@@ -690,5 +690,19 @@ mod tests {
             .collect();
         assert_eq!(first, ["a-item", "z-item"]);
         assert_eq!(second, first);
+    }
+
+    #[test]
+    fn search_resolves_ranked_ids_from_large_menu_trees() {
+        let mut entries = (0..10_000)
+            .map(|index| MenuEntry::command(format!("item-{index}"), format!("Item {index}")))
+            .collect::<Vec<_>>();
+        entries.push(MenuEntry::command("unique-target", "Unique Target"));
+        let tree = MenuTree::new(entries);
+        let results = tree.search(&MenuSearch::default(), "unique target");
+        assert_eq!(
+            results.first().map(|entry| entry.id.as_str()),
+            Some("unique-target")
+        );
     }
 }

@@ -271,6 +271,19 @@ fn public_plugin_keeps_mount_reparent_camera_and_graph_edits_incremental() {
     let before_pan = app.world().resource::<DisplayList>().widget_fragments()[&graph_entity]
         .items
         .clone();
+    let graph_child_items: usize = app
+        .world()
+        .get::<UiChildren>(graph_entity)
+        .into_iter()
+        .flat_map(|children| children.0.iter())
+        .filter_map(|child| {
+            app.world()
+                .resource::<DisplayList>()
+                .widget_fragments()
+                .get(child)
+        })
+        .map(|fragment| fragment.items.len())
+        .sum();
     let after_graph_mount = stats(&app);
 
     app.world_mut()
@@ -281,7 +294,11 @@ fn public_plugin_keeps_mount_reparent_camera_and_graph_edits_incremental() {
     assert_incremental_since(
         &app,
         after_graph_mount,
-        before_pan.len().saturating_mul(2).saturating_add(8),
+        before_pan
+            .len()
+            .saturating_add(graph_child_items)
+            .saturating_mul(2)
+            .saturating_add(8),
         "graph pan",
     );
     let after_pan = &app.world().resource::<DisplayList>().widget_fragments()[&graph_entity].items;

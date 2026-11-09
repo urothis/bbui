@@ -2032,7 +2032,7 @@ mod tests {
             .id();
         // The browser canonicalizes its directory (notably /var on macOS), so use the
         // same entry path that the rendered row and selection state use.
-        let path = app.world().get::<FileBrowser>(owner).unwrap().entries[0]
+        let path = app.world().get::<FileBrowser>(owner).unwrap().entries()[0]
             .path
             .clone();
         let row = app

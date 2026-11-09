@@ -147,6 +147,16 @@ pub struct WidgetRenderFragment {
     pub items: Vec<DrawItem>,
 }
 
+/// Places fragments into a bounded cross-fragment Bezier batch.
+///
+/// The owner identifies the logical canvas and `chunk` keeps updates local. Fragments in one
+/// group must contain only compatible Bezier items and there must be at most 128 of them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct WidgetFragmentBatchGroup {
+    pub owner: Entity,
+    pub chunk: u32,
+}
+
 /// A paint description attached to a BUI entity. `UiLayoutResult` supplies its final position,
 /// clipping region, and z order in the renderer phase.
 #[derive(Component, Debug, Clone, PartialEq)]
@@ -275,6 +285,9 @@ pub struct DisplayList {
     camera_items: HashMap<Entity, Vec<DrawItem>>,
     overlay_camera_items: HashMap<Entity, Vec<DrawItem>>,
     widget_fragments: HashMap<Entity, WidgetRenderFragment>,
+    widget_fragment_batch_groups: HashMap<Entity, WidgetFragmentBatchGroup>,
+    widget_batch_group_members: HashMap<WidgetFragmentBatchGroup, HashSet<Entity>>,
+    pending_widget_batch_group_changes: HashSet<WidgetFragmentBatchGroup>,
     pending_widget_fragment_changes: HashSet<Entity>,
     pending_full_change: bool,
     widget_items_view: OnceLock<Vec<DrawItem>>,
@@ -320,10 +333,44 @@ impl DisplayList {
     /// Returns `true` only when the fragment differs from the previously published fragment.
     /// This records a per-entity delta and does not flatten or sort the complete display list.
     pub fn upsert_widget_fragment(&mut self, fragment: WidgetRenderFragment) -> bool {
-        if self.widget_fragments.get(&fragment.entity) == Some(&fragment) {
-            return false;
-        }
+        self.upsert_widget_fragment_with_batch_group(fragment, None)
+    }
+
+    /// Publish a widget fragment with optional membership in a bounded cross-fragment Bezier
+    /// batch. The group is metadata only; fragment equality remains local to its items/order.
+    pub fn upsert_widget_fragment_with_batch_group(
+        &mut self,
+        fragment: WidgetRenderFragment,
+        batch_group: Option<WidgetFragmentBatchGroup>,
+    ) -> bool {
         let entity = fragment.entity;
+        let group_changed = self.widget_fragment_batch_groups.get(&entity).copied() != batch_group;
+        if group_changed {
+            if let Some(previous) = self.widget_fragment_batch_groups.remove(&entity) {
+                self.pending_widget_batch_group_changes.insert(previous);
+                if let Some(members) = self.widget_batch_group_members.get_mut(&previous) {
+                    members.remove(&entity);
+                    if members.is_empty() {
+                        self.widget_batch_group_members.remove(&previous);
+                    }
+                }
+            }
+            if let Some(group) = batch_group {
+                self.widget_fragment_batch_groups.insert(entity, group);
+                self.widget_batch_group_members
+                    .entry(group)
+                    .or_default()
+                    .insert(entity);
+                self.pending_widget_batch_group_changes.insert(group);
+            }
+            self.pending_widget_fragment_changes.insert(entity);
+        }
+        if self.widget_fragments.get(&fragment.entity) == Some(&fragment) {
+            if group_changed {
+                self.invalidate_views();
+            }
+            return group_changed;
+        }
         let new_len = fragment.items.len();
         if let Some(previous) = self.widget_fragments.insert(entity, fragment) {
             self.item_count = self.item_count.saturating_sub(previous.items.len());
@@ -342,6 +389,15 @@ impl DisplayList {
         let Some(previous) = self.widget_fragments.remove(&entity) else {
             return false;
         };
+        if let Some(group) = self.widget_fragment_batch_groups.remove(&entity) {
+            self.pending_widget_batch_group_changes.insert(group);
+            if let Some(members) = self.widget_batch_group_members.get_mut(&group) {
+                members.remove(&entity);
+                if members.is_empty() {
+                    self.widget_batch_group_members.remove(&group);
+                }
+            }
+        }
         self.item_count = self.item_count.saturating_sub(previous.items.len());
         self.pending_widget_fragment_changes.insert(entity);
         self.invalidate_views();
@@ -351,6 +407,20 @@ impl DisplayList {
     /// Read the currently published keyed widget fragments without materializing a merged list.
     pub fn widget_fragments(&self) -> &HashMap<Entity, WidgetRenderFragment> {
         &self.widget_fragments
+    }
+
+    pub fn widget_fragment_batch_group(&self, entity: Entity) -> Option<WidgetFragmentBatchGroup> {
+        self.widget_fragment_batch_groups.get(&entity).copied()
+    }
+
+    pub fn widget_batch_group_members(
+        &self,
+        group: WidgetFragmentBatchGroup,
+    ) -> impl Iterator<Item = Entity> + '_ {
+        self.widget_batch_group_members
+            .get(&group)
+            .into_iter()
+            .flat_map(|members| members.iter().copied())
     }
 
     /// Number of draw items across the merged display list, computed without allocating a view.
@@ -370,6 +440,12 @@ impl DisplayList {
         let mut entities: Vec<_> = self.pending_widget_fragment_changes.drain().collect();
         entities.sort_unstable_by_key(|entity| entity.to_bits());
         entities
+    }
+
+    pub(crate) fn take_widget_batch_group_changes(&mut self) -> Vec<WidgetFragmentBatchGroup> {
+        let mut groups: Vec<_> = self.pending_widget_batch_group_changes.drain().collect();
+        groups.sort_unstable_by_key(|group| (group.owner.to_bits(), group.chunk));
+        groups
     }
 
     pub(crate) fn take_pending_full_change(&mut self) -> bool {
@@ -1500,6 +1576,7 @@ struct BezierBatchValues {
 }
 
 const BEZIER_BATCH_TILE_SIZE: f32 = 16.0;
+const MAX_BEZIER_BATCH_CURVES: usize = 128;
 const MAX_BEZIER_BATCH_TILES: usize = 262_144;
 const MAX_BEZIER_BATCH_TILE_REFERENCES: usize = 8_000_000;
 
@@ -1671,10 +1748,26 @@ fn sync_display_list(mut sync: RendererSync) {
     let changes = sync.dirty.take(UiDirtyDomain::Render);
     let full_change = sync.display_list.take_pending_full_change();
     let mut fragment_changes = sync.display_list.take_widget_fragment_changes();
+    let mut batch_group_changes = sync.display_list.take_widget_batch_group_changes();
+    let mut batch_groups: HashSet<_> = batch_group_changes.iter().copied().collect();
     let mut fragment_entities: HashSet<_> = fragment_changes.iter().copied().collect();
     for entity in &changes.entities {
         if sync.cache.fragment_keys.contains_key(entity) && fragment_entities.insert(*entity) {
             fragment_changes.push(*entity);
+        }
+    }
+    for entity in &fragment_changes {
+        if let Some(group) = sync.display_list.widget_fragment_batch_group(*entity)
+            && batch_groups.insert(group)
+        {
+            batch_group_changes.push(group);
+        }
+    }
+    for group in &batch_group_changes {
+        for entity in sync.display_list.widget_batch_group_members(*group) {
+            if fragment_entities.insert(entity) {
+                fragment_changes.push(entity);
+            }
         }
     }
     if changes.is_empty() && !full_change && fragment_changes.is_empty() {
@@ -1740,7 +1833,7 @@ fn sync_display_list(mut sync: RendererSync) {
         && labels_available
         && sync.cache.generation > 0
     {
-        sync_widget_fragments(sync, fragment_changes, direct_entities);
+        sync_widget_fragments(sync, fragment_changes, batch_group_changes, direct_entities);
     } else {
         sync_display_list_full(sync, changes);
     }
@@ -1940,9 +2033,164 @@ fn spawn_incremental_item(
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "A graph Bezier batch is rebuilt from only one bounded fragment group"
+)]
+fn sync_widget_fragment_bezier_group(
+    group: WidgetFragmentBatchGroup,
+    display_list: &DisplayList,
+    images: &ImageRegistry,
+    commands: &mut Commands,
+    cache: &mut RenderCache,
+    stats: &mut RenderSyncStats,
+    materials: &mut Option<ResMut<Assets<BezierBatchMaterial>>>,
+    buffers: &mut Option<ResMut<Assets<ShaderBuffer>>>,
+    hsv_wheel_materials: &mut Option<ResMut<Assets<HsvWheelMaterial>>>,
+    bezier_materials: &mut Option<ResMut<Assets<BezierMaterial>>>,
+    text_font_size: f32,
+    text_line_height: f32,
+    default_text_font: &TextFont,
+) {
+    let mut entries = Vec::new();
+    for entity in display_list.widget_batch_group_members(group) {
+        let Some(fragment) = display_list.widget_fragments.get(&entity) else {
+            continue;
+        };
+        for (index, item) in fragment.items.iter().enumerate() {
+            let desired = DesiredItem {
+                key: RenderKey::WidgetFragment(entity, index),
+                z: item.z,
+                target_camera: fragment.target_camera,
+                hierarchy_depth: 0,
+                fragment_order: Some(fragment.order),
+            };
+            entries.push((desired, item.clone()));
+        }
+    }
+    entries.sort_unstable_by(|(first, _), (second, _)| {
+        first.z.cmp(&second.z).then_with(|| {
+            first
+                .key
+                .stable_order(
+                    first.fragment_order,
+                    first.hierarchy_depth,
+                    first.target_camera,
+                )
+                .cmp(&second.key.stable_order(
+                    second.fragment_order,
+                    second.hierarchy_depth,
+                    second.target_camera,
+                ))
+        })
+    });
+
+    let mut start = 0;
+    while start < entries.len() {
+        let (first_desired, first_item) = &entries[start];
+        let clip = valid_clip(first_item.clip)
+            .then(|| ClipGroupKey::new(first_item.clip, first_desired.target_camera));
+        let can_batch = clip.is_some() && matches!(first_item.primitive, Primitive::Bezier { .. });
+        let mut end = start + 1;
+        if can_batch {
+            while end < entries.len() && end - start < MAX_BEZIER_BATCH_CURVES {
+                let (desired, item) = &entries[end];
+                if desired.target_camera != first_desired.target_camera
+                    || item.z != first_item.z
+                    || !matches!(item.primitive, Primitive::Bezier { .. })
+                    || !valid_clip(item.clip)
+                    || ClipGroupKey::new(item.clip, desired.target_camera) != clip.unwrap()
+                {
+                    break;
+                }
+                end += 1;
+            }
+        }
+
+        let run = &entries[start..end];
+        stats.scanned_draw_keys = stats.scanned_draw_keys.saturating_add(run.len());
+        let run_items: Vec<_> = run.iter().map(|(_, item)| item.clone()).collect();
+        let run_keys: Vec<_> = run.iter().map(|(desired, _)| desired.key).collect();
+        let batch_key = (run.len() >= 2).then(|| BezierBatchKey {
+            first: run_keys[0],
+            last: *run_keys.last().expect("a batch run has keys"),
+            clip: clip.expect("a batch run has valid clipping"),
+        });
+        let batch_values = batch_key.and_then(|key| {
+            build_bezier_batch_values(&run_items, key.clip.clip()).map(|values| (key, values))
+        });
+        if let Some((key, values)) = batch_values
+            && let (Some(materials), Some(buffers)) = (materials.as_mut(), buffers.as_mut())
+        {
+            let local_z = desired_local_z(
+                &run[0].0,
+                &cache.layout_order,
+                &cache.layout_order_labels,
+                &cache.widget_order_labels,
+            );
+            let clip = key.clip;
+            let reused_batch = cache.bezier_batches.contains_key(&key);
+            let generation = cache.generation;
+            let updated = BezierBatchSyncContext {
+                commands,
+                cache,
+                materials,
+                buffers,
+                generation,
+            }
+            .sync(
+                key,
+                run_keys.clone(),
+                run_items,
+                values,
+                run[0].0.z,
+                local_z,
+            );
+            if cache.bezier_batches.contains_key(&key) {
+                if !reused_batch {
+                    *cache.clip_group_users.entry(clip).or_default() += 1;
+                }
+                if updated {
+                    stats.updated_render_entries = stats.updated_render_entries.saturating_add(1);
+                }
+                let mut member_fragments = HashSet::new();
+                for member in run_keys {
+                    cache.bezier_batch_for_key.insert(member, key);
+                    if let RenderKey::WidgetFragment(entity, _) = member
+                        && member_fragments.insert(entity)
+                    {
+                        cache.fragment_batches.entry(entity).or_default().push(key);
+                    }
+                }
+                start = end;
+                continue;
+            }
+        }
+
+        for (desired, item) in run {
+            spawn_incremental_item(
+                desired.key,
+                *desired,
+                item,
+                commands,
+                cache,
+                images,
+                hsv_wheel_materials,
+                bezier_materials,
+                text_font_size,
+                text_line_height,
+                default_text_font,
+            );
+            stats.updated_render_entries = stats.updated_render_entries.saturating_add(1);
+        }
+        start = end;
+    }
+}
+
 fn sync_widget_fragments(
     sync: RendererSync,
     fragment_entities: Vec<Entity>,
+    mut batch_group_changes: Vec<WidgetFragmentBatchGroup>,
     direct_entities: Vec<Entity>,
 ) {
     let RendererSync {
@@ -2014,6 +2262,16 @@ fn sync_widget_fragments(
 
     for entity in fragment_entities {
         if let Some(fragment) = display_list.widget_fragments.get(&entity) {
+            if display_list.widget_fragment_batch_group(entity).is_some()
+                && bezier_batch_materials.is_some()
+                && shader_buffers.is_some()
+            {
+                let keys: Vec<_> = (0..fragment.items.len())
+                    .map(|index| RenderKey::WidgetFragment(entity, index))
+                    .collect();
+                cache.fragment_keys.insert(entity, keys);
+                continue;
+            }
             let mut desired: Vec<_> = fragment
                 .items
                 .iter()
@@ -2071,7 +2329,7 @@ fn sync_widget_fragments(
                         continue;
                     }
                     let mut end = start + 1;
-                    while end < desired.len() {
+                    while end < desired.len() && end - start < MAX_BEZIER_BATCH_CURVES {
                         let Some(next_item) = fragment_item(end) else {
                             break;
                         };
@@ -2192,17 +2450,43 @@ fn sync_widget_fragments(
         }
     }
 
-    for old_batches in old_fragment_batches.into_values() {
-        for old_key in old_batches {
-            if retire_bezier_batch(
-                old_key,
+    if bezier_batch_materials.is_some() && shader_buffers.is_some() {
+        batch_group_changes.sort_unstable_by_key(|group| (group.owner.to_bits(), group.chunk));
+        batch_group_changes.dedup();
+        for group in batch_group_changes {
+            sync_widget_fragment_bezier_group(
+                group,
+                &display_list,
+                &images,
                 &mut commands,
                 &mut cache,
+                &mut stats,
                 &mut bezier_batch_materials,
                 &mut shader_buffers,
-            ) {
-                stats.updated_render_entries = stats.updated_render_entries.saturating_add(1);
-            }
+                &mut hsv_wheel_materials,
+                &mut bezier_materials,
+                text_font_size,
+                text_line_height,
+                &default_text_font,
+            );
+        }
+    }
+
+    let previous_group_batches: HashSet<_> = old_fragment_batches.into_values().flatten().collect();
+    let retained_group_batches: HashSet<_> =
+        cache.fragment_batches.values().flatten().copied().collect();
+    for old_key in previous_group_batches
+        .difference(&retained_group_batches)
+        .copied()
+    {
+        if retire_bezier_batch(
+            old_key,
+            &mut commands,
+            &mut cache,
+            &mut bezier_batch_materials,
+            &mut shader_buffers,
+        ) {
+            stats.updated_render_entries = stats.updated_render_entries.saturating_add(1);
         }
     }
 
@@ -2844,6 +3128,12 @@ fn sync_display_list_full(sync: RendererSync, changes: bui_core::UiDirtyBatch) {
                 RenderKey::WidgetFragment(entity, _) => Some(entity),
                 _ => None,
             };
+            let batch_group = match desired[start].key {
+                RenderKey::WidgetFragment(entity, _) => {
+                    display_list.widget_fragment_batch_group(entity)
+                }
+                _ => None,
+            };
             let Some(clip) = valid_clip(item.clip)
                 .then(|| ClipGroupKey::new(item.clip, desired[start].target_camera))
             else {
@@ -2863,12 +3153,24 @@ fn sync_display_list_full(sync: RendererSync, changes: bui_core::UiDirtyBatch) {
                     RenderKey::WidgetFragment(entity, _) => Some(entity),
                     _ => None,
                 };
+                let next_batch_group = match desired[end].key {
+                    RenderKey::WidgetFragment(entity, _) => {
+                        display_list.widget_fragment_batch_group(entity)
+                    }
+                    _ => None,
+                };
+                let same_batch_scope = match (batch_group, next_batch_group) {
+                    (Some(first), Some(next)) => first == next,
+                    (None, None) => next_fragment_owner == fragment_owner,
+                    _ => false,
+                };
                 if desired[end].target_camera != desired[start].target_camera
                     || next_item.z != item.z
-                    || next_fragment_owner != fragment_owner
+                    || !same_batch_scope
                     || !matches!(&next_item.primitive, Primitive::Bezier { .. })
                     || !valid_clip(next_item.clip)
                     || ClipGroupKey::new(next_item.clip, desired[end].target_camera) != clip
+                    || end - start >= MAX_BEZIER_BATCH_CURVES
                 {
                     break;
                 }
@@ -2908,7 +3210,14 @@ fn sync_display_list_full(sync: RendererSync, changes: bui_core::UiDirtyBatch) {
                     if let Some(group) = cache.clip_groups.get_mut(&clip) {
                         group.generation = generation;
                     }
-                    if let Some(entity) = fragment_owner {
+                    let members: HashSet<_> = desired[start..end]
+                        .iter()
+                        .filter_map(|entry| match entry.key {
+                            RenderKey::WidgetFragment(entity, _) => Some(entity),
+                            _ => None,
+                        })
+                        .collect();
+                    for entity in members {
                         cache.fragment_batches.entry(entity).or_default().push(key);
                     }
                     for item in &desired[start..end] {
@@ -2941,7 +3250,14 @@ fn sync_display_list_full(sync: RendererSync, changes: bui_core::UiDirtyBatch) {
                         if updated {
                             updated_render_entries = updated_render_entries.saturating_add(1);
                         }
-                        if let Some(entity) = fragment_owner {
+                        let members: HashSet<_> = desired[start..end]
+                            .iter()
+                            .filter_map(|entry| match entry.key {
+                                RenderKey::WidgetFragment(entity, _) => Some(entity),
+                                _ => None,
+                            })
+                            .collect();
+                        for entity in members {
                             cache.fragment_batches.entry(entity).or_default().push(key);
                         }
                         for entry in &desired[start..end] {
@@ -4401,8 +4717,10 @@ mod tests {
     }
 
     #[test]
-    fn keyed_fragment_batch_updates_keep_a_large_graph_in_one_gpu_batch() {
+    fn keyed_fragment_batch_updates_keep_a_large_graph_in_bounded_gpu_batches() {
         const CURVE_COUNT: usize = 4_000;
+        const MAX_BATCH_CURVES: usize = 128;
+        let expected_batches = CURVE_COUNT.div_ceil(MAX_BATCH_CURVES);
         let mut app = App::new();
         app.insert_resource(Assets::<BezierMaterial>::default());
         app.insert_resource(Assets::<BezierBatchMaterial>::default());
@@ -4448,33 +4766,42 @@ mod tests {
         app.update();
         assert_eq!(
             app.world().resource::<RenderCache>().fragment_batches[&entity].len(),
-            1
+            expected_batches
         );
         assert_eq!(
             app.world().resource::<RenderCache>().bezier_batches.len(),
-            1
+            expected_batches
         );
         assert_eq!(
             app.world().resource::<Assets<BezierBatchMaterial>>().len(),
-            1
+            expected_batches
         );
-        assert_eq!(app.world().resource::<Assets<ShaderBuffer>>().len(), 3);
+        assert_eq!(
+            app.world().resource::<Assets<ShaderBuffer>>().len(),
+            expected_batches * 3
+        );
         let mut query = app
             .world_mut()
             .query_filtered::<Entity, With<MaterialNode<BezierBatchMaterial>>>();
-        let first_batch = query.single(app.world()).unwrap();
-        assert_eq!(query.iter(app.world()).count(), 1);
+        let first_batch_entities: HashSet<_> = query.iter(app.world()).collect();
+        assert_eq!(first_batch_entities.len(), expected_batches);
 
-        let batch_key = app.world().resource::<RenderCache>().fragment_batches[&entity][0];
-        let (first_material, first_segments, first_curves, first_tiles) = {
+        let batch_keys = app.world().resource::<RenderCache>().fragment_batches[&entity].clone();
+        let first_batch_assets: Vec<_> = {
             let cache = app.world().resource::<RenderCache>();
-            let batch = &cache.bezier_batches[&batch_key];
-            (
-                batch.material.id(),
-                batch.segments.id(),
-                batch.curves.id(),
-                batch.tile_indices.id(),
-            )
+            batch_keys
+                .iter()
+                .map(|batch_key| {
+                    let batch = &cache.bezier_batches[batch_key];
+                    (
+                        *batch_key,
+                        batch.material.id(),
+                        batch.segments.id(),
+                        batch.curves.id(),
+                        batch.tile_indices.id(),
+                    )
+                })
+                .collect()
         };
 
         let mut updated = make_items(Rgba(0.2, 0.75, 0.9, 1.0));
@@ -4492,34 +4819,47 @@ mod tests {
         app.update();
         assert_eq!(
             app.world().resource::<RenderCache>().fragment_batches[&entity].len(),
-            1
+            expected_batches
         );
         assert_eq!(
             app.world().resource::<RenderCache>().bezier_batches.len(),
-            1
+            expected_batches
         );
         assert_eq!(app.world().resource::<RenderSyncStats>().full_syncs, 1);
         assert_eq!(
             app.world().resource::<Assets<BezierBatchMaterial>>().len(),
-            1
+            expected_batches
         );
-        assert_eq!(app.world().resource::<Assets<ShaderBuffer>>().len(), 3);
+        assert_eq!(
+            app.world().resource::<Assets<ShaderBuffer>>().len(),
+            expected_batches * 3
+        );
+        assert_eq!(
+            app.world().resource::<RenderSyncStats>().scanned_draw_keys,
+            CURVE_COUNT * 2,
+            "replacing one flat fragment rediscovers all old and new draw keys"
+        );
         assert_eq!(
             app.world()
                 .resource::<RenderSyncStats>()
                 .updated_render_entries,
-            1
+            1,
+            "only the bounded batch containing the changed curve needs new GPU assets"
         );
-        let updated_batch = &app.world().resource::<RenderCache>().bezier_batches[&batch_key];
-        assert_eq!(updated_batch.material.id(), first_material);
-        assert_eq!(updated_batch.segments.id(), first_segments);
-        assert_eq!(updated_batch.curves.id(), first_curves);
-        assert_eq!(updated_batch.tile_indices.id(), first_tiles);
+        let cache = app.world().resource::<RenderCache>();
+        assert_eq!(cache.fragment_batches[&entity], batch_keys);
+        for (batch_key, material, segments, curves, tile_indices) in first_batch_assets {
+            let updated_batch = &cache.bezier_batches[&batch_key];
+            assert_eq!(updated_batch.material.id(), material);
+            assert_eq!(updated_batch.segments.id(), segments);
+            assert_eq!(updated_batch.curves.id(), curves);
+            assert_eq!(updated_batch.tile_indices.id(), tile_indices);
+        }
         let mut query = app
             .world_mut()
             .query_filtered::<Entity, With<MaterialNode<BezierBatchMaterial>>>();
-        assert_eq!(query.single(app.world()).unwrap(), first_batch);
-        assert_eq!(query.iter(app.world()).count(), 1);
+        let updated_batch_entities: HashSet<_> = query.iter(app.world()).collect();
+        assert_eq!(updated_batch_entities, first_batch_entities);
     }
 
     #[test]
@@ -5952,6 +6292,7 @@ mod tests {
     #[test]
     fn four_thousand_beziers_share_batched_render_and_release_gpu_assets() {
         const CURVE_COUNT: usize = 4_000;
+        const MAX_BATCH_CURVES: usize = 128;
         let mut app = App::new();
         app.insert_resource(Assets::<BezierMaterial>::default());
         app.insert_resource(Assets::<BezierBatchMaterial>::default());
@@ -5963,36 +6304,54 @@ mod tests {
             width: 1200.0,
             height: 800.0,
         };
-        let items: Vec<DrawItem> = (0..CURVE_COUNT)
+        let owner = app.world_mut().spawn_empty().id();
+        let fragments: Vec<_> = (0..CURVE_COUNT)
             .map(|index| {
+                let entity = app.world_mut().spawn_empty().id();
                 let x = (index % 100) as f32 * 10.0;
                 let y = (index / 100) as f32 * 18.0;
-                DrawItem {
-                    clip,
-                    z: 0,
-                    primitive: Primitive::Bezier {
-                        points: [
-                            [x, y],
-                            [x + 30.0, y + 18.0],
-                            [x + 50.0, y - 12.0],
-                            [x + 80.0, y + 2.0],
-                        ],
-                        width: 1.5,
-                        color: Rgba(0.2, 0.75, 0.9, 1.0),
-                    },
-                }
+                let fragment = WidgetRenderFragment {
+                    entity,
+                    order: index as u64,
+                    target_camera: None,
+                    items: vec![DrawItem {
+                        clip,
+                        z: 0,
+                        primitive: Primitive::Bezier {
+                            points: [
+                                [x, y],
+                                [x + 30.0, y + 18.0],
+                                [x + 50.0, y - 12.0],
+                                [x + 80.0, y + 2.0],
+                            ],
+                            width: 1.5,
+                            color: Rgba(0.2, 0.75, 0.9, 1.0),
+                        },
+                    }],
+                };
+                (entity, fragment)
             })
             .collect();
-        app.world_mut()
-            .resource_mut::<DisplayList>()
-            .replace_widget_items(items.clone());
+        {
+            let mut display_list = app.world_mut().resource_mut::<DisplayList>();
+            for (index, (_, fragment)) in fragments.iter().enumerate() {
+                assert!(display_list.upsert_widget_fragment_with_batch_group(
+                    fragment.clone(),
+                    Some(WidgetFragmentBatchGroup {
+                        owner,
+                        chunk: (index / MAX_BATCH_CURVES) as u32,
+                    }),
+                ));
+            }
+        }
         app.update();
 
         let mut query = app
             .world_mut()
             .query_filtered::<Entity, With<MaterialNode<BezierBatchMaterial>>>();
-        let first_batch_entity = query.single(app.world()).unwrap();
-        assert_eq!(query.iter(app.world()).count(), 1);
+        let original_batch_entities: HashSet<_> = query.iter(app.world()).collect();
+        let expected_batches = CURVE_COUNT.div_ceil(MAX_BATCH_CURVES);
+        assert_eq!(original_batch_entities.len(), expected_batches);
         assert_eq!(
             app.world().resource::<RenderCache>().items.len(),
             0,
@@ -6000,41 +6359,68 @@ mod tests {
         );
         assert_eq!(
             app.world().resource::<RenderCache>().bezier_batches.len(),
-            1
+            expected_batches
         );
         assert_eq!(
             app.world().resource::<Assets<BezierBatchMaterial>>().len(),
-            1
+            expected_batches
         );
-        assert_eq!(app.world().resource::<Assets<ShaderBuffer>>().len(), 3);
+        assert_eq!(
+            app.world().resource::<Assets<ShaderBuffer>>().len(),
+            expected_batches * 3
+        );
 
-        let mut updated_items = items;
-        updated_items[CURVE_COUNT / 2].primitive =
-            match updated_items[CURVE_COUNT / 2].primitive.clone() {
-                Primitive::Bezier { points, width, .. } => Primitive::Bezier {
-                    points,
-                    width,
-                    color: Rgba(0.9, 0.1, 0.2, 1.0),
-                },
-                _ => unreachable!(),
-            };
-        app.world_mut()
-            .resource_mut::<DisplayList>()
-            .replace_widget_items(updated_items);
+        let changed_index = CURVE_COUNT / 2;
+        let (_, changed_fragment) = &fragments[changed_index];
+        let mut changed_fragment = changed_fragment.clone();
+        let Primitive::Bezier { points, width, .. } = &changed_fragment.items[0].primitive else {
+            unreachable!();
+        };
+        changed_fragment.items[0].primitive = Primitive::Bezier {
+            points: *points,
+            width: *width,
+            color: Rgba(0.9, 0.1, 0.2, 1.0),
+        };
+        assert!(
+            app.world_mut()
+                .resource_mut::<DisplayList>()
+                .upsert_widget_fragment_with_batch_group(
+                    changed_fragment,
+                    Some(WidgetFragmentBatchGroup {
+                        owner,
+                        chunk: (changed_index / MAX_BATCH_CURVES) as u32,
+                    }),
+                )
+        );
         app.update();
+        let stats = *app.world().resource::<RenderSyncStats>();
+        assert_eq!(stats.full_syncs, 1);
+        assert_eq!(stats.incremental_syncs, 1);
+        assert_eq!(
+            stats.scanned_draw_keys,
+            MAX_BATCH_CURVES * 2,
+            "one link update scans its old and rebuilt 128-link batch only"
+        );
         let mut query = app
             .world_mut()
             .query_filtered::<Entity, With<MaterialNode<BezierBatchMaterial>>>();
-        assert_eq!(query.single(app.world()).unwrap(), first_batch_entity);
+        let updated_batch_entities: HashSet<_> = query.iter(app.world()).collect();
+        assert_eq!(updated_batch_entities, original_batch_entities);
         assert_eq!(
             app.world().resource::<Assets<BezierBatchMaterial>>().len(),
-            1
+            expected_batches
         );
-        assert_eq!(app.world().resource::<Assets<ShaderBuffer>>().len(), 3);
+        assert_eq!(
+            app.world().resource::<Assets<ShaderBuffer>>().len(),
+            expected_batches * 3
+        );
 
-        app.world_mut()
-            .resource_mut::<DisplayList>()
-            .replace_widget_items(Vec::new());
+        {
+            let mut display_list = app.world_mut().resource_mut::<DisplayList>();
+            for (entity, _) in &fragments {
+                assert!(display_list.remove_widget_fragment(*entity));
+            }
+        }
         app.update();
         assert!(
             app.world()

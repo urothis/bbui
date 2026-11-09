@@ -1,6 +1,6 @@
 //! Declarative widget trees that instantiate real Bevy entities and components.
 
-use bevy_ecs::prelude::{Component, Entity, With, World};
+use bevy_ecs::prelude::{Changed, Component, Entity, Or, Query, ResMut, With, World};
 use bui_core::{
     UiDirty, UiDirtyDomain, UiEnabled, UiFocusable, UiHierarchyError, UiKey, UiNode, UiTabIndex,
     UiVisible, set_parent,
@@ -163,7 +163,7 @@ pub enum WidgetSpec {
 }
 
 #[derive(Component)]
-struct IntrinsicLabelText;
+pub(crate) struct IntrinsicLabelText;
 
 #[derive(Component, Debug, Clone, PartialEq)]
 pub struct WidgetElement {
@@ -1267,21 +1267,32 @@ fn insert_control(
 /// Keep the private measurement buffer for plain labels in sync before TextMeasure.
 /// Label entities are deliberately not focusable, so this buffer only feeds shaping and
 /// intrinsic layout; it does not make labels editable.
-pub(crate) fn sync_intrinsic_label_text(world: &mut World) {
-    let mut query =
-        world.query_filtered::<(Entity, &Label, &mut TextBuffer), With<IntrinsicLabelText>>();
-    let mut changed = Vec::new();
-    for (entity, label, mut buffer) in query.iter_mut(world) {
+#[expect(
+    clippy::type_complexity,
+    reason = "The query combines the mount marker with direct label and buffer edits"
+)]
+pub(crate) fn sync_intrinsic_label_text(
+    mut labels: Query<
+        (Entity, &Label, &mut TextBuffer),
+        (
+            With<IntrinsicLabelText>,
+            Or<(
+                Changed<IntrinsicLabelText>,
+                Changed<Label>,
+                Changed<TextBuffer>,
+            )>,
+        ),
+    >,
+    mut dirty: Option<ResMut<UiDirty>>,
+) {
+    for (entity, label, mut buffer) in &mut labels {
         if buffer.as_str() != label.text {
             *buffer = TextBuffer::new(label.text.clone());
-            changed.push(entity);
-        }
-    }
-    if let Some(mut dirty) = world.get_resource_mut::<UiDirty>() {
-        for entity in changed {
-            dirty.mark(UiDirtyDomain::TextMeasure, entity);
-            dirty.mark(UiDirtyDomain::TextLayout, entity);
-            dirty.mark(UiDirtyDomain::TextSync, entity);
+            if let Some(dirty) = dirty.as_deref_mut() {
+                dirty.mark(UiDirtyDomain::TextMeasure, entity);
+                dirty.mark(UiDirtyDomain::TextLayout, entity);
+                dirty.mark(UiDirtyDomain::TextSync, entity);
+            }
         }
     }
 }
@@ -1496,12 +1507,81 @@ pub struct CollectionEditorState {
 mod tests {
     use super::*;
     use crate::IconButtonAssetStatus;
-    use bevy_app::App;
+    use bevy_app::{App, Update};
+    use bevy_ecs::change_detection::{DetectChanges, Ref};
     use bevy_ecs::prelude::World;
+    use bevy_ecs::prelude::{Query, ResMut, Resource};
+    use bevy_ecs::schedule::IntoScheduleConfigs;
     use bui_core::{UiChildren, UiFocusable, UiParent};
     use bui_layout::UiIntrinsicSize;
     use bui_style::Theme;
     use bui_text::TextPlugin;
+
+    #[derive(Resource, Default)]
+    struct IntrinsicLabelBufferObservation {
+        changed: Option<bool>,
+    }
+
+    fn observe_intrinsic_label_buffers(
+        buffers: Query<Ref<TextBuffer>, With<IntrinsicLabelText>>,
+        mut observation: ResMut<IntrinsicLabelBufferObservation>,
+    ) {
+        observation.changed = Some(buffers.iter().any(|buffer| buffer.is_changed()));
+    }
+
+    #[test]
+    fn intrinsic_label_sync_skips_idle_buffers_and_reconciles_changed_or_new_labels() {
+        let mut app = App::new();
+        app.add_plugins((TextPlugin, crate::WidgetPlugin));
+        let entity = WidgetTree::new(WidgetNode::label("Stable label"))
+            .spawn(app.world_mut(), None)
+            .unwrap();
+        app.init_resource::<IntrinsicLabelBufferObservation>();
+        app.add_systems(
+            Update,
+            observe_intrinsic_label_buffers.after(sync_intrinsic_label_text),
+        );
+
+        app.update();
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<IntrinsicLabelBufferObservation>()
+                .changed,
+            Some(false),
+            "an idle intrinsic label must not rewrite its measurement buffer"
+        );
+
+        *app.world_mut().get_mut::<TextBuffer>(entity).unwrap() = TextBuffer::new("stale");
+        app.update();
+        assert_eq!(
+            app.world().get::<TextBuffer>(entity).unwrap().as_str(),
+            "Stable label",
+            "a direct buffer edit must be reconciled with the public label"
+        );
+        assert_eq!(
+            app.world()
+                .resource::<IntrinsicLabelBufferObservation>()
+                .changed,
+            Some(true)
+        );
+
+        let newly_mounted = WidgetTree::new(WidgetNode::label("Mounted later"))
+            .spawn(app.world_mut(), Some(entity))
+            .unwrap();
+        *app.world_mut()
+            .get_mut::<TextBuffer>(newly_mounted)
+            .unwrap() = TextBuffer::new("stale mount");
+        app.update();
+        assert_eq!(
+            app.world()
+                .get::<TextBuffer>(newly_mounted)
+                .unwrap()
+                .as_str(),
+            "Mounted later",
+            "a newly mounted intrinsic label must be synchronized even when its parent changes"
+        );
+    }
 
     #[test]
     fn label_intrinsic_width_uses_shared_font_and_tracks_theme_size() {

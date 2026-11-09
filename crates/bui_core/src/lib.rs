@@ -531,13 +531,34 @@ impl Plugin for CorePlugin {
                 $(app.add_observer(mark_hit_test_component_removed::<$component>);)+
             };
         }
-        register_hit_test_removals!(UiNode, UiEnabled, UiVisible, UiParent, UiChildren);
+        register_hit_test_removals!(UiNode, UiChildren);
+        app.add_observer(mark_hit_test_subtree_removed::<UiEnabled>);
+        app.add_observer(mark_hit_test_subtree_removed::<UiVisible>);
+        app.add_observer(mark_hit_test_subtree_removed::<UiParent>);
         app.add_observer(mark_hit_box_removed);
     }
 }
 
 fn mark_hit_test_component_removed<T: Component>(_on: On<Remove<T>>, mut dirty: ResMut<UiDirty>) {
     dirty.mark_all(UiDirtyDomain::HitTest);
+}
+
+fn mark_hit_test_subtree_removed<T: Component>(
+    on: On<Remove<T>>,
+    children: Query<&UiChildren>,
+    mut dirty: ResMut<UiDirty>,
+) {
+    let mut pending = vec![on.entity];
+    let mut visited = std::collections::HashSet::new();
+    while let Some(entity) = pending.pop() {
+        if !visited.insert(entity) {
+            continue;
+        }
+        dirty.mark(UiDirtyDomain::HitTest, entity);
+        if let Ok(children) = children.get(entity) {
+            pending.extend(children.0.iter().copied());
+        }
+    }
 }
 
 fn mark_hit_box_removed(on: On<Remove<UiHitBox>>, mut dirty: ResMut<UiDirty>) {

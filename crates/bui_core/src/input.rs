@@ -999,8 +999,8 @@ fn hit_test(world: &mut World, window: Entity, position: [f32; 2]) -> Option<Ent
         .iter(world)
         .filter(|&(entity, bounds)| {
             bounds.window.is_none_or(|owner| owner == window)
-                && is_interactable_in_window(world, entity, window)
                 && bounds.contains(position)
+                && is_interactable_in_window(world, entity, window)
         })
         .map(|(entity, bounds)| (bounds.z_index, hierarchy_order(world, entity), entity))
         .collect();
@@ -1246,6 +1246,12 @@ mod tests {
         let after_hide = app.world().resource::<UiHoverValidation>().hit_tests;
         assert_eq!(after_hide, after_insert);
         app.world_mut().get_mut::<UiVisible>(other).unwrap().0 = true;
+        app.update();
+        assert_eq!(
+            app.world().resource::<UiHoverValidation>().hit_tests,
+            after_hide
+        );
+        app.world_mut().entity_mut(other).remove::<UiVisible>();
         app.update();
         assert_eq!(
             app.world().resource::<UiHoverValidation>().hit_tests,

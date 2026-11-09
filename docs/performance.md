@@ -14,8 +14,8 @@ to one path with `cargo bench -p bui --bench performance --locked -- 'widgets/fu
 
 | Path | Timed cases |
 | --- | --- |
-| `bui_core`, `bui_layout` | Transaction undo/redo; idle and one-change layout at 1k/10k nodes |
-| `bui_style`, `bui_widgets` | 1k/10k checkboxes; virtual list/table; 1k-node graph pan; active style animation |
+| `bui_core`, `bui_layout` | Transaction undo/redo; 10k-control pointer routing; idle and one-change layout at 1k/10k nodes |
+| `bui_style`, `bui_widgets` | 1k/10k checkboxes; virtual list/table; 1k-node graph pan and one-node edits; 100k-object Canvas edit; active style animation |
 | `bui_text` | Bundled-font shaping; expression evaluation; text edit/undo/redo |
 | `bui_render` | First, idle, and one-change synchronization for rectangles and image grids; idle and one-fragment changes in a 10k-fragment scene |
 | `bui_media` | Full PNG/SVG and PNG/GIF/VP8/H.264 poster decoding |
@@ -89,6 +89,11 @@ aarch64 machine produced these release-mode Criterion means on 2026-11-09 (30 sa
 | Public plugin, 1k text fields / one edit | 65.79 µs | 199.00 µs |
 | Widget update, 10k checkboxes / one toggle | 253.94 µs | 254.35 µs |
 | Widget update, 1k-node graph / pan | 25.80 µs | 3.118 ms |
+| Widget update, 1k-node graph / routed one-node drag | 27.20 µs | 101.86 µs |
+| Widget update, 1k-node graph / tracked one-node edit | 28.25 µs | 47.05 µs |
+| Widget update, 1k-node graph / raw ECS one-node edit | 28.22 µs | 720.23 µs |
+| Widget update, 100k-object Canvas / tracked one-object edit | 39.47 µs | 43.03 µs |
+| Widget update, 100k-object Canvas / raw ECS one-object edit | 41.22 µs | 18.25 ms |
 | Keyed render sync, 10k fragments / one fragment | 4.901 µs | 6.054 µs |
 | Legacy full-list render sync, 10k rectangles / one item | 4.777 µs | 1.078 ms |
 
@@ -100,6 +105,17 @@ reconciles the supplied list. The benchmark observation was changed from materia
 `DisplayList` view to reading its O(1) `item_count()`, so older public-plugin and widget timing
 percentages are not a like-for-like framework speedup comparison. The table above is the current
 comparison point for future changes.
+
+The graph and Canvas edit rows were measured with Criterion's quick sampling on the same local
+machine. Their fixtures assert that the targeted model position changes; the routed graph case
+also asserts that pointer-down starts a node-move gesture. Use
+`bui_widgets::actions::move_node_graph_node` and `bui_widgets::canvas::edit_canvas_object` for
+external one-item edits. They record the changed ID and update the retained index. Mutating a
+public `Vec` through an arbitrary `Mut<NodeGraph>` or `Mut<Canvas>` cannot identify which element
+changed from Bevy's component tick alone, so the safe fallback compares graph signatures or
+rebuilds the Canvas spatial index. The raw-edit rows quantify that cost. Structural changes and
+whole-model replacement also use the fallback; this preserves correctness for existing direct ECS
+callers while making normal object edits proportional to the affected work.
 
 The numbers below were collected by earlier single-run harnesses on 2026-11-08. Use them as
 historical context, not as statistical baselines for the new Criterion suite.

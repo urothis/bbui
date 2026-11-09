@@ -4,11 +4,12 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use bevy_asset::{AssetServer, LoadState};
-use bevy_ecs::prelude::{Component, Entity, Resource, World};
+use bevy_ecs::prelude::{Component, Entity, Resource, With, World};
 use bevy_image::Image;
 use bui_core::{
-    UiEnabled, UiFocusable, UiKey, UiKeyCode, UiModifiers, UiNode, UiParent, UiPointerButton,
-    UiRect, UiRoutedEvent, UiRoutedEvents, UiVisible, UiWheelUnit, detach_from_parent, set_parent,
+    UiChildren, UiDirty, UiDirtyDomain, UiEnabled, UiFocusable, UiKey, UiKeyCode, UiModifiers,
+    UiNode, UiParent, UiPointerButton, UiRect, UiRoutedEvent, UiRoutedEvents, UiVisible,
+    UiWheelUnit, detach_from_parent, set_parent,
 };
 use bui_layout::UiLayoutResult;
 use bui_render::{ClipRect, DrawItem, ImageRegistry, Primitive};
@@ -266,8 +267,40 @@ impl Canvas {
             .map(|object| object.id)
     }
 
+    pub fn hit_test_indexed(
+        &self,
+        index: &CanvasSpatialIndex,
+        screen: [f32; 2],
+        viewport: UiRect,
+    ) -> Option<u64> {
+        if !index.usable {
+            return self.hit_test(screen, viewport);
+        }
+        if !viewport.contains(screen[0], screen[1]) || !self.zoom.is_finite() || self.zoom <= 0.0 {
+            return None;
+        }
+        let point = self.screen_to_world(screen);
+        let tolerance = 6.0 / self.zoom;
+        let query = UiRect::new(
+            point[0] - tolerance,
+            point[1] - tolerance,
+            tolerance * 2.0,
+            tolerance * 2.0,
+        );
+        index
+            .query(query)?
+            .into_iter()
+            .rev()
+            .filter_map(|position| self.objects.get(position))
+            .find(|object| object.hit(point, tolerance))
+            .map(|object| object.id)
+    }
+
     pub fn select_at(&mut self, screen: [f32; 2], viewport: UiRect, extend: bool) -> bool {
-        let hit = self.hit_test(screen, viewport);
+        self.select_hit(self.hit_test(screen, viewport), extend)
+    }
+
+    pub fn select_hit(&mut self, hit: Option<u64>, extend: bool) -> bool {
         let before = self.selected.clone();
         if !extend {
             self.selected.clear();
@@ -280,6 +313,47 @@ impl Canvas {
             }
         }
         self.selected != before
+    }
+
+    fn move_selected_at_indices(&mut self, indices: &[usize], delta: [f32; 2]) -> bool {
+        if !delta.iter().all(|value| value.is_finite()) {
+            return false;
+        }
+        for index in indices {
+            let Some(object) = self.objects.get(*index) else {
+                continue;
+            };
+            if !self.selected.contains(&object.id) || object.locked {
+                continue;
+            }
+            let mut candidate = object.clone();
+            candidate.origin[0] += delta[0];
+            candidate.origin[1] += delta[1];
+            if let CanvasShape::Line { end } = &mut candidate.shape {
+                end[0] += delta[0];
+                end[1] += delta[1];
+            }
+            if !candidate.valid() {
+                return false;
+            }
+        }
+        let mut changed = false;
+        for index in indices {
+            let Some(object) = self.objects.get_mut(*index) else {
+                continue;
+            };
+            if !self.selected.contains(&object.id) || object.locked {
+                continue;
+            }
+            object.origin[0] += delta[0];
+            object.origin[1] += delta[1];
+            if let CanvasShape::Line { end } = &mut object.shape {
+                end[0] += delta[0];
+                end[1] += delta[1];
+            }
+            changed = true;
+        }
+        changed
     }
 
     pub fn to_json(&self) -> Result<String, serde_json::Error> {
@@ -337,7 +411,7 @@ struct CanvasSnapshot {
     next_id: u64,
 }
 
-#[derive(Resource, Debug, Default)]
+#[derive(Resource, Debug, Default, Clone, PartialEq, Eq)]
 pub struct CanvasImageAssets {
     ids: HashMap<String, u64>,
     states: HashMap<String, CanvasImageState>,
@@ -352,25 +426,394 @@ pub struct CanvasObjectControl {
     pub locked: bool,
 }
 
+#[derive(Component, Debug, Clone, PartialEq)]
+pub(crate) struct CanvasObjectPaint(pub CanvasObject);
+
 #[derive(Resource, Debug, Default)]
 pub struct CanvasObjectItems(HashMap<Entity, HashMap<u64, Entity>>);
+
+#[derive(Resource, Debug, Default)]
+pub struct CanvasSpatialIndexes(HashMap<Entity, CanvasSpatialIndex>);
+
+const CANVAS_SPATIAL_CELL_SIZE: f32 = 128.0;
+const CANVAS_SPATIAL_MAX_CELLS_PER_OBJECT: i128 = 128;
+const CANVAS_SPATIAL_MAX_QUERY_CELLS: i128 = 65_536;
+
+#[derive(Debug, Default)]
+pub struct CanvasSpatialIndex {
+    objects: HashMap<u64, CanvasSpatialEntry>,
+    cells: HashMap<(i64, i64), HashSet<u64>>,
+    broad: HashSet<u64>,
+    changed_tick: u32,
+    usable: bool,
+}
+
+#[derive(Debug)]
+struct CanvasSpatialEntry {
+    index: usize,
+    bounds: UiRect,
+    cells: Vec<(i64, i64)>,
+    broad: bool,
+}
+
+impl CanvasSpatialIndex {
+    pub fn new(canvas: &Canvas) -> Self {
+        Self::build(canvas, 0)
+    }
+
+    pub fn visible_indices(
+        &self,
+        canvas: &Canvas,
+        rect: UiRect,
+        clip: ClipRect,
+        padding: f32,
+    ) -> Option<Vec<usize>> {
+        let viewport = canvas_world_viewport(canvas, rect, clip, padding)?;
+        self.query(viewport)
+    }
+
+    fn build(canvas: &Canvas, changed_tick: u32) -> Self {
+        let mut index = Self {
+            changed_tick,
+            usable: true,
+            ..Default::default()
+        };
+        for (position, object) in canvas.objects.iter().enumerate() {
+            if index.objects.contains_key(&object.id) {
+                // Direct edits can violate the model's unique-ID invariant. Keep the old
+                // full-scan behavior until the canvas is repaired instead of dropping one.
+                index.usable = false;
+                return index;
+            }
+            index.insert_object(position, object.id, object.bounds());
+        }
+        index
+    }
+
+    fn insert_object(&mut self, position: usize, id: u64, bounds: UiRect) {
+        let cells = spatial_cells(bounds, CANVAS_SPATIAL_MAX_CELLS_PER_OBJECT);
+        let broad = cells.is_none();
+        let cells = cells.unwrap_or_default();
+        if broad {
+            self.broad.insert(id);
+        } else {
+            for cell in &cells {
+                self.cells.entry(*cell).or_default().insert(id);
+            }
+        }
+        self.objects.insert(
+            id,
+            CanvasSpatialEntry {
+                index: position,
+                bounds,
+                cells,
+                broad,
+            },
+        );
+    }
+
+    fn update_object(&mut self, position: usize, id: u64, bounds: UiRect) {
+        if let Some(previous) = self.objects.remove(&id) {
+            if previous.broad {
+                self.broad.remove(&id);
+            }
+            for cell in previous.cells {
+                if let Some(ids) = self.cells.get_mut(&cell) {
+                    ids.remove(&id);
+                    if ids.is_empty() {
+                        self.cells.remove(&cell);
+                    }
+                }
+            }
+        }
+        self.insert_object(position, id, bounds);
+    }
+
+    fn query(&self, bounds: UiRect) -> Option<Vec<usize>> {
+        if !self.usable || !bounds.is_finite() {
+            return None;
+        }
+        let mut ids = HashSet::new();
+        if let Some(cells) = spatial_cells(bounds, CANVAS_SPATIAL_MAX_QUERY_CELLS) {
+            for cell in cells {
+                if let Some(found) = self.cells.get(&cell) {
+                    ids.extend(found.iter().copied());
+                }
+            }
+            ids.extend(self.broad.iter().copied());
+        } else {
+            // A very zoomed-out viewport can cover most of the grid. Enumerating the
+            // index once is cheaper and remains correct in that case.
+            ids.extend(self.objects.keys().copied());
+        }
+        let mut positions = ids
+            .into_iter()
+            .filter_map(|id| {
+                self.objects
+                    .get(&id)
+                    .filter(|object| rects_overlap(object.bounds, bounds))
+                    .map(|object| object.index)
+            })
+            .collect::<Vec<_>>();
+        positions.sort_unstable();
+        Some(positions)
+    }
+}
+
+impl CanvasSpatialIndexes {
+    fn query(&self, owner: Entity, bounds: UiRect) -> Option<Vec<usize>> {
+        self.0.get(&owner)?.query(bounds)
+    }
+
+    fn position(&self, owner: Entity, id: u64) -> Option<usize> {
+        self.0
+            .get(&owner)?
+            .objects
+            .get(&id)
+            .map(|object| object.index)
+    }
+}
+
+fn spatial_cells(bounds: UiRect, limit: i128) -> Option<Vec<(i64, i64)>> {
+    if !bounds.is_finite() || !bounds.right().is_finite() || !bounds.bottom().is_finite() {
+        return None;
+    }
+    let left = (bounds.x / CANVAS_SPATIAL_CELL_SIZE).floor() as i64;
+    let top = (bounds.y / CANVAS_SPATIAL_CELL_SIZE).floor() as i64;
+    let right = (bounds.right() / CANVAS_SPATIAL_CELL_SIZE).floor() as i64;
+    let bottom = (bounds.bottom() / CANVAS_SPATIAL_CELL_SIZE).floor() as i64;
+    let width = i128::from(right) - i128::from(left) + 1;
+    let height = i128::from(bottom) - i128::from(top) + 1;
+    if width <= 0 || height <= 0 || width.saturating_mul(height) > limit {
+        return None;
+    }
+    let mut cells = Vec::with_capacity((width * height) as usize);
+    for x in left..=right {
+        for y in top..=bottom {
+            cells.push((x, y));
+        }
+    }
+    Some(cells)
+}
+
+fn rects_overlap(left: UiRect, right: UiRect) -> bool {
+    left.right() >= right.x
+        && right.right() >= left.x
+        && left.bottom() >= right.y
+        && right.bottom() >= left.y
+}
+
+fn canvas_world_viewport(
+    canvas: &Canvas,
+    rect: UiRect,
+    clip: ClipRect,
+    padding: f32,
+) -> Option<UiRect> {
+    if !canvas.zoom.is_finite() || canvas.zoom <= 0.0 || !padding.is_finite() {
+        return None;
+    }
+    let viewport = UiRect::new(clip.x, clip.y, clip.width, clip.height).intersection(rect)?;
+    let left = (viewport.x - rect.x - padding - canvas.pan[0]) / canvas.zoom;
+    let top = (viewport.y - rect.y - padding - canvas.pan[1]) / canvas.zoom;
+    let right = (viewport.right() - rect.x + padding - canvas.pan[0]) / canvas.zoom;
+    let bottom = (viewport.bottom() - rect.y + padding - canvas.pan[1]) / canvas.zoom;
+    let world = UiRect::new(
+        left.min(right),
+        top.min(bottom),
+        (right - left).abs(),
+        (bottom - top).abs(),
+    );
+    world.is_finite().then_some(world)
+}
+
+fn query_canvas_object_indices(
+    world: &World,
+    owner: Entity,
+    canvas: &Canvas,
+    rect: UiRect,
+    clip: ClipRect,
+    padding: f32,
+) -> Option<Vec<usize>> {
+    let world_view = canvas_world_viewport(canvas, rect, clip, padding)?;
+    world
+        .get_resource::<CanvasSpatialIndexes>()?
+        .query(owner, world_view)
+}
+
+fn canvas_component_tick(world: &World, owner: Entity) -> Option<u32> {
+    let component_id = world.components().component_id::<Canvas>()?;
+    world
+        .get_entity(owner)
+        .ok()?
+        .get_change_ticks_by_id(component_id)
+        .map(|ticks| ticks.changed.get())
+}
+
+/// Ensure the spatial index reflects direct public ECS edits. Internal Canvas gestures call
+/// `note_canvas_metadata_edit` or `note_canvas_object_edits` to keep ordinary edits incremental.
+pub(crate) fn ensure_canvas_spatial_index(world: &mut World, owner: Entity) -> bool {
+    world.init_resource::<CanvasSpatialIndexes>();
+    let Some(changed_tick) = canvas_component_tick(world, owner) else {
+        return false;
+    };
+    let current = world
+        .resource::<CanvasSpatialIndexes>()
+        .0
+        .get(&owner)
+        .is_some_and(|index| index.changed_tick == changed_tick);
+    if current {
+        return true;
+    }
+    let Some(index) = world
+        .get::<Canvas>(owner)
+        .map(|canvas| CanvasSpatialIndex::build(canvas, changed_tick))
+    else {
+        return false;
+    };
+    world
+        .resource_mut::<CanvasSpatialIndexes>()
+        .0
+        .insert(owner, index);
+    true
+}
+
+/// Edit one Canvas object while keeping its spatial index in sync. The object's ID is stable;
+/// use a structural Canvas edit to add, remove, or reorder objects.
+/// Returns false when the object is missing, the edit is unchanged, or it makes the object invalid.
+pub fn edit_canvas_object(
+    world: &mut World,
+    owner: Entity,
+    id: u64,
+    edit: impl FnOnce(&mut CanvasObject),
+) -> bool {
+    if !ensure_canvas_spatial_index(world, owner) {
+        return false;
+    }
+    let Some(position) = world
+        .resource::<CanvasSpatialIndexes>()
+        .0
+        .get(&owner)
+        .filter(|index| index.usable)
+        .and_then(|index| index.objects.get(&id))
+        .map(|entry| entry.index)
+    else {
+        return false;
+    };
+    let Some(original) = world
+        .get::<Canvas>(owner)
+        .and_then(|canvas| canvas.objects.get(position))
+        .filter(|object| object.id == id)
+    else {
+        return false;
+    };
+    let mut updated = original.clone();
+    edit(&mut updated);
+    if updated.id != id || !updated.valid() || updated == *original {
+        return false;
+    }
+    world.get_mut::<Canvas>(owner).unwrap().objects[position] = updated;
+    note_canvas_object_edits(world, owner, &[position]);
+    true
+}
+
+pub(crate) fn note_canvas_metadata_edit(world: &mut World, owner: Entity) {
+    let Some(changed_tick) = canvas_component_tick(world, owner) else {
+        return;
+    };
+    let Some(mut indexes) = world.get_resource_mut::<CanvasSpatialIndexes>() else {
+        return;
+    };
+    let Some(index) = indexes.0.get_mut(&owner) else {
+        return;
+    };
+    if index.usable {
+        index.changed_tick = changed_tick;
+    }
+}
+
+fn note_canvas_object_edits(world: &mut World, owner: Entity, positions: &[usize]) {
+    let Some(changed_tick) = canvas_component_tick(world, owner) else {
+        return;
+    };
+    let updates = {
+        let Some(canvas) = world.get::<Canvas>(owner) else {
+            return;
+        };
+        positions
+            .iter()
+            .filter_map(|position| {
+                canvas
+                    .objects
+                    .get(*position)
+                    .map(|object| (*position, object.id, object.bounds()))
+            })
+            .collect::<Vec<_>>()
+    };
+    let Some(mut indexes) = world.get_resource_mut::<CanvasSpatialIndexes>() else {
+        return;
+    };
+    let Some(index) = indexes.0.get_mut(&owner) else {
+        return;
+    };
+    if !index.usable {
+        return;
+    }
+    for (position, id, bounds) in updates {
+        index.update_object(position, id, bounds);
+    }
+    index.changed_tick = changed_tick;
+}
 
 /// Keep a stable entity only for each object intersecting the visible canvas
 /// clip. These entities expose per-object accessibility without scaling entity
 /// count with offscreen content.
 pub fn sync_canvas_object_views(world: &mut World) {
+    let live_canvas_owners = {
+        let mut query = world.query_filtered::<Entity, With<Canvas>>();
+        query.iter(world).collect::<HashSet<_>>()
+    };
+    if let Some(mut indexes) = world.get_resource_mut::<CanvasSpatialIndexes>() {
+        indexes
+            .0
+            .retain(|owner, _| live_canvas_owners.contains(owner));
+    }
     let mut query = world.query::<(Entity, &Canvas, &UiLayoutResult)>();
-    let mut owners = Vec::new();
-    for (owner, canvas, layout) in query.iter(world) {
+    let owners = query
+        .iter(world)
+        .map(|(owner, _, layout)| (owner, *layout))
+        .collect::<Vec<_>>();
+    let mut previous = world
+        .remove_resource::<CanvasObjectItems>()
+        .unwrap_or_default();
+    let mut previous_entities = std::mem::take(&mut previous.0);
+    let mut next_entities = HashMap::new();
+    for (owner, layout) in owners {
         if !visible_in_hierarchy(world, owner) || world.get::<UiNode>(owner).is_none() {
             continue;
         }
+        ensure_canvas_spatial_index(world, owner);
+        let Some(canvas) = world.get::<Canvas>(owner) else {
+            continue;
+        };
         let clip = layout.clip.unwrap_or(layout.rect).intersection(layout.rect);
         let mut items = Vec::new();
-        for object in &canvas.objects {
+        let visible_indices = query_canvas_object_indices(
+            world,
+            owner,
+            canvas,
+            layout.rect,
+            ClipRect::from(clip.unwrap_or_default()),
+            8.0,
+        )
+        .unwrap_or_else(|| (0..canvas.objects.len()).collect());
+        for index in visible_indices.iter().copied() {
+            let Some(object) = canvas.objects.get(index) else {
+                continue;
+            };
             if !object.visible {
                 continue;
             }
+            let paint = CanvasObjectPaint(object.clone());
             let bounds = object.bounds();
             let position = canvas.world_to_screen([bounds.x, bounds.y]);
             let rect = UiRect::new(
@@ -403,19 +846,12 @@ pub fn sync_canvas_object_views(world: &mut World) {
                 content_size: [rect.width, rect.height],
                 dpi_scale: layout.dpi_scale,
             };
-            items.push((control, child_layout));
+            items.push((control, paint, child_layout));
         }
-        owners.push((owner, items));
-    }
-    let mut previous = world
-        .remove_resource::<CanvasObjectItems>()
-        .unwrap_or_default()
-        .0;
-    let mut next = HashMap::new();
-    for (owner, items) in owners {
-        let mut owned = previous.remove(&owner).unwrap_or_default();
+        let mut owned = previous_entities.remove(&owner).unwrap_or_default();
         let mut current = HashMap::new();
-        for (control, child_layout) in items {
+        let mut ordered_entities = Vec::with_capacity(items.len());
+        for (control, paint, child_layout) in items {
             let object_id = control.object_id;
             let locked = control.locked;
             let entity = owned
@@ -432,37 +868,91 @@ pub fn sync_canvas_object_views(world: &mut World) {
                     set_parent(world, entity, owner).expect("canvas owner is a UI node");
                     entity
                 });
+            let mut paint_changed = false;
+            let mut accessibility_changed = false;
             if world.get::<CanvasObjectControl>(entity) != Some(&control) {
                 world.entity_mut(entity).insert(control);
+                paint_changed = true;
+                accessibility_changed = true;
+            }
+            if world.get::<CanvasObjectPaint>(entity) != Some(&paint) {
+                world.entity_mut(entity).insert(paint);
+                paint_changed = true;
             }
             if world.get::<UiLayoutResult>(entity) != Some(&child_layout) {
                 world.entity_mut(entity).insert(child_layout);
+                paint_changed = true;
             }
             if world
                 .get::<UiEnabled>(entity)
                 .is_none_or(|enabled| enabled.0 == locked)
             {
                 world.entity_mut(entity).insert(UiEnabled(!locked));
+                paint_changed = true;
+                accessibility_changed = true;
+            }
+            if paint_changed || accessibility_changed {
+                world.init_resource::<UiDirty>();
+                let mut dirty = world.resource_mut::<UiDirty>();
+                if paint_changed {
+                    dirty.mark(UiDirtyDomain::Paint, entity);
+                }
+                if accessibility_changed {
+                    dirty.mark(UiDirtyDomain::Accessibility, entity);
+                }
             }
             current.insert(object_id, entity);
+            ordered_entities.push(entity);
         }
         for entity in owned.into_values() {
             if world.get_entity(entity).is_ok() {
                 detach_from_parent(world, entity);
                 world.despawn(entity);
             }
+            world.init_resource::<UiDirty>();
+            world
+                .resource_mut::<UiDirty>()
+                .mark(UiDirtyDomain::Paint, entity);
+            world
+                .resource_mut::<UiDirty>()
+                .mark(UiDirtyDomain::Accessibility, entity);
         }
-        next.insert(owner, current);
+        if let Some(children) = world
+            .get::<UiChildren>(owner)
+            .map(|children| children.0.clone())
+        {
+            let mut reordered = children
+                .iter()
+                .copied()
+                .filter(|child| {
+                    world
+                        .get::<CanvasObjectControl>(*child)
+                        .is_none_or(|control| control.owner != owner)
+                })
+                .collect::<Vec<_>>();
+            reordered.extend(ordered_entities.iter().copied());
+            if reordered != children {
+                world.entity_mut(owner).insert(UiChildren(reordered));
+            }
+        }
+        next_entities.insert(owner, current);
     }
-    for owned in previous.into_values() {
+    for owned in previous_entities.into_values() {
         for entity in owned.into_values() {
             if world.get_entity(entity).is_ok() {
                 detach_from_parent(world, entity);
                 world.despawn(entity);
             }
+            world.init_resource::<UiDirty>();
+            world
+                .resource_mut::<UiDirty>()
+                .mark(UiDirtyDomain::Paint, entity);
+            world
+                .resource_mut::<UiDirty>()
+                .mark(UiDirtyDomain::Accessibility, entity);
         }
     }
-    world.insert_resource(CanvasObjectItems(next));
+    world.insert_resource(CanvasObjectItems(next_entities));
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -493,6 +983,30 @@ pub fn sync_canvas_images(world: &mut World) {
         return;
     }
     let required = visible_canvas_image_paths(world);
+    let state_is_current = world
+        .get_resource::<CanvasImageAssets>()
+        .is_some_and(|assets| {
+            assets.ids.len() == required.len()
+                && assets.states.len() == required.len()
+                && required.iter().all(|asset| {
+                    let Some(id) = assets.ids.get(asset) else {
+                        return false;
+                    };
+                    let status = world
+                        .resource::<ImageRegistry>()
+                        .get(*id)
+                        .and_then(|handle| asset_server.get_load_state(handle.id()))
+                        .map(canvas_image_state);
+                    assets.states.get(asset) == Some(&status.unwrap_or(CanvasImageState::Loading))
+                })
+        });
+    if state_is_current {
+        return;
+    }
+    let previous = world
+        .get_resource::<CanvasImageAssets>()
+        .cloned()
+        .unwrap_or_default();
     let mut assets = world
         .remove_resource::<CanvasImageAssets>()
         .unwrap_or_default();
@@ -521,43 +1035,105 @@ pub fn sync_canvas_images(world: &mut World) {
         let state = registry
             .get(*id)
             .and_then(|handle| asset_server.get_load_state(handle.id()));
-        let status = match state {
-            Some(LoadState::Loaded) => CanvasImageState::Ready,
-            Some(LoadState::Failed(error)) => CanvasImageState::Failed(error.to_string()),
-            _ => CanvasImageState::Loading,
-        };
+        let status = state
+            .map(canvas_image_state)
+            .unwrap_or(CanvasImageState::Loading);
         assets.states.insert(asset.clone(), status);
     }
+    let mut changed_assets = HashSet::new();
+    changed_assets.extend(
+        previous
+            .ids
+            .keys()
+            .chain(assets.ids.keys())
+            .filter(|asset| {
+                let asset = *asset;
+                previous.ids.get(asset) != assets.ids.get(asset)
+                    || previous.states.get(asset) != assets.states.get(asset)
+            })
+            .cloned(),
+    );
     world.insert_resource(assets);
+    if !changed_assets.is_empty() {
+        let changed_items = world
+            .get_resource::<CanvasObjectItems>()
+            .into_iter()
+            .flat_map(|items| items.0.values())
+            .flat_map(HashMap::values)
+            .filter_map(|entity| {
+                let paint = world.get::<CanvasObjectPaint>(*entity)?;
+                let CanvasShape::Image { asset, .. } = &paint.0.shape else {
+                    return None;
+                };
+                changed_assets.contains(asset).then_some(*entity)
+            })
+            .collect::<Vec<_>>();
+        world.init_resource::<UiDirty>();
+        let mut dirty = world.resource_mut::<UiDirty>();
+        for entity in changed_items {
+            dirty.mark(UiDirtyDomain::Paint, entity);
+        }
+    }
+}
+
+fn canvas_image_state(state: LoadState) -> CanvasImageState {
+    match state {
+        LoadState::Loaded => CanvasImageState::Ready,
+        LoadState::Failed(error) => CanvasImageState::Failed(error.to_string()),
+        _ => CanvasImageState::Loading,
+    }
 }
 
 fn visible_canvas_image_paths(world: &mut World) -> HashSet<String> {
     let mut query = world.query::<(Entity, &Canvas, &UiLayoutResult)>();
-    query
+    let owners = query
         .iter(world)
-        .filter(|(entity, _, _)| visible_in_hierarchy(world, *entity))
-        .flat_map(|(_, canvas, layout)| {
-            let viewport = layout.clip.unwrap_or(layout.rect).intersection(layout.rect);
-            canvas.objects.iter().filter_map(move |object| {
-                let CanvasShape::Image { size, asset } = &object.shape else {
-                    return None;
-                };
-                if !object.visible || !object.shape.valid() {
-                    return None;
-                }
-                let position = canvas.world_to_screen(object.origin);
-                let screen_rect = UiRect::new(
-                    layout.rect.x + position[0],
-                    layout.rect.y + position[1],
-                    size[0] * canvas.zoom,
-                    size[1] * canvas.zoom,
-                );
-                viewport
-                    .and_then(|viewport| viewport.intersection(screen_rect))
-                    .map(|_| asset.clone())
-            })
-        })
-        .collect()
+        .map(|(owner, _, layout)| (owner, *layout))
+        .collect::<Vec<_>>();
+    let mut paths = HashSet::new();
+    for (owner, layout) in owners {
+        if !visible_in_hierarchy(world, owner) {
+            continue;
+        }
+        ensure_canvas_spatial_index(world, owner);
+        let Some(canvas) = world.get::<Canvas>(owner) else {
+            continue;
+        };
+        let Some(viewport) = layout.clip.unwrap_or(layout.rect).intersection(layout.rect) else {
+            continue;
+        };
+        let indices = query_canvas_object_indices(
+            world,
+            owner,
+            canvas,
+            layout.rect,
+            ClipRect::from(viewport),
+            0.0,
+        )
+        .unwrap_or_else(|| (0..canvas.objects.len()).collect());
+        for index in indices {
+            let Some(object) = canvas.objects.get(index) else {
+                continue;
+            };
+            let CanvasShape::Image { size, asset } = &object.shape else {
+                continue;
+            };
+            if !object.visible || !object.shape.valid() {
+                continue;
+            }
+            let position = canvas.world_to_screen(object.origin);
+            let screen_rect = UiRect::new(
+                layout.rect.x + position[0],
+                layout.rect.y + position[1],
+                size[0] * canvas.zoom,
+                size[1] * canvas.zoom,
+            );
+            if viewport.intersection(screen_rect).is_some() {
+                paths.insert(asset.clone());
+            }
+        }
+    }
+    paths
 }
 
 fn visible_in_hierarchy(world: &World, entity: Entity) -> bool {
@@ -584,17 +1160,67 @@ pub fn paint_canvas(
     images: Option<&CanvasImageAssets>,
     output: &mut Vec<DrawItem>,
 ) {
-    let viewport = UiRect::new(clip.x, clip.y, clip.width, clip.height).intersection(rect);
-    output.push(DrawItem {
+    paint_canvas_objects(
+        canvas,
+        0..canvas.objects.len(),
+        rect,
         clip,
         z,
-        primitive: Primitive::RoundedRect {
-            rect: ClipRect::from(rect),
-            radius: theme.corner_radius,
-            color: theme.background,
-        },
-    });
-    for object in &canvas.objects {
+        theme,
+        images,
+        output,
+    );
+}
+
+/// Paint only the supplied object positions after building a spatial query for the viewport.
+/// The Canvas widget uses per-object child fragments; this entry point is useful for direct
+/// canvas rendering and the stress harness.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Direct Canvas painting keeps the model, sparse positions, viewport, theme, assets, and output explicit"
+)]
+pub fn paint_canvas_indexed(
+    canvas: &Canvas,
+    object_indices: &[usize],
+    rect: UiRect,
+    clip: ClipRect,
+    z: i32,
+    theme: &Theme,
+    images: Option<&CanvasImageAssets>,
+    output: &mut Vec<DrawItem>,
+) {
+    paint_canvas_objects(
+        canvas,
+        object_indices.iter().copied(),
+        rect,
+        clip,
+        z,
+        theme,
+        images,
+        output,
+    );
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The shared Canvas loop carries the model, object positions, viewport, theme, assets, and output"
+)]
+fn paint_canvas_objects(
+    canvas: &Canvas,
+    object_indices: impl IntoIterator<Item = usize>,
+    rect: UiRect,
+    clip: ClipRect,
+    z: i32,
+    theme: &Theme,
+    images: Option<&CanvasImageAssets>,
+    output: &mut Vec<DrawItem>,
+) {
+    let viewport = UiRect::new(clip.x, clip.y, clip.width, clip.height).intersection(rect);
+    paint_canvas_background(rect, clip, z, theme, output);
+    for object_index in object_indices {
+        let Some(object) = canvas.objects.get(object_index) else {
+            continue;
+        };
         if !object.visible {
             continue;
         }
@@ -735,6 +1361,176 @@ pub fn paint_canvas(
     }
 }
 
+pub(crate) fn paint_canvas_background(
+    rect: UiRect,
+    clip: ClipRect,
+    z: i32,
+    theme: &Theme,
+    output: &mut Vec<DrawItem>,
+) {
+    output.push(DrawItem {
+        clip,
+        z,
+        primitive: Primitive::RoundedRect {
+            rect: ClipRect::from(rect),
+            radius: theme.corner_radius,
+            color: theme.background,
+        },
+    });
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "One stable Canvas fragment needs its model, object, viewport, z, theme, assets, and output"
+)]
+pub(crate) fn paint_canvas_object_fragment(
+    canvas: &Canvas,
+    object: &CanvasObject,
+    rect: UiRect,
+    clip: ClipRect,
+    z: i32,
+    theme: &Theme,
+    images: Option<&CanvasImageAssets>,
+    output: &mut Vec<DrawItem>,
+) {
+    if !object.visible {
+        return;
+    }
+    let viewport = UiRect::new(clip.x, clip.y, clip.width, clip.height).intersection(rect);
+    let bounds = object.bounds();
+    let position = canvas.world_to_screen([bounds.x, bounds.y]);
+    let screen_bounds = UiRect::new(
+        rect.x + position[0] - 8.0,
+        rect.y + position[1] - 8.0,
+        (bounds.width * canvas.zoom).max(1.0) + 16.0,
+        (bounds.height * canvas.zoom).max(1.0) + 16.0,
+    );
+    if !screen_bounds.is_finite()
+        || !viewport.is_some_and(|viewport| viewport.intersection(screen_bounds).is_some())
+    {
+        return;
+    }
+    let to_screen = |point: [f32; 2]| {
+        let local = canvas.world_to_screen(point);
+        [rect.x + local[0], rect.y + local[1]]
+    };
+    let origin = to_screen(object.origin);
+    let color = Rgba(
+        object.color[0],
+        object.color[1],
+        object.color[2],
+        object.color[3],
+    );
+    let primitive = match &object.shape {
+        CanvasShape::Rectangle { size } => Some(Primitive::RoundedRect {
+            rect: ClipRect {
+                x: origin[0],
+                y: origin[1],
+                width: size[0] * canvas.zoom,
+                height: size[1] * canvas.zoom,
+            },
+            radius: 0.0,
+            color,
+        }),
+        CanvasShape::Ellipse { size } => Some(Primitive::Ellipse {
+            rect: ClipRect {
+                x: origin[0],
+                y: origin[1],
+                width: size[0] * canvas.zoom,
+                height: size[1] * canvas.zoom,
+            },
+            color,
+        }),
+        CanvasShape::Line { end } => Some(Primitive::Line {
+            from: origin,
+            to: to_screen(*end),
+            width: (2.0 * canvas.zoom).clamp(1.0, 16.0),
+            color,
+        }),
+        CanvasShape::Image { size, asset } => images
+            .filter(|images| images.state(asset) == Some(&CanvasImageState::Ready))
+            .and_then(|images| images.id(asset))
+            .map(|asset_id| Primitive::Icon {
+                rect: ClipRect {
+                    x: origin[0],
+                    y: origin[1],
+                    width: size[0] * canvas.zoom,
+                    height: size[1] * canvas.zoom,
+                },
+                asset_id,
+                tint: color,
+            }),
+    };
+    if let Some(primitive) = primitive {
+        output.push(DrawItem {
+            clip,
+            z: z.saturating_add(1),
+            primitive,
+        });
+    }
+    if let CanvasShape::Image { asset, .. } = &object.shape
+        && !matches!(
+            images.and_then(|images| images.state(asset)),
+            Some(CanvasImageState::Ready)
+        )
+    {
+        let message = match images.and_then(|images| images.state(asset)) {
+            Some(CanvasImageState::Failed(reason)) => format!("Image error: {reason}"),
+            _ => format!("Loading image: {asset}"),
+        };
+        output.push(DrawItem {
+            clip,
+            z: z.saturating_add(1),
+            primitive: Primitive::Text {
+                origin: [origin[0] + 4.0, origin[1] + 4.0],
+                text: message,
+                color: theme.text_muted,
+            },
+        });
+    }
+    if canvas.selected.contains(&object.id) {
+        let a = to_screen([bounds.x, bounds.y]);
+        let b = to_screen([bounds.right(), bounds.bottom()]);
+        let x0 = a[0].min(b[0]);
+        let y0 = a[1].min(b[1]);
+        let x1 = a[0].max(b[0]);
+        let y1 = a[1].max(b[1]);
+        if x1 > x0 && y1 > y0 {
+            output.push(DrawItem {
+                clip,
+                z: z.saturating_add(2),
+                primitive: Primitive::RoundedRect {
+                    rect: ClipRect {
+                        x: x0,
+                        y: y0,
+                        width: x1 - x0,
+                        height: y1 - y0,
+                    },
+                    radius: 0.0,
+                    color: theme.color(ThemeColorToken::CanvasSelectionOverlay),
+                },
+            });
+        }
+        for (from, to) in [
+            ([x0, y0], [x1, y0]),
+            ([x1, y0], [x1, y1]),
+            ([x1, y1], [x0, y1]),
+            ([x0, y1], [x0, y0]),
+        ] {
+            output.push(DrawItem {
+                clip,
+                z: z.saturating_add(2),
+                primitive: Primitive::Line {
+                    from,
+                    to,
+                    width: 1.5,
+                    color: theme.selection,
+                },
+            });
+        }
+    }
+}
+
 #[derive(Debug)]
 struct CanvasDrag {
     target: Entity,
@@ -806,13 +1602,23 @@ pub fn process_canvas_input(world: &mut World) {
                 };
                 if let Some((local, _)) = local_point(world, drag.target, position) {
                     let delta = [local[0] - drag.last[0], local[1] - drag.last[1]];
-                    if let Some(mut canvas) = world.get_mut::<Canvas>(drag.target) {
-                        if drag.button == UiPointerButton::Middle {
-                            canvas.pan_by(delta);
-                        } else if drag.moving_objects {
-                            let zoom = canvas.zoom;
-                            canvas.move_selected([delta[0] / zoom, delta[1] / zoom]);
+                    if drag.button == UiPointerButton::Middle {
+                        ensure_canvas_spatial_index(world, drag.target);
+                        let changed = world
+                            .get_mut::<Canvas>(drag.target)
+                            .is_some_and(|mut canvas| canvas.pan_by(delta));
+                        if changed {
+                            note_canvas_metadata_edit(world, drag.target);
                         }
+                    } else if drag.moving_objects {
+                        let zoom = world
+                            .get::<Canvas>(drag.target)
+                            .map_or(1.0, |canvas| canvas.zoom);
+                        move_selected_objects(
+                            world,
+                            drag.target,
+                            [delta[0] / zoom, delta[1] / zoom],
+                        );
                     }
                     drag.last = local;
                 }
@@ -876,7 +1682,7 @@ pub fn process_canvas_input(world: &mut World) {
                     continue;
                 };
                 if key == UiKeyCode::Delete || key == UiKeyCode::Backspace {
-                    edit_canvas(world, target, |canvas| canvas.remove_selected() > 0);
+                    edit_canvas_structure(world, target, |canvas| canvas.remove_selected() > 0);
                 } else if matches!(
                     key,
                     UiKeyCode::ArrowLeft
@@ -897,7 +1703,7 @@ pub fn process_canvas_input(world: &mut World) {
                         UiKeyCode::ArrowUp => [0.0, -step],
                         _ => [0.0, step],
                     };
-                    edit_canvas(world, target, |canvas| canvas.move_selected(delta));
+                    edit_canvas_move_selected(world, target, delta);
                 } else if matches!(key, UiKeyCode::PageUp | UiKeyCode::PageDown) {
                     if let Some(layout) = world.get::<UiLayoutResult>(target) {
                         let center = [layout.rect.width * 0.5, layout.rect.height * 0.5];
@@ -965,6 +1771,7 @@ fn begin_canvas_drag(
     let Some((local, viewport)) = local_point(world, target, position) else {
         return;
     };
+    ensure_canvas_spatial_index(world, target);
     let Some(before) = world
         .get::<Canvas>(target)
         .and_then(|canvas| canvas.to_json().ok())
@@ -972,15 +1779,27 @@ fn begin_canvas_drag(
         return;
     };
     let moving_objects = if button == UiPointerButton::Primary {
-        let Some(mut canvas) = world.get_mut::<Canvas>(target) else {
-            return;
-        };
-        let hit = canvas.hit_test(local, viewport);
+        let hit = indexed_canvas_hit_test(world, target, local, viewport);
         let additive = modifiers.control || modifiers.super_key || modifiers.shift;
-        if additive || !hit.is_some_and(|id| canvas.selected.contains(&id)) {
-            canvas.select_at(local, viewport, additive);
+        let (selected, selection_changed) = {
+            let Some(mut canvas) = world.get_mut::<Canvas>(target) else {
+                return;
+            };
+            let selection_changed =
+                if additive || !hit.is_some_and(|id| canvas.selected.contains(&id)) {
+                    canvas.select_hit(hit, additive)
+                } else {
+                    false
+                };
+            (
+                hit.is_some_and(|id| canvas.selected.contains(&id)),
+                selection_changed,
+            )
+        };
+        if selection_changed {
+            note_canvas_metadata_edit(world, target);
         }
-        hit.is_some_and(|id| canvas.selected.contains(&id))
+        selected
     } else {
         false
     };
@@ -1017,6 +1836,28 @@ fn local_point(world: &World, target: Entity, screen: [f32; 2]) -> Option<([f32;
 }
 
 fn edit_canvas(world: &mut World, target: Entity, edit: impl FnOnce(&mut Canvas) -> bool) {
+    ensure_canvas_spatial_index(world, target);
+    let Some(before) = world
+        .get::<Canvas>(target)
+        .and_then(|canvas| canvas.to_json().ok())
+    else {
+        return;
+    };
+    let changed = world
+        .get_mut::<Canvas>(target)
+        .is_some_and(|mut canvas| edit(&mut canvas));
+    if changed {
+        note_canvas_metadata_edit(world, target);
+        emit_canvas_edit(world, target, before);
+    }
+}
+
+fn edit_canvas_structure(
+    world: &mut World,
+    target: Entity,
+    edit: impl FnOnce(&mut Canvas) -> bool,
+) {
+    ensure_canvas_spatial_index(world, target);
     let Some(before) = world
         .get::<Canvas>(target)
         .and_then(|canvas| canvas.to_json().ok())
@@ -1029,6 +1870,59 @@ fn edit_canvas(world: &mut World, target: Entity, edit: impl FnOnce(&mut Canvas)
     if changed {
         emit_canvas_edit(world, target, before);
     }
+}
+
+fn edit_canvas_move_selected(world: &mut World, target: Entity, delta: [f32; 2]) {
+    ensure_canvas_spatial_index(world, target);
+    let Some(before) = world
+        .get::<Canvas>(target)
+        .and_then(|canvas| canvas.to_json().ok())
+    else {
+        return;
+    };
+    let changed = move_selected_objects(world, target, delta);
+    if changed {
+        emit_canvas_edit(world, target, before);
+    }
+}
+
+fn selected_canvas_object_positions(world: &World, target: Entity) -> Option<Vec<usize>> {
+    let canvas = world.get::<Canvas>(target)?;
+    let indexes = world.get_resource::<CanvasSpatialIndexes>()?;
+    let mut positions = Vec::with_capacity(canvas.selected.len());
+    for id in &canvas.selected {
+        positions.push(indexes.position(target, *id)?);
+    }
+    Some(positions)
+}
+
+fn move_selected_objects(world: &mut World, target: Entity, delta: [f32; 2]) -> bool {
+    ensure_canvas_spatial_index(world, target);
+    let Some(positions) = selected_canvas_object_positions(world, target) else {
+        let changed = world
+            .get_mut::<Canvas>(target)
+            .is_some_and(|mut canvas| canvas.move_selected(delta));
+        return changed;
+    };
+    let changed = world
+        .get_mut::<Canvas>(target)
+        .is_some_and(|mut canvas| canvas.move_selected_at_indices(&positions, delta));
+    if changed {
+        note_canvas_object_edits(world, target, &positions);
+    }
+    changed
+}
+
+fn indexed_canvas_hit_test(
+    world: &World,
+    target: Entity,
+    position: [f32; 2],
+    viewport: UiRect,
+) -> Option<u64> {
+    let canvas = world.get::<Canvas>(target)?;
+    let indexes = world.get_resource::<CanvasSpatialIndexes>()?;
+    let index = indexes.0.get(&target)?;
+    Some(canvas.hit_test_indexed(index, position, viewport)).flatten()
 }
 
 fn finish_canvas_drag(world: &mut World, drag: CanvasDrag, cancelled: bool) {
@@ -1095,6 +1989,135 @@ mod tests {
         );
         canvas.objects[1].locked = true;
         assert_eq!(canvas.hit_test(point, viewport), Some(back));
+    }
+
+    #[test]
+    fn spatial_index_paints_visible_objects_and_tracks_one_object_move() {
+        let mut canvas = Canvas::default();
+        for index in 0..100_000 {
+            let (x, y) = if index < 100 {
+                ((index % 10) as f32 * 10.0, (index / 10) as f32 * 10.0)
+            } else {
+                (1_000.0 + index as f32 * 12.0, 1_000.0)
+            };
+            canvas
+                .add(
+                    [x, y],
+                    CanvasShape::Rectangle { size: [8.0, 8.0] },
+                    [1.0; 4],
+                )
+                .unwrap();
+        }
+        let moved = canvas.objects[0].id;
+        canvas.selected.insert(moved);
+        let viewport = UiRect::new(0.0, 0.0, 100.0, 100.0);
+        let clip = ClipRect::from(viewport);
+        let theme = Theme::default();
+        let index = CanvasSpatialIndex::new(&canvas);
+        let visible = index.visible_indices(&canvas, viewport, clip, 8.0).unwrap();
+        assert_eq!(visible.len(), 100);
+
+        let mut full = Vec::new();
+        let mut indexed = Vec::new();
+        paint_canvas(&canvas, viewport, clip, 0, &theme, None, &mut full);
+        paint_canvas_indexed(
+            &canvas,
+            &visible,
+            viewport,
+            clip,
+            0,
+            &theme,
+            None,
+            &mut indexed,
+        );
+        assert_eq!(indexed, full);
+        assert_eq!(indexed.len(), 106);
+
+        let mut world = World::new();
+        let window = world.spawn_empty().id();
+        let owner = world
+            .spawn((
+                UiNode,
+                canvas,
+                UiLayoutResult {
+                    window,
+                    rect: viewport,
+                    clip: None,
+                    z: 0,
+                    content_size: [viewport.width, viewport.height],
+                    dpi_scale: 1.0,
+                },
+            ))
+            .id();
+        world.insert_resource(CanvasSpatialIndexes::default());
+        world.insert_resource(CanvasObjectItems::default());
+        world.insert_resource(UiDirty::default());
+        assert!(ensure_canvas_spatial_index(&mut world, owner));
+        sync_canvas_object_views(&mut world);
+        assert_eq!(world.resource::<CanvasObjectItems>().0[&owner].len(), 100);
+        let moved_entity = world.resource::<CanvasObjectItems>().0[&owner][&moved];
+        assert_eq!(
+            world
+                .resource_mut::<UiDirty>()
+                .take(UiDirtyDomain::Paint)
+                .entities
+                .len(),
+            100
+        );
+
+        assert!(move_selected_objects(&mut world, owner, [10.0, 0.0]));
+        sync_canvas_object_views(&mut world);
+        let moved_batch = world.resource_mut::<UiDirty>().take(UiDirtyDomain::Paint);
+        assert_eq!(moved_batch.entities, HashSet::from([moved_entity]));
+        assert_eq!(world.resource::<CanvasObjectItems>().0[&owner].len(), 100);
+
+        assert!(move_selected_objects(&mut world, owner, [200.0, 0.0]));
+        sync_canvas_object_views(&mut world);
+        let removed_batch = world.resource_mut::<UiDirty>().take(UiDirtyDomain::Paint);
+        assert_eq!(removed_batch.entities, HashSet::from([moved_entity]));
+        assert!(world.get_entity(moved_entity).is_err());
+        let directly_edited_id = world.get::<Canvas>(owner).unwrap().objects[1].id;
+        let directly_edited_entity =
+            world.resource::<CanvasObjectItems>().0[&owner][&directly_edited_id];
+        assert!(edit_canvas_object(
+            &mut world,
+            owner,
+            directly_edited_id,
+            |object| object.color[0] = 0.5,
+        ));
+        sync_canvas_object_views(&mut world);
+        let tracked_batch = world.resource_mut::<UiDirty>().take(UiDirtyDomain::Paint);
+        assert_eq!(
+            tracked_batch.entities,
+            HashSet::from([directly_edited_entity])
+        );
+        assert!(!edit_canvas_object(
+            &mut world,
+            owner,
+            directly_edited_id,
+            |object| object.id = 0,
+        ));
+        assert_eq!(
+            world.get::<Canvas>(owner).unwrap().objects[1].id,
+            directly_edited_id
+        );
+        world.get_mut::<Canvas>(owner).unwrap().objects[1].color[0] = 0.25;
+        sync_canvas_object_views(&mut world);
+        let direct_batch = world.resource_mut::<UiDirty>().take(UiDirtyDomain::Paint);
+        assert_eq!(
+            direct_batch.entities,
+            HashSet::from([directly_edited_entity])
+        );
+        let canvas = world.get::<Canvas>(owner).unwrap();
+        assert_eq!(canvas.objects[0].origin, [210.0, 0.0]);
+        let indexes = world.resource::<CanvasSpatialIndexes>();
+        let visible_after = indexes
+            .0
+            .get(&owner)
+            .unwrap()
+            .visible_indices(canvas, viewport, clip, 8.0)
+            .unwrap();
+        assert_eq!(visible_after.len(), 99);
     }
 
     #[test]
@@ -1832,5 +2855,46 @@ mod tests {
         sync_canvas_object_views(&mut world);
         assert!(world.resource::<CanvasObjectItems>().0[&owner].is_empty());
         assert!(world.get_entity(entity).is_err());
+    }
+
+    #[test]
+    fn spatial_indexes_are_pruned_when_canvas_owners_are_despawned() {
+        let mut world = World::new();
+        world.init_resource::<CanvasSpatialIndexes>();
+        world.init_resource::<CanvasObjectItems>();
+        let window = world.spawn_empty().id();
+        let owner = world
+            .spawn((
+                UiNode,
+                Canvas::default(),
+                UiLayoutResult {
+                    window,
+                    rect: UiRect::new(0.0, 0.0, 100.0, 100.0),
+                    clip: None,
+                    z: 0,
+                    content_size: [100.0, 100.0],
+                    dpi_scale: 1.0,
+                },
+            ))
+            .id();
+
+        sync_canvas_object_views(&mut world);
+        assert!(
+            world
+                .resource::<CanvasSpatialIndexes>()
+                .0
+                .contains_key(&owner)
+        );
+
+        world.despawn(owner);
+        sync_canvas_object_views(&mut world);
+
+        assert!(
+            !world
+                .resource::<CanvasSpatialIndexes>()
+                .0
+                .contains_key(&owner)
+        );
+        assert!(!world.resource::<CanvasObjectItems>().0.contains_key(&owner));
     }
 }

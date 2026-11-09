@@ -29,6 +29,29 @@ media playback, pending preview decoding, and preview cache expiry continue to a
 while active. Settled file-browser previews skip synchronization until a related browser,
 item, visibility, layout, or theme input changes.
 
+Collection rows and file-browser rows use per-owner component-change stamps as their dirty-owner
+set. A stable owner returns before enumerating visible rows; a changed owner rebuilds only its
+mounted window. Collection stamps cover the model, layout, theme, key, enabled, and visible state.
+File-browser stamps also cover `FileBrowserViewState`. Mounted row components, layouts, hit boxes,
+and parent links are written only when their values differ. Those actual changes flow through the
+widget paint collector into `UiDirty` for paint and accessibility consumers.
+
+Canvas objects and graph nodes/links use stable child fragments. Routed edits and the public
+`edit_canvas_object(world, owner, id, edit)` and
+`move_node_graph_node(world, owner, id, position)` APIs record affected IDs at the mutation site.
+Canvas updates its spatial index entry; graph updates that node and its incident links. Direct
+edits to the public model vectors still produce correct fragments, but need an index rebuild or
+signature comparison because a Bevy component change tick does not identify the changed element.
+Graph links share bounded 128-curve GPU batches, so a
+link edit rebuilds its batch while retaining the other batch entities. Menus, option rows, and
+panels use owner change stamps; collapsed panels traverse their own descendants when layout or
+animation changes and restore prior clips when children leave the panel. Settled icon and font
+assets skip load polling and overlay construction until an input or load state changes.
+
+`FileBrowser` keeps a filtered-position index and a path-to-visible-index lookup. Its index-defining
+state is read through `entries()`, `filter()`, `sort()`, and `ascending()`; change it through
+`set_filter`, `set_sort`, navigation, `refresh`, and restore methods so the index remains current.
+
 When adding a widget component, register its paint and accessibility change detection
 and removal in `bui_widgets::actions`. When adding a new layout or text input, add it to
 the corresponding collector or mark its domain when mutating it. Avoid writing a

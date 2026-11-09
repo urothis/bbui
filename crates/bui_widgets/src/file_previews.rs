@@ -169,7 +169,10 @@ fn collect_preview_changes(
     mut cache: ResMut<FileBrowserPreviewCache>,
     mut dirty: ResMut<UiDirty>,
 ) {
-    cache.prepared = true;
+    // Preparation persists after the first scheduled collector pass.
+    if !cache.prepared {
+        cache.prepared = true;
+    }
     let removed_items_any = removed_items.read().count() > 0;
     let removed_browsers_any = removed_browsers.read().count() > 0;
     let removed_layouts_any = removed_layouts.read().count() > 0;
@@ -197,14 +200,6 @@ fn collect_preview_changes(
         }
         visibility.iter().any(|entity| related.contains(&entity))
     };
-    if cache.entries.is_empty()
-        && cache.overlay_cameras.is_empty()
-        && browsers.is_empty()
-        && items.is_empty()
-        && views.is_empty()
-    {
-        return;
-    }
     if !browsers.is_empty()
         || !items.is_empty()
         || !views.is_empty()
@@ -238,7 +233,7 @@ pub fn sync_file_browser_previews(world: &mut World) {
     let now = world
         .get_resource::<Time>()
         .map_or(Duration::ZERO, |time| time.elapsed());
-    let prepared = std::mem::take(&mut world.resource_mut::<FileBrowserPreviewCache>().prepared);
+    let prepared = world.resource::<FileBrowserPreviewCache>().prepared;
     let dirty = world
         .get_resource_mut::<UiDirty>()
         .map(|mut dirty| dirty.take(UiDirtyDomain::Preview));
