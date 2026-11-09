@@ -8,6 +8,7 @@ pub(super) fn paint_text_controls(paint: &mut PaintEntityContext<'_>) -> bool {
     let clip = paint.clip;
     let z = paint.z;
     let theme = paint.theme;
+    let base_theme = paint.base_theme;
     let enabled = paint.enabled;
     let camera_items = &mut *paint.output;
 
@@ -339,13 +340,35 @@ pub(super) fn paint_text_controls(paint: &mut PaintEntityContext<'_>) -> bool {
         return true;
     }
     if let Some(field) = world.get::<TextField>(entity) {
+        let focused = world
+            .get_resource::<UiFocus>()
+            .and_then(|focus| focus.state(layout.window))
+            .is_some_and(|state| state.focused == Some(entity));
         camera_items.push(item(
             clip,
             z,
             Primitive::RoundedRect {
                 rect: ClipRect::from(rect),
                 radius: theme.corner_radius,
-                color: theme.surface,
+                color: if focused {
+                    theme.focus
+                } else {
+                    base_theme.text_muted.mix(base_theme.border, 0.5)
+                },
+            },
+        ));
+        camera_items.push(item(
+            clip,
+            z.saturating_add(1),
+            Primitive::RoundedRect {
+                rect: ClipRect {
+                    x: rect.x + 1.0,
+                    y: rect.y + 1.0,
+                    width: (rect.width - 2.0).max(0.0),
+                    height: (rect.height - 2.0).max(0.0),
+                },
+                radius: (theme.corner_radius - 1.0).max(0.0),
+                color: theme.background.mix(base_theme.background, 0.65),
             },
         ));
         let live_text = world

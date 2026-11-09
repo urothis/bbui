@@ -94,7 +94,25 @@ pub(super) fn paint_editor_widgets(paint: &mut PaintEntityContext<'_>) -> bool {
                     color: if checkbox.is_checked() {
                         theme.accent
                     } else {
-                        theme.surface_hover
+                        base_theme.text_muted.mix(base_theme.surface, 0.4)
+                    },
+                },
+            ));
+            camera_items.push(item(
+                clip,
+                z.saturating_add(1),
+                Primitive::RoundedRect {
+                    rect: ClipRect {
+                        x: square.x + 1.0,
+                        y: square.y + 1.0,
+                        width: (square.width - 2.0).max(0.0),
+                        height: (square.height - 2.0).max(0.0),
+                    },
+                    radius: 1.0,
+                    color: if checkbox.is_checked() {
+                        theme.accent
+                    } else {
+                        base_theme.surface_pressed
                     },
                 },
             ));
