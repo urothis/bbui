@@ -9,8 +9,11 @@ use bevy::{
     asset::{Asset, Assets, Handle, RenderAssetUsages},
     camera::Camera,
     ecs::{
-        change_detection::DetectChanges, hierarchy::ChildSpawnerCommands,
-        prelude::RemovedComponents, schedule::IntoScheduleConfigs, system::SystemParam,
+        change_detection::DetectChanges,
+        hierarchy::ChildSpawnerCommands,
+        prelude::{Changed, Or, Query, RemovedComponents},
+        schedule::IntoScheduleConfigs,
+        system::SystemParam,
     },
     math::Rot2,
     prelude::{
@@ -31,7 +34,7 @@ use bevy::{
     shader::ShaderRef,
     ui_render::prelude::{MaterialNode, UiMaterial, UiMaterialPlugin},
 };
-use bui_core::{UiParent, UiSystems};
+use bui_core::{UiDirty, UiDirtyDomain, UiParent, UiSystems};
 use bui_layout::{Rect, UiLayoutResult};
 use bui_style::{Rgba, Theme};
 use bui_text::{register_default_ui_font, ui_default_text_font};
@@ -564,6 +567,7 @@ impl Plugin for BuiRenderPlugin {
             app.add_plugins(UiMaterialPlugin::<BezierBatchMaterial>::default());
         }
         app.init_resource::<DisplayList>()
+            .init_resource::<UiDirty>()
             .init_resource::<ImageRegistry>()
             .init_resource::<RenderTargetCamera>()
             .init_resource::<RenderCache>()
@@ -571,9 +575,14 @@ impl Plugin for BuiRenderPlugin {
                 Update,
                 register_default_ui_font
                     .in_set(UiSystems::Render)
-                    .before(sync_display_list),
+                    .before(collect_render_changes),
             )
-            .add_systems(Update, sync_display_list.in_set(UiSystems::Render));
+            .add_systems(
+                Update,
+                (collect_render_changes, sync_display_list)
+                    .chain()
+                    .in_set(UiSystems::Render),
+            );
         register_default_ui_font(app.world_mut());
     }
 }
@@ -837,9 +846,50 @@ struct RendererSync<'w, 's> {
         ),
     >,
     hierarchy_query: bevy::ecs::system::Query<'w, 's, (Entity, Option<&'static UiParent>)>,
-    removed_paints: RemovedComponents<'w, 's, UiPaint>,
-    removed_layouts: RemovedComponents<'w, 's, UiLayoutResult>,
+    dirty: ResMut<'w, UiDirty>,
     cache: ResMut<'w, RenderCache>,
+}
+
+#[expect(
+    clippy::type_complexity,
+    reason = "Bevy change query covers render inputs"
+)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Bevy injects each tracked resource separately"
+)]
+fn collect_render_changes(
+    display_list: Res<DisplayList>,
+    images: Res<ImageRegistry>,
+    target_camera: Res<RenderTargetCamera>,
+    theme: Option<Res<Theme>>,
+    changed_paints: Query<
+        Entity,
+        Or<(
+            Changed<UiLayoutResult>,
+            Changed<UiPaint>,
+            Changed<UiParent>,
+            Changed<Camera>,
+        )>,
+    >,
+    mut removed_paints: RemovedComponents<UiPaint>,
+    mut removed_layouts: RemovedComponents<UiLayoutResult>,
+    mut removed_parents: RemovedComponents<UiParent>,
+    mut removed_cameras: RemovedComponents<Camera>,
+    mut dirty: ResMut<UiDirty>,
+) {
+    if display_list.is_changed()
+        || images.is_changed()
+        || target_camera.is_changed()
+        || theme.as_ref().is_some_and(DetectChanges::is_changed)
+        || changed_paints.iter().next().is_some()
+        || removed_paints.read().next().is_some()
+        || removed_layouts.read().next().is_some()
+        || removed_parents.read().next().is_some()
+        || removed_cameras.read().next().is_some()
+    {
+        dirty.mark_all(UiDirtyDomain::Render);
+    }
 }
 
 fn sync_display_list(sync: RendererSync) {
@@ -856,14 +906,14 @@ fn sync_display_list(sync: RendererSync) {
         camera_query,
         paint_query,
         hierarchy_query,
-        mut removed_paints,
-        mut removed_layouts,
+        mut dirty,
         mut cache,
     } = sync;
-    let list_changed = display_list.is_changed();
+    let changes = dirty.take(UiDirtyDomain::Render);
+    if changes.is_empty() {
+        return;
+    }
     let images_changed = images.is_changed();
-    let target_changed = target_camera.is_changed() || cache.target_camera != target_camera.0;
-    let theme_changed = theme.as_ref().is_some_and(DetectChanges::is_changed);
     let text_font_size = theme
         .as_ref()
         .map(|theme| theme.font_size)
@@ -875,22 +925,6 @@ fn sync_display_list(sync: RendererSync) {
         .filter(|height| height.is_finite() && *height > 0.0)
         .unwrap_or(1.25);
     let default_text_font = ui_default_text_font(text_font_size);
-    let layouts_changed = paint_query
-        .iter()
-        .any(|(_, layout, paint)| layout.is_changed() || paint.is_changed());
-    let paints_removed = removed_paints.read().next().is_some();
-    let layouts_removed = removed_layouts.read().next().is_some();
-    if !list_changed
-        && !images_changed
-        && !target_changed
-        && !theme_changed
-        && !layouts_changed
-        && !paints_removed
-        && !layouts_removed
-    {
-        return;
-    }
-
     let mut desired = std::mem::take(&mut cache.desired);
     desired.clear();
     desired.reserve(display_list.items.len());

@@ -27,6 +27,7 @@ impl Plugin for BuiPlugin {
         app.add_plugins(bui_widgets::WidgetPlugin);
         app.init_resource::<accessibility::BuiFocusMirror>();
         app.init_resource::<accessibility::AccessibilityLinkSelection>();
+        app.init_resource::<accessibility::AccessibilitySyncCache>();
         app.add_message::<bevy::a11y::ActionRequest>();
         app.add_systems(
             Update,
@@ -39,6 +40,13 @@ impl Plugin for BuiPlugin {
             accessibility::sync_accessible_focus
                 .in_set(bui_core::UiSystems::Widgets)
                 .after(bui_widgets::actions::sync_text_controls)
+                .before(accessibility::sync_accessibility),
+        );
+        app.add_systems(
+            Update,
+            accessibility::collect_accessibility_resource_changes
+                .in_set(bui_core::UiSystems::Widgets)
+                .after(bui_widgets::actions::collect_widget_paint)
                 .before(accessibility::sync_accessibility),
         );
         app.add_systems(
@@ -89,7 +97,8 @@ pub mod prelude {
     pub use crate::BuiPlugin;
     pub use crate::bui;
     pub use bui_core::{
-        UiEnabled, UiFocus, UiFocusable, UiKey, UiLivePoliteness, UiLiveRegion, UiNode, UiVisible,
+        UiDirty, UiDirtyBatch, UiDirtyDomain, UiEnabled, UiFocus, UiFocusable, UiKey,
+        UiLivePoliteness, UiLiveRegion, UiNode, UiVisible,
     };
     pub use bui_layout::{
         UiAlign, UiEdges, UiFlexDirection, UiFlexItem, UiIntrinsicSize, UiJustify, UiLayoutMode,

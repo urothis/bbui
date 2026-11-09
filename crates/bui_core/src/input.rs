@@ -1,16 +1,50 @@
 //! Platform-neutral pointer and keyboard routing for BUI controls.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 
 use bevy_ecs::prelude::*;
 
+type HitTestChanged<'w, 's> = Query<
+    'w,
+    's,
+    Entity,
+    Or<(
+        Changed<UiNode>,
+        Changed<UiHitBox>,
+        Changed<UiEnabled>,
+        Changed<UiVisible>,
+        Changed<UiParent>,
+        Changed<UiChildren>,
+    )>,
+>;
+
 use crate::{
-    UiClickRecord, UiFocus, UiFocusable, UiHitBox, UiLifecycleEvents, UiRect, UiTabIndex,
-    has_window_assignment, is_interactable_in_window,
+    UiChildren, UiClickRecord, UiDirty, UiDirtyDomain, UiEnabled, UiFocus, UiFocusable, UiHitBox,
+    UiLifecycleEvents, UiNode, UiParent, UiRect, UiTabIndex, UiVisible, has_window_assignment,
+    is_interactable_in_window,
 };
 
 const DOUBLE_CLICK_SECONDS: f64 = 0.35;
 const DOUBLE_CLICK_DISTANCE: f32 = 5.0;
+
+#[derive(Resource, Default)]
+pub(crate) struct UiHoverValidation {
+    windows: HashMap<Entity, ([f32; 2], u64)>,
+    prepared: bool,
+    #[cfg(test)]
+    hit_tests: u64,
+}
+
+pub(crate) fn collect_hit_test_changes(
+    changed: HitTestChanged,
+    mut validation: ResMut<UiHoverValidation>,
+    mut dirty: ResMut<UiDirty>,
+) {
+    if changed.iter().next().is_some() {
+        dirty.mark_all(UiDirtyDomain::HitTest);
+    }
+    validation.prepared = true;
+}
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct UiModifiers {
@@ -284,6 +318,13 @@ impl UiRoutedEvents {
 /// node is removed, disabled, hidden, or loses its bounds during a gesture, the
 /// capture is cancelled and focus references are cleared.
 pub fn process_ui_input(world: &mut World) {
+    world.init_resource::<crate::UiDirty>();
+    world.init_resource::<UiHoverValidation>();
+    if !std::mem::take(&mut world.resource_mut::<UiHoverValidation>().prepared) {
+        world
+            .resource_mut::<UiDirty>()
+            .mark_all(UiDirtyDomain::HitTest);
+    }
     let events: Vec<_> = world
         .get_resource_mut::<UiInputQueue>()
         .map(|mut queue| queue.events.drain(..).collect())
@@ -935,6 +976,10 @@ fn focused(world: &World, window: Entity) -> Option<Entity> {
 }
 
 fn hit_test(world: &mut World, window: Entity, position: [f32; 2]) -> Option<Entity> {
+    #[cfg(test)]
+    if let Some(mut validation) = world.get_resource_mut::<UiHoverValidation>() {
+        validation.hit_tests += 1;
+    }
     let mut query = world.query::<(Entity, &UiHitBox)>();
     let mut candidates: Vec<(i32, usize, Entity)> = query
         .iter(world)
@@ -950,6 +995,10 @@ fn hit_test(world: &mut World, window: Entity, position: [f32; 2]) -> Option<Ent
 }
 
 fn validate_states(world: &mut World) {
+    let hit_generation = world
+        .resource_mut::<crate::UiDirty>()
+        .take(crate::UiDirtyDomain::HitTest)
+        .generation;
     let mut windows: Vec<Entity> = world
         .resource::<UiFocus>()
         .windows
@@ -978,8 +1027,24 @@ fn validate_states(world: &mut World) {
             last_click.is_some_and(|last| !is_interactable_in_window(world, last.target, window));
         let hover_invalid =
             hovered.is_some_and(|entity| !is_interactable_in_window(world, entity, window));
+        let needs_hover_refresh = pointer_position.is_some_and(|position| {
+            world
+                .resource::<UiHoverValidation>()
+                .windows
+                .get(&window)
+                .is_none_or(|&(previous, generation)| {
+                    previous != position || generation != hit_generation
+                })
+        });
         let refreshed_hover = match pointer_position {
-            Some(position) => Some(hit_test(world, window, position)),
+            Some(position) if needs_hover_refresh => {
+                world
+                    .resource_mut::<UiHoverValidation>()
+                    .windows
+                    .insert(window, (position, hit_generation));
+                Some(hit_test(world, window, position))
+            }
+            Some(_) => None,
             None if hover_invalid => Some(None),
             None => None,
         };
@@ -1099,6 +1164,44 @@ mod tests {
             .id();
         set_parent(&mut world, button, root).unwrap();
         (world, window, root, button)
+    }
+
+    #[test]
+    fn stationary_pointer_retests_only_after_hit_geometry_changes() {
+        let mut app = bevy_app::App::new();
+        app.add_plugins(crate::CorePlugin);
+        let window = app.world_mut().spawn_empty().id();
+        let target = app
+            .world_mut()
+            .spawn((
+                UiNode,
+                UiHitBox {
+                    window: Some(window),
+                    rect: UiRect::new(0.0, 0.0, 100.0, 100.0),
+                    clip: None,
+                    z_index: 0,
+                },
+            ))
+            .id();
+        app.world_mut()
+            .resource_mut::<UiInputQueue>()
+            .push(UiInputEvent::PointerMove {
+                window,
+                position: [20.0, 20.0],
+                time_seconds: 0.0,
+            });
+        app.update();
+        let first = app.world().resource::<UiHoverValidation>().hit_tests;
+        assert_eq!(app.world().resource::<UiFocus>().hovered, Some(target));
+
+        app.update();
+        assert_eq!(app.world().resource::<UiHoverValidation>().hit_tests, first);
+
+        app.world_mut().get_mut::<UiHitBox>(target).unwrap().rect =
+            UiRect::new(200.0, 200.0, 100.0, 100.0);
+        app.update();
+        assert!(app.world().resource::<UiHoverValidation>().hit_tests > first);
+        assert_eq!(app.world().resource::<UiFocus>().hovered, None);
     }
 
     #[test]

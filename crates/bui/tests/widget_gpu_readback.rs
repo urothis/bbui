@@ -69,6 +69,53 @@ fn write_capture_ppm(path: &std::path::Path, pixels: &[u8]) {
     fs::write(path, ppm).expect("write optional widget visual capture");
 }
 
+fn capture_frame(
+    app: &mut App,
+    target: &bevy::prelude::Handle<Image>,
+    frame: usize,
+) -> (Vec<u8>, Duration) {
+    let started = Instant::now();
+    let readback = app
+        .world_mut()
+        .spawn(Readback::texture(target.clone()))
+        .observe(
+            move |captured: bevy::ecs::observer::On<ReadbackComplete>,
+                  mut frames: ResMut<CapturedFrames>| {
+                frames.0.insert(
+                    frame,
+                    CapturedFrame {
+                        bytes: captured.data.clone(),
+                        completed_at: Instant::now(),
+                    },
+                );
+            },
+        )
+        .id();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline
+        && !app
+            .world()
+            .resource::<CapturedFrames>()
+            .0
+            .contains_key(&frame)
+    {
+        app.update();
+        thread::sleep(Duration::from_millis(5));
+    }
+    let captured = app
+        .world()
+        .resource::<CapturedFrames>()
+        .0
+        .get(&frame)
+        .cloned()
+        .expect("widget GPU readback did not complete before the deadline");
+    app.world_mut().entity_mut(readback).despawn();
+    (
+        captured.bytes,
+        captured.completed_at.duration_since(started),
+    )
+}
+
 fn assert_color(pixel: &[u8], color: Rgba, what: &str) {
     let expected = [
         (color.0 * 255.0).round() as u8,
@@ -711,6 +758,11 @@ fn widget_menu_editors_and_collections_render_in_dark_light_and_dpi_variants() {
         .enumerate()
         {
             app.world_mut()
+                .get_mut::<MenuControl>(menu)
+                .unwrap()
+                .session
+                .open(None);
+            app.world_mut()
                 .get_mut::<CurveEditor>(curve)
                 .unwrap()
                 .interpolation = interpolation;
@@ -780,46 +832,7 @@ fn widget_menu_editors_and_collections_render_in_dark_light_and_dpi_variants() {
             };
 
             let frame = scenario * 3 + mode_index;
-            let (pixels, readback_latency) = {
-                let readback_started = Instant::now();
-                let readback = app
-                    .world_mut()
-                    .spawn(Readback::texture(target.clone()))
-                    .observe(
-                        move |captured: bevy::ecs::observer::On<ReadbackComplete>,
-                              mut frames: ResMut<CapturedFrames>| {
-                            frames.0.insert(
-                                frame,
-                                CapturedFrame {
-                                    bytes: captured.data.clone(),
-                                    completed_at: Instant::now(),
-                                },
-                            );
-                        },
-                    )
-                    .id();
-                let deadline = Instant::now() + Duration::from_secs(10);
-                while Instant::now() < deadline
-                    && !app
-                        .world()
-                        .resource::<CapturedFrames>()
-                        .0
-                        .contains_key(&frame)
-                {
-                    app.update();
-                    thread::sleep(Duration::from_millis(5));
-                }
-                let captured = app
-                    .world()
-                    .resource::<CapturedFrames>()
-                    .0
-                    .get(&frame)
-                    .cloned()
-                    .expect("widget GPU readback did not complete before the deadline");
-                let latency = captured.completed_at.duration_since(readback_started);
-                app.world_mut().entity_mut(readback).despawn();
-                (captured.bytes, latency)
-            };
+            let (pixels, readback_latency) = capture_frame(&mut app, &target, frame);
             if mode_index == 0
                 && let Some(directory) = std::env::var_os("BUI_WIDGET_CAPTURE_DIR")
             {
@@ -1254,7 +1267,19 @@ fn widget_menu_editors_and_collections_render_in_dark_light_and_dpi_variants() {
                         )
                     })
             );
-            assert_table_header_text_visible(&pixels, sorted_header_rect, &theme);
+            // The open File popup covers this header and should win the z-order.
+            // Verify the header pixels in a second capture after closing the popup.
+            app.world_mut()
+                .get_mut::<MenuControl>(menu)
+                .unwrap()
+                .session
+                .close();
+            for _ in 0..3 {
+                app.update();
+                thread::sleep(Duration::from_millis(5));
+            }
+            let (table_pixels, _) = capture_frame(&mut app, &target, frame + 100);
+            assert_table_header_text_visible(&table_pixels, sorted_header_rect, &theme);
             let active_header_bg = blend(theme.surface, theme.selection, 0.34);
             assert_color(
                 pixel_at(

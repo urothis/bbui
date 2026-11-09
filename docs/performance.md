@@ -19,7 +19,7 @@ to one path with `cargo bench -p bui --bench performance --locked -- 'widgets/fu
 | `bui_text` | Bundled-font shaping; expression evaluation; text edit/undo/redo |
 | `bui_render` | First, idle, and one-change synchronization for rectangles and image grids |
 | `bui_media` | Full PNG/SVG and PNG/GIF/VP8/H.264 poster decoding |
-| `bui` | Public plugin headless CPU updates with 200/1k mounted controls |
+| `bui` | Public plugin headless CPU updates with 200/1k mounted controls and text fields |
 
 Scene construction and fixture encoding are outside timed loops; each changed case includes the
 edit and its `App::update`. Throughput is input elements or compressed bytes,
@@ -44,6 +44,33 @@ Initial release baseline on the local aarch64 development machine (2026-11-09, R
 These are local comparison points, not portable performance targets. The graph pan stays within
 the viewport, so each changed iteration paints the same graph-sized workload. The complete
 confidence intervals and every case are in the generated Criterion report.
+
+After the shared `UiDirty` invalidation contract (same machine and Criterion configuration,
+2026-11-09), the comparable means are:
+
+| Workload | Before | After | Change |
+| --- | ---: | ---: | ---: |
+| 10k checkbox widget update, idle | 2.84 ms | 0.230 ms | 12.4× faster |
+| 10k checkbox widget update, one change | 3.28 ms | 0.723 ms | 4.5× faster |
+| 1k checkbox public plugin update, idle | 1.31 ms | 0.748 ms | 1.8× faster |
+| 1k checkbox public plugin update, one toggle | 2.72 ms | 2.11 ms | 1.3× faster |
+| 1k-node graph pan, 3,984 links | 4.12 ms | 3.08 ms | 1.3× faster |
+| 10k-node layout update, idle | 25.9 µs | 40.4 µs | 1.6× slower |
+| 10k-node layout update, one intrinsic change | 3.31 ms | 3.30 ms | Similar |
+
+The new text-field benchmark was measured before and after text invalidation on the same machine:
+
+| Public plugin workload | Before | After | Change |
+| --- | ---: | ---: | ---: |
+| 200 text fields, idle / one edit | 678 / 877 µs | 210 / 329 µs | 3.2× / 2.7× faster |
+| 1k text fields, idle / one edit | 4.02 / 4.67 ms | 0.968 / 1.39 ms | 4.2× / 3.4× faster |
+
+The changed checkbox, graph, and layout paths still rebuild their affected layout root or
+visible draw list. The collector itself polls Bevy change ticks, which accounts for part of
+the layout idle increase. The render synchronization benchmark changed from 12.73 ms to
+11.21 ms on its 10k-item first pass and from 1.18 ms to 0.888 ms for one changed item;
+its 4.6 µs idle path stayed effectively the same. These are CPU measurements, not GPU frame
+times.
 
 The numbers below were collected by earlier single-run harnesses on 2026-11-08. Use them as
 historical context, not as statistical baselines for the new Criterion suite.

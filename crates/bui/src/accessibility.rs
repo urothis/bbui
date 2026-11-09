@@ -1,5 +1,7 @@
 //! AccessKit semantics and actions for BUI's logical control entities.
 
+use std::collections::HashSet;
+
 use accesskit::{
     Action, ActionData, Color as AccessibleColor, HasPopup, Live, Node, Rect as AccessibleRect,
     Role, SortDirection, Toggled,
@@ -9,8 +11,8 @@ use bevy::ecs::system::SystemParam;
 use bevy::input_focus::{FocusCause, InputFocus};
 use bevy::prelude::*;
 use bui_core::{
-    UiChildren, UiEnabled, UiFocus, UiFocusable, UiLivePoliteness, UiLiveRegion, UiNode, UiParent,
-    UiVisible,
+    UiChildren, UiDirty, UiDirtyDomain, UiEnabled, UiFocus, UiFocusable, UiLivePoliteness,
+    UiLiveRegion, UiNode, UiParent, UiVisible,
 };
 use bui_layout::UiLayoutResult;
 use bui_text::UiReadOnly;
@@ -27,6 +29,22 @@ use bui_widgets::{
 
 #[derive(Resource, Default)]
 pub struct BuiFocusMirror(Option<Entity>);
+
+#[derive(Resource, Default)]
+pub(crate) struct AccessibilitySyncCache {
+    prepared: bool,
+}
+
+pub(crate) fn collect_accessibility_resource_changes(
+    selection: Res<AccessibilityLinkSelection>,
+    mut cache: ResMut<AccessibilitySyncCache>,
+    mut dirty: ResMut<UiDirty>,
+) {
+    if selection.is_changed() {
+        dirty.mark_all(UiDirtyDomain::Accessibility);
+    }
+    cache.prepared = true;
+}
 
 pub fn sync_accessible_focus(
     focus: Res<UiFocus>,
@@ -55,6 +73,17 @@ pub fn sync_accessible_focus(
 }
 
 pub fn sync_accessibility(world: &mut World) {
+    let prepared = world
+        .get_resource_mut::<AccessibilitySyncCache>()
+        .is_some_and(|mut cache| std::mem::take(&mut cache.prepared));
+    let batch = prepared.then(|| {
+        world
+            .resource_mut::<UiDirty>()
+            .take(UiDirtyDomain::Accessibility)
+    });
+    if batch.as_ref().is_some_and(bui_core::UiDirtyBatch::is_empty) {
+        return;
+    }
     let stale_link = world
         .get_resource::<AccessibilityLinkSelection>()
         .and_then(|selection| selection.0.as_ref())
@@ -66,11 +95,31 @@ pub fn sync_accessibility(world: &mut World) {
     if stale_link {
         world.resource_mut::<AccessibilityLinkSelection>().0 = None;
     }
-    let entities: Vec<_> = world
-        .query_filtered::<Entity, With<UiNode>>()
-        .iter(world)
-        .collect();
+    let entities: Vec<_> = if let Some(batch) = batch.filter(|batch| !batch.all) {
+        let mut seen = HashSet::new();
+        let mut pending: Vec<_> = batch.entities.into_iter().collect();
+        while let Some(entity) = pending.pop() {
+            if !seen.insert(entity) {
+                continue;
+            }
+            if let Some(children) = world.get::<UiChildren>(entity) {
+                pending.extend(children.0.iter().copied());
+            }
+        }
+        seen.into_iter().collect()
+    } else {
+        world
+            .query_filtered::<Entity, Or<(With<UiNode>, With<AccessibilityNode>)>>()
+            .iter(world)
+            .collect()
+    };
     for entity in entities {
+        if world.get::<UiNode>(entity).is_none() {
+            if world.get::<AccessibilityNode>(entity).is_some() {
+                world.entity_mut(entity).remove::<AccessibilityNode>();
+            }
+            continue;
+        }
         let Some(mut node) = node_for(world, entity) else {
             if world.get::<AccessibilityNode>(entity).is_some() {
                 world.entity_mut(entity).remove::<AccessibilityNode>();

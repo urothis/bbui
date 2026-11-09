@@ -6,10 +6,12 @@ use bevy_app::{App, Plugin, Update};
 use bevy_ecs::hierarchy::ChildOf;
 use bevy_ecs::prelude::*;
 use bevy_ecs::schedule::SystemSet;
+use bevy_ecs::{lifecycle::Remove, observer::On};
 
 pub mod geometry;
 pub mod history;
 pub mod input;
+pub mod invalidation;
 pub mod search;
 
 pub use geometry::UiRect;
@@ -18,6 +20,7 @@ pub use input::{
     UiInputEvent, UiInputQueue, UiKeyCode, UiModifiers, UiPointerButton, UiRoutedEvent,
     UiRoutedEvents, UiWheelUnit, process_ui_input, refresh_ui_hover,
 };
+pub use invalidation::{UiDirty, UiDirtyBatch, UiDirtyDomain};
 
 /// Ordered phases for BUI's frame work. Plugins should put their systems in
 /// these sets to make layout, input, widget updates, and rendering agree.
@@ -495,6 +498,7 @@ pub struct CorePlugin;
 impl Plugin for CorePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<UiFocus>()
+            .init_resource::<UiDirty>()
             .init_resource::<UiInputQueue>()
             .init_resource::<UiRoutedEvents>()
             .init_resource::<UiLifecycleEvents>()
@@ -515,8 +519,24 @@ impl Plugin for CorePlugin {
                     .chain(),
             )
             .init_resource::<UiHistory>()
-            .add_systems(Update, process_ui_input.in_set(UiSystems::Input));
+            .init_resource::<input::UiHoverValidation>()
+            .add_systems(
+                Update,
+                (input::collect_hit_test_changes, process_ui_input)
+                    .chain()
+                    .in_set(UiSystems::Input),
+            );
+        macro_rules! register_hit_test_removals {
+            ($($component:ty),+ $(,)?) => {
+                $(app.add_observer(mark_hit_test_component_removed::<$component>);)+
+            };
+        }
+        register_hit_test_removals!(UiNode, UiHitBox, UiEnabled, UiVisible, UiParent, UiChildren);
     }
+}
+
+fn mark_hit_test_component_removed<T: Component>(_on: On<Remove<T>>, mut dirty: ResMut<UiDirty>) {
+    dirty.mark_all(UiDirtyDomain::HitTest);
 }
 
 #[cfg(test)]

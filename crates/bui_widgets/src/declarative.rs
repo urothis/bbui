@@ -2,7 +2,8 @@
 
 use bevy_ecs::prelude::{Component, Entity, With, World};
 use bui_core::{
-    UiEnabled, UiFocusable, UiHierarchyError, UiKey, UiNode, UiTabIndex, UiVisible, set_parent,
+    UiDirty, UiDirtyDomain, UiEnabled, UiFocusable, UiHierarchyError, UiKey, UiNode, UiTabIndex,
+    UiVisible, set_parent,
 };
 use bui_layout::{
     Rect, UiFlexDirection, UiLayoutMode, UiLayoutNode, UiLength, UiScroll, UiWheelHandled,
@@ -1267,10 +1268,20 @@ fn insert_control(
 /// Label entities are deliberately not focusable, so this buffer only feeds shaping and
 /// intrinsic layout; it does not make labels editable.
 pub(crate) fn sync_intrinsic_label_text(world: &mut World) {
-    let mut query = world.query_filtered::<(&Label, &mut TextBuffer), With<IntrinsicLabelText>>();
-    for (label, mut buffer) in query.iter_mut(world) {
+    let mut query =
+        world.query_filtered::<(Entity, &Label, &mut TextBuffer), With<IntrinsicLabelText>>();
+    let mut changed = Vec::new();
+    for (entity, label, mut buffer) in query.iter_mut(world) {
         if buffer.as_str() != label.text {
             *buffer = TextBuffer::new(label.text.clone());
+            changed.push(entity);
+        }
+    }
+    if let Some(mut dirty) = world.get_resource_mut::<UiDirty>() {
+        for entity in changed {
+            dirty.mark(UiDirtyDomain::TextMeasure, entity);
+            dirty.mark(UiDirtyDomain::TextLayout, entity);
+            dirty.mark(UiDirtyDomain::TextSync, entity);
         }
     }
 }

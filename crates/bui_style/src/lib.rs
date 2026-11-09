@@ -8,11 +8,12 @@ use bevy_app::{App, Plugin, Update};
 use bevy_color::Color;
 use bevy_ecs::prelude::*;
 use bevy_ecs::schedule::IntoScheduleConfigs;
+use bevy_ecs::{change_detection::Tick, lifecycle::Remove, observer::On, system::SystemChangeTick};
 use bevy_time::Time;
 use bevy_ui::{BoxShadow, Val};
 use bui_core::{
-    UiEnabled, UiFocus, UiNode, UiParent, UiRoutedEvent, UiRoutedEvents, UiSystems,
-    refresh_ui_hover,
+    UiChildren, UiDirty, UiDirtyBatch, UiDirtyDomain, UiEnabled, UiFocus, UiNode, UiParent,
+    UiRoutedEvent, UiRoutedEvents, UiSystems, refresh_ui_hover,
 };
 use bui_layout::{
     UiAlign, UiEdges, UiJustify, UiLayoutMode, UiLayoutNode, UiLength, compute_layout,
@@ -1434,31 +1435,206 @@ pub struct StylePlugin;
 impl Plugin for StylePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Theme>()
+            .init_resource::<UiDirty>()
             .init_resource::<UiReducedMotion>()
             .init_resource::<UiStyleSheet>()
             .init_resource::<UiStyleResolutionCache>()
+            .init_resource::<UiStyleCollectorCursor>()
+            .init_resource::<UiStyleResourceCursor>()
             .init_resource::<UiRoutedEvents>()
             .add_systems(
                 Update,
-                (advance_ui_style_transitions, resolve_ui_styles)
+                (
+                    advance_ui_style_transitions,
+                    collect_style_component_changes,
+                    collect_style_resource_changes,
+                    resolve_ui_styles_dirty,
+                )
                     .chain()
                     .in_set(UiSystems::Style),
             )
-            .add_systems(Update, resolve_ui_styles.in_set(UiSystems::StyleAfterInput))
+            .add_systems(
+                Update,
+                (
+                    collect_style_component_changes,
+                    collect_style_resource_changes,
+                    resolve_ui_styles_dirty,
+                )
+                    .chain()
+                    .in_set(UiSystems::StyleAfterInput),
+            )
             .add_systems(
                 Update,
                 converge_hover_layout
                     .run_if(has_pointer_hover_transition)
                     .in_set(UiSystems::LayoutAfterStyle),
             );
+        macro_rules! register_style_removals {
+            ($($component:ty),+ $(,)?) => {
+                $(app.add_observer(mark_style_component_removed::<$component>);)+
+            };
+        }
+        register_style_removals!(
+            UiNode,
+            UiParent,
+            UiRole,
+            UiClasses,
+            UiStyleState,
+            UiEnabled,
+            UiInlineStyle,
+            UiTransitions,
+            UiBaseLayoutNode,
+            UiLayoutNode,
+            UiComputedStyle,
+        );
     }
+}
+
+fn mark_style_component_removed<T: Component>(_on: On<Remove<T>>, mut dirty: ResMut<UiDirty>) {
+    dirty.mark_all(UiDirtyDomain::Style);
 }
 
 #[derive(Resource, Debug, Default)]
 struct UiStyleResolutionCache {
     input_stamp: Option<u64>,
+    focus_targets: HashMap<Entity, u8>,
     resolved_passes: u64,
     skipped_passes: u64,
+}
+
+#[derive(Resource, Debug, Default)]
+struct UiStyleCollectorCursor(Tick);
+
+#[derive(Resource, Debug, Default)]
+struct UiStyleResourceCursor(Tick);
+
+#[expect(
+    clippy::type_complexity,
+    reason = "Bevy change query covers the style inputs"
+)]
+fn collect_style_component_changes(
+    changed: Query<
+        (
+            Entity,
+            Option<Ref<UiNode>>,
+            Option<Ref<UiParent>>,
+            Option<Ref<UiRole>>,
+            Option<Ref<UiClasses>>,
+            Option<Ref<UiStyleState>>,
+            Option<Ref<UiEnabled>>,
+            Option<Ref<UiInlineStyle>>,
+            Option<Ref<UiTransitions>>,
+            Option<Ref<UiBaseLayoutNode>>,
+            Option<Ref<UiLayoutNode>>,
+            Option<Ref<UiComputedStyle>>,
+        ),
+        Or<(
+            Changed<UiNode>,
+            Changed<UiParent>,
+            Changed<UiRole>,
+            Changed<UiClasses>,
+            Changed<UiStyleState>,
+            Changed<UiEnabled>,
+            Changed<UiInlineStyle>,
+            Changed<UiTransitions>,
+            Changed<UiBaseLayoutNode>,
+            Changed<UiLayoutNode>,
+            Changed<UiComputedStyle>,
+        )>,
+    >,
+    mut cursor: ResMut<UiStyleCollectorCursor>,
+    tick: SystemChangeTick,
+    mut dirty: ResMut<UiDirty>,
+) {
+    let last = cursor.0;
+    let now = tick.this_run();
+    for (
+        entity,
+        node,
+        parent,
+        role,
+        classes,
+        state,
+        enabled,
+        inline,
+        transitions,
+        base,
+        layout,
+        computed,
+    ) in &changed
+    {
+        if [
+            node.as_ref().map(DetectChanges::last_changed),
+            parent.as_ref().map(DetectChanges::last_changed),
+            role.as_ref().map(DetectChanges::last_changed),
+            classes.as_ref().map(DetectChanges::last_changed),
+            state.as_ref().map(DetectChanges::last_changed),
+            enabled.as_ref().map(DetectChanges::last_changed),
+            inline.as_ref().map(DetectChanges::last_changed),
+            transitions.as_ref().map(DetectChanges::last_changed),
+            base.as_ref().map(DetectChanges::last_changed),
+            layout.as_ref().map(DetectChanges::last_changed),
+            computed.as_ref().map(DetectChanges::last_changed),
+        ]
+        .into_iter()
+        .flatten()
+        .any(|changed| changed.is_newer_than(last, now))
+        {
+            dirty.mark(UiDirtyDomain::Style, entity);
+        }
+    }
+    cursor.0 = now;
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Bevy injects each tracked resource separately"
+)]
+fn collect_style_resource_changes(
+    theme: Res<Theme>,
+    sheet: Res<UiStyleSheet>,
+    reduced_motion: Res<UiReducedMotion>,
+    focus: Option<Res<UiFocus>>,
+    mut cursor: ResMut<UiStyleResourceCursor>,
+    tick: SystemChangeTick,
+    mut cache: ResMut<UiStyleResolutionCache>,
+    mut dirty: ResMut<UiDirty>,
+) {
+    let last = cursor.0;
+    let now = tick.this_run();
+    if cache.resolved_passes == 0
+        || theme.last_changed().is_newer_than(last, now)
+        || sheet.last_changed().is_newer_than(last, now)
+        || reduced_motion.last_changed().is_newer_than(last, now)
+    {
+        dirty.mark_all(UiDirtyDomain::Style);
+    }
+    let mut targets = HashMap::<Entity, u8>::new();
+    for state in focus.iter().flat_map(|focus| focus.windows.values()) {
+        for (entity, bit) in [(state.focused, 1), (state.hovered, 2), (state.captured, 4)] {
+            if let Some(entity) = entity {
+                *targets.entry(entity).or_default() |= bit;
+            }
+        }
+    }
+    for entity in cache.focus_targets.keys().chain(targets.keys()) {
+        if cache.focus_targets.get(entity) != targets.get(entity) {
+            dirty.mark(UiDirtyDomain::Style, *entity);
+        }
+    }
+    cache.focus_targets = targets;
+    cursor.0 = now;
+}
+
+fn resolve_ui_styles_dirty(world: &mut World) {
+    let batch = world.resource_mut::<UiDirty>().take(UiDirtyDomain::Style);
+    if batch.is_empty() {
+        world
+            .resource_mut::<UiStyleResolutionCache>()
+            .skipped_passes += 1;
+        return;
+    }
+    resolve_ui_styles_pass(world, Some(batch));
 }
 
 fn has_pointer_hover_transition(events: Res<UiRoutedEvents>) -> bool {
@@ -1499,13 +1675,35 @@ pub fn resolve_ui_styles(world: &mut World) {
         return;
     }
 
+    resolve_ui_styles_pass(world, None);
+    let settled_stamp = ui_style_input_stamp(world);
+    world.resource_mut::<UiStyleResolutionCache>().input_stamp = Some(settled_stamp);
+}
+
+fn resolve_ui_styles_pass(world: &mut World, dirty: Option<UiDirtyBatch>) {
     let theme = world.get_resource::<Theme>().cloned().unwrap_or_default();
     let sheet = world
         .get_resource::<UiStyleSheet>()
         .cloned()
         .unwrap_or_default();
-    let mut query = world.query_filtered::<Entity, With<UiNode>>();
-    let mut nodes: Vec<Entity> = query.iter(world).collect();
+    let mut nodes: Vec<Entity> = if let Some(batch) = dirty.filter(|batch| !batch.all) {
+        let mut seen = std::collections::HashSet::new();
+        let mut pending: Vec<_> = batch.entities.into_iter().collect();
+        while let Some(entity) = pending.pop() {
+            if !seen.insert(entity) {
+                continue;
+            }
+            if let Some(children) = world.get::<UiChildren>(entity) {
+                pending.extend(children.0.iter().copied());
+            }
+        }
+        seen.into_iter()
+            .filter(|entity| world.get::<UiNode>(*entity).is_some())
+            .collect()
+    } else {
+        let mut query = world.query_filtered::<Entity, With<UiNode>>();
+        query.iter(world).collect()
+    };
     nodes.sort_by_key(|entity| {
         (
             hierarchy_depth(world, *entity),
@@ -1599,10 +1797,13 @@ pub fn resolve_ui_styles(world: &mut World) {
         apply_layout_style(world, entity, &resolved);
     }
 
-    let settled_stamp = ui_style_input_stamp(world);
     let mut cache = world.resource_mut::<UiStyleResolutionCache>();
-    cache.input_stamp = Some(settled_stamp);
+    cache.input_stamp = None;
     cache.resolved_passes = cache.resolved_passes.saturating_add(1);
+    let settled_tick = world.read_change_tick();
+    if let Some(mut cursor) = world.get_resource_mut::<UiStyleCollectorCursor>() {
+        cursor.0 = settled_tick;
+    }
 }
 
 fn ui_style_input_stamp(world: &World) -> u64 {
@@ -1695,6 +1896,9 @@ pub fn advance_ui_style_transitions(world: &mut World) {
         }
         if changed {
             world.entity_mut(entity).insert(state);
+            if let Some(mut dirty) = world.get_resource_mut::<UiDirty>() {
+                dirty.mark(UiDirtyDomain::Style, entity);
+            }
         }
     }
 }

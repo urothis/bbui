@@ -3,9 +3,12 @@
 use bevy_app::{App, Plugin, Update};
 use bevy_asset::Assets;
 use bevy_ecs::prelude::*;
+use bevy_ecs::{lifecycle::Remove, observer::On};
 use bevy_text::{Font, FontCx, LayoutCx, TextPipeline};
 use bevy_time::Time;
-use bui_core::{UiKeyCode, UiModifiers, UiRoutedEvent, UiRoutedEvents, UiSystems};
+use bui_core::{
+    UiDirty, UiDirtyDomain, UiKeyCode, UiModifiers, UiRoutedEvent, UiRoutedEvents, UiSystems,
+};
 use std::collections::HashSet;
 
 pub mod expression;
@@ -28,7 +31,10 @@ pub use text_buffer::{
     CaretAffinity, ImeComposition, TextBuffer, TextCaretPosition, TextRange, UiExternalClipboard,
     UiMultiline, UiReadOnly, UiTextBuffer,
 };
-pub use ui_layout::{UiTextLayout, measure_text_intrinsics, update_text_layouts};
+pub use ui_layout::{
+    UiTextLayout, collect_text_widget_changes, measure_text_intrinsics, take_text_sync,
+    update_text_layouts, update_text_layouts_if_dirty,
+};
 
 #[derive(Resource, Debug, Clone, Default, PartialEq, Eq)]
 pub struct UiClipboard(pub String);
@@ -49,6 +55,8 @@ pub struct TextPlugin;
 impl Plugin for TextPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<UiClipboard>()
+            .init_resource::<UiDirty>()
+            .init_resource::<ui_layout::TextWorkCache>()
             .init_resource::<UiTextUndoFallback>()
             .init_resource::<UiRoutedEvents>()
             .init_resource::<Assets<Font>>()
@@ -58,9 +66,13 @@ impl Plugin for TextPlugin {
             .init_resource::<bui_style::Theme>()
             .add_systems(
                 Update,
-                sync_ui_font_assets
-                    .in_set(UiSystems::TextMeasure)
-                    .before(measure_text_intrinsics),
+                (
+                    sync_ui_font_assets,
+                    ui_layout::collect_text_changes,
+                    measure_text_intrinsics,
+                )
+                    .chain()
+                    .in_set(UiSystems::TextMeasure),
             )
             .add_systems(
                 Update,
@@ -70,15 +82,38 @@ impl Plugin for TextPlugin {
             )
             .add_systems(
                 Update,
-                measure_text_intrinsics.in_set(UiSystems::TextMeasure),
-            )
-            .add_systems(
-                Update,
-                (process_text_events, update_text_layouts)
+                (
+                    process_text_events,
+                    ui_layout::collect_text_changes,
+                    update_text_layouts,
+                )
                     .chain()
                     .in_set(UiSystems::Text),
             );
         register_default_ui_font(app.world_mut());
+        macro_rules! register_text_removals {
+            ($($component:ty),+ $(,)?) => {
+                $(app.add_observer(mark_text_component_removed::<$component>);)+
+            };
+        }
+        register_text_removals!(
+            TextBuffer,
+            UiTextLayout,
+            bui_layout::UiLayoutNode,
+            bui_layout::UiLayoutResult,
+            bui_style::UiComputedStyle,
+            bui_core::UiParent,
+        );
+    }
+}
+
+fn mark_text_component_removed<T: Component>(on: On<Remove<T>>, mut dirty: ResMut<UiDirty>) {
+    for domain in [
+        UiDirtyDomain::TextMeasure,
+        UiDirtyDomain::TextLayout,
+        UiDirtyDomain::TextSync,
+    ] {
+        dirty.mark(domain, on.entity);
     }
 }
 

@@ -5,8 +5,8 @@ use bevy_ecs::lifecycle::RemovedComponentReader;
 use bevy_ecs::prelude::*;
 
 use bui_core::{
-    UiChildren, UiHitBox, UiKeyCode, UiNode, UiParent, UiRoutedEvent, UiRoutedEvents, UiSystems,
-    UiWheelUnit, UiZIndex,
+    UiChildren, UiDirty, UiDirtyDomain, UiHitBox, UiKeyCode, UiNode, UiParent, UiRoutedEvent,
+    UiRoutedEvents, UiSystems, UiWheelUnit, UiZIndex,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -333,41 +333,13 @@ pub enum UiLayoutIssue {
 #[derive(Resource, Debug, Default)]
 pub struct UiLayoutIssues(pub Vec<(Entity, UiLayoutIssue)>);
 
-/// Explicit invalidation for layout inputs that change outside tracked ECS
-/// components, such as data read from a native surface or an external layout
-/// service. Component, hierarchy, root, viewport, and intrinsic-size changes
-/// are detected automatically.
-#[derive(Resource, Debug, Default)]
-pub struct UiLayoutInvalidation {
-    entities: HashSet<Entity>,
-    roots: HashSet<Entity>,
-    all: bool,
-}
-
-impl UiLayoutInvalidation {
-    /// Mark an entity whose measurement or layout-affecting state changed.
-    pub fn mark_entity(&mut self, entity: Entity) {
-        self.entities.insert(entity);
-    }
-
-    /// Mark a root for a full root-local layout pass.
-    pub fn mark_root(&mut self, root: Entity) {
-        self.roots.insert(root);
-    }
-
-    /// Recompute every registered root on the next layout phase.
-    pub fn mark_all(&mut self) {
-        self.all = true;
-    }
-}
-
 /// Mark an entity for layout invalidation when its change is not represented
 /// by an ECS component. The owning root is found during the next layout pass.
 pub fn invalidate_ui_layout(world: &mut World, entity: Entity) {
-    world.init_resource::<UiLayoutInvalidation>();
+    world.init_resource::<UiDirty>();
     world
-        .resource_mut::<UiLayoutInvalidation>()
-        .mark_entity(entity);
+        .resource_mut::<UiDirty>()
+        .mark(UiDirtyDomain::Layout, entity);
 }
 
 /// Work performed by the most recent layout phase and cumulative totals.
@@ -419,7 +391,7 @@ impl Plugin for LayoutPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<UiViewports>()
             .init_resource::<UiLayoutIssues>()
-            .init_resource::<UiLayoutInvalidation>()
+            .init_resource::<UiDirty>()
             .init_resource::<UiLayoutStats>()
             .init_resource::<UiLayoutCache>()
             .init_resource::<UiRoutedEvents>()
@@ -603,13 +575,10 @@ pub fn compute_layout(world: &mut World) {
     let roots = effective_roots(world);
     let root_configs: HashMap<Entity, UiLayoutRoot> = roots.iter().copied().collect();
     let root_entities: HashSet<Entity> = root_configs.keys().copied().collect();
-    let (mut dirty_roots, entities, invalidate_all) = {
-        let mut invalidation = world.resource_mut::<UiLayoutInvalidation>();
-        let dirty = std::mem::take(&mut invalidation.roots);
-        let invalidate_all = std::mem::take(&mut invalidation.all);
-        let entities = std::mem::take(&mut invalidation.entities);
-        (dirty, entities, invalidate_all)
-    };
+    let batch = world.resource_mut::<UiDirty>().take(UiDirtyDomain::Layout);
+    let mut dirty_roots = HashSet::new();
+    let entities = batch.entities;
+    let invalidate_all = batch.all;
     if invalidate_all {
         dirty_roots.extend(root_configs.keys().copied());
         dirty_roots.extend(
@@ -765,7 +734,7 @@ pub fn compute_layout(world: &mut World) {
 
 fn ensure_layout_resources(world: &mut World) {
     world.init_resource::<UiLayoutIssues>();
-    world.init_resource::<UiLayoutInvalidation>();
+    world.init_resource::<UiDirty>();
     world.init_resource::<UiLayoutStats>();
     world.init_resource::<UiLayoutCache>();
     world.init_resource::<UiViewports>();
@@ -852,8 +821,10 @@ fn collect_layout_changes(world: &mut World) {
         }
     }
     world.insert_resource(cache);
-    let mut invalidation = world.resource_mut::<UiLayoutInvalidation>();
-    invalidation.entities.extend(dirty_entities);
+    let mut dirty = world.resource_mut::<UiDirty>();
+    for entity in dirty_entities {
+        dirty.mark(UiDirtyDomain::Layout, entity);
+    }
 }
 
 fn layout_inputs(world: &World, entity: Entity) -> LayoutInputs {

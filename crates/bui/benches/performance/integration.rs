@@ -10,6 +10,7 @@ use bui_core::UiChildren;
 use bui_layout::{Rect, UiLayoutRoot};
 use bui_render::{ClipRect, DisplayList, Primitive, UiPaint};
 use bui_style::Theme;
+use bui_text::TextBuffer;
 use bui_widgets::{Checkbox, WidgetNode, WidgetTree};
 use criterion::{BenchmarkId, Criterion, Throughput};
 use std::hint::black_box;
@@ -19,7 +20,7 @@ struct Scene {
     changed_control: bevy::ecs::entity::Entity,
 }
 
-fn scene(controls: usize) -> Scene {
+fn scene_with_tree(tree: WidgetTree) -> Scene {
     let mut app = App::new();
     app.add_plugins(MinimalPlugins)
         .add_plugins(AssetPlugin::default())
@@ -32,10 +33,6 @@ fn scene(controls: usize) -> Scene {
     let mut window = Window::default();
     window.resolution.set(1280.0, 720.0);
     let window = app.world_mut().spawn(window).id();
-    let tree =
-        WidgetTree::new(WidgetNode::column((0..controls).map(|index| {
-            WidgetNode::checkbox(format!("Control {index:04}"), false)
-        })));
     let root = tree
         .spawn(app.world_mut(), None)
         .expect("valid integrated benchmark widget tree");
@@ -64,6 +61,18 @@ fn scene(controls: usize) -> Scene {
         app,
         changed_control,
     }
+}
+
+fn scene(controls: usize) -> Scene {
+    scene_with_tree(WidgetTree::new(WidgetNode::column((0..controls).map(
+        |index| WidgetNode::checkbox(format!("Control {index:04}"), false),
+    ))))
+}
+
+fn text_scene(controls: usize) -> Scene {
+    scene_with_tree(WidgetTree::new(WidgetNode::column((0..controls).map(
+        |index| WidgetNode::text_field(format!("Field {index:04}"), "alpha"),
+    ))))
 }
 
 pub fn bench(c: &mut Criterion) {
@@ -96,4 +105,31 @@ pub fn bench(c: &mut Criterion) {
         );
     }
     group.finish();
+
+    let mut text_group = c.benchmark_group("bui_plugin/text_field_update");
+    for controls in [200, 1_000] {
+        text_group.throughput(Throughput::Elements(controls as u64));
+        let mut idle = text_scene(controls);
+        text_group.bench_with_input(BenchmarkId::new("idle", controls), &controls, |b, _| {
+            b.iter(|| {
+                idle.app.update();
+                black_box(idle.app.world().resource::<DisplayList>().items().len());
+            });
+        });
+        let mut changed = text_scene(controls);
+        let mut phase = false;
+        text_group.bench_with_input(BenchmarkId::new("edit_one", controls), &controls, |b, _| {
+            b.iter(|| {
+                phase = !phase;
+                changed
+                    .app
+                    .world_mut()
+                    .entity_mut(changed.changed_control)
+                    .insert(TextBuffer::new(if phase { "bravo" } else { "alpha" }));
+                changed.app.update();
+                black_box(changed.app.world().resource::<DisplayList>().items().len());
+            });
+        });
+    }
+    text_group.finish();
 }

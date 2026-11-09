@@ -2,22 +2,177 @@
 
 use bevy_asset::Assets;
 use bevy_ecs::prelude::*;
+use bevy_ecs::{change_detection::Tick, system::SystemChangeTick};
 use bevy_math::Vec2;
 use bevy_text::{
     Font, FontCx, Justify, LayoutCx, LetterSpacing, LineBreak, LineHeight, RemSize, TextFont,
     TextPipeline,
 };
-use bui_core::{UiFocus, UiParent};
+use bui_core::{UiDirty, UiDirtyBatch, UiDirtyDomain, UiFocus, UiParent};
 use bui_layout::{
     UiIntrinsicSize, UiLayoutNode, UiLayoutResult, UiLayoutRoot, UiLength, UiViewports,
 };
 use bui_style::{Theme, UiComputedStyle, UiStyleProperty};
-use std::ops::Range;
+use std::{collections::HashSet, ops::Range};
 
 use crate::{
     BevyTextLayoutConfig, TextBuffer, TextCaretPosition, TextLayout, TextRange, TextRect,
     resolve_text_font,
 };
+
+#[derive(Resource, Default)]
+pub(crate) struct TextWorkCache {
+    cursor: Tick,
+    focus_targets: HashSet<Entity>,
+    prepared_measure: bool,
+    prepared_layout: bool,
+    prepared_sync: bool,
+}
+
+#[expect(
+    clippy::type_complexity,
+    reason = "Bevy change query covers the text inputs"
+)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Bevy injects each tracked resource separately"
+)]
+pub(crate) fn collect_text_changes(
+    changed: Query<
+        (
+            Entity,
+            Option<Ref<TextBuffer>>,
+            Option<Ref<UiTextLayout>>,
+            Option<Ref<UiLayoutNode>>,
+            Option<Ref<UiLayoutResult>>,
+            Option<Ref<UiComputedStyle>>,
+            Option<Ref<UiParent>>,
+        ),
+        Or<(
+            Changed<TextBuffer>,
+            Changed<UiTextLayout>,
+            Changed<UiLayoutNode>,
+            Changed<UiLayoutResult>,
+            Changed<UiComputedStyle>,
+            Changed<UiParent>,
+        )>,
+    >,
+    theme: Res<Theme>,
+    fonts: Res<Assets<Font>>,
+    viewports: Option<Res<UiViewports>>,
+    focus: Option<Res<UiFocus>>,
+    mut cache: ResMut<TextWorkCache>,
+    tick: SystemChangeTick,
+    mut dirty: ResMut<UiDirty>,
+) {
+    let last = cache.cursor;
+    let now = tick.this_run();
+    if theme.last_changed().is_newer_than(last, now)
+        || fonts.last_changed().is_newer_than(last, now)
+        || viewports
+            .as_ref()
+            .is_some_and(|viewports| viewports.last_changed().is_newer_than(last, now))
+    {
+        for domain in [
+            UiDirtyDomain::TextMeasure,
+            UiDirtyDomain::TextLayout,
+            UiDirtyDomain::TextSync,
+        ] {
+            dirty.mark_all(domain);
+        }
+    }
+    let targets: HashSet<_> = focus
+        .iter()
+        .flat_map(|focus| focus.windows.values())
+        .filter_map(|state| state.focused)
+        .collect();
+    for entity in cache.focus_targets.symmetric_difference(&targets) {
+        dirty.mark(UiDirtyDomain::TextLayout, *entity);
+        dirty.mark(UiDirtyDomain::TextSync, *entity);
+    }
+    cache.focus_targets = targets;
+
+    for (entity, buffer, layout, node, result, style, parent) in &changed {
+        let measure_changed = [
+            buffer.as_ref().map(DetectChanges::last_changed),
+            layout.as_ref().map(DetectChanges::last_changed),
+            node.as_ref().map(DetectChanges::last_changed),
+            style.as_ref().map(DetectChanges::last_changed),
+            parent.as_ref().map(DetectChanges::last_changed),
+        ]
+        .into_iter()
+        .flatten()
+        .any(|changed| changed.is_newer_than(last, now));
+        let result_changed = result
+            .as_ref()
+            .is_some_and(|result| result.last_changed().is_newer_than(last, now));
+        if measure_changed {
+            dirty.mark(UiDirtyDomain::TextMeasure, entity);
+            dirty.mark(UiDirtyDomain::TextLayout, entity);
+            dirty.mark(UiDirtyDomain::TextSync, entity);
+        } else if result_changed {
+            dirty.mark(UiDirtyDomain::TextLayout, entity);
+        }
+    }
+    cache.cursor = now;
+    cache.prepared_measure = true;
+    cache.prepared_layout = true;
+    cache.prepared_sync = true;
+}
+
+/// Take the text-control synchronization work collected by the scheduled text phase.
+/// `None` means no collector prepared this world, so direct callers should run fully.
+pub fn take_text_sync(world: &mut World) -> Option<UiDirtyBatch> {
+    let prepared = world
+        .get_resource_mut::<TextWorkCache>()
+        .is_some_and(|mut cache| std::mem::take(&mut cache.prepared_sync));
+    prepared.then(|| {
+        world
+            .resource_mut::<UiDirty>()
+            .take(UiDirtyDomain::TextSync)
+    })
+}
+
+/// Collect text edits made after the regular text phase by widget systems.
+/// This pass reads change ticks without cloning or shaping unchanged buffers.
+pub fn collect_text_widget_changes(world: &mut World) {
+    world.init_resource::<UiDirty>();
+    world.init_resource::<TextWorkCache>();
+    let last = world.resource::<TextWorkCache>().cursor;
+    let now = world.read_change_tick();
+    let mut query = world.query_filtered::<Entity, Or<(With<TextBuffer>, With<UiTextLayout>)>>();
+    let changed: Vec<_> = query
+        .iter(world)
+        .filter(|entity| {
+            let Ok(entity) = world.get_entity(*entity) else {
+                return false;
+            };
+            [
+                entity
+                    .get_change_ticks::<TextBuffer>()
+                    .map(|ticks| ticks.changed),
+                entity
+                    .get_change_ticks::<UiTextLayout>()
+                    .map(|ticks| ticks.changed),
+            ]
+            .into_iter()
+            .flatten()
+            .any(|changed| changed.is_newer_than(last, now))
+        })
+        .collect();
+    let mut dirty = world.resource_mut::<UiDirty>();
+    for entity in changed {
+        dirty.mark(UiDirtyDomain::TextLayout, entity);
+        dirty.mark(UiDirtyDomain::TextMeasure, entity);
+    }
+}
+
+fn settle_text_cursor(world: &mut World) {
+    let tick = world.read_change_tick();
+    if let Some(mut cache) = world.get_resource_mut::<TextWorkCache>() {
+        cache.cursor = tick;
+    }
+}
 
 /// Text drawing and editing state shared by layout, widgets, and paint.
 ///
@@ -539,9 +694,18 @@ struct VisibleText {
 /// the layout pass. Explicit pixel widths are used for wrapped text areas;
 /// auto/fill widths use the unbounded preferred text width.
 pub fn measure_text_intrinsics(world: &mut World) {
+    let batch = take_text_work(world, UiDirtyDomain::TextMeasure);
+    if batch.as_ref().is_some_and(UiDirtyBatch::is_empty) {
+        return;
+    }
     let theme = world.get_resource::<Theme>().cloned().unwrap_or_default();
-    let entities = text_entities(world, false);
+    let subset = batch
+        .as_ref()
+        .filter(|batch| !batch.all)
+        .map(|batch| &batch.entities);
+    let entities = text_entities(world, false, subset);
     if entities.is_empty() {
+        settle_text_cursor(world);
         return;
     }
 
@@ -619,13 +783,23 @@ pub fn measure_text_intrinsics(world: &mut World) {
             });
         });
     });
+    settle_text_cursor(world);
 }
 
 /// Shape text against final BUI bounds after layout and before widget paint.
 pub fn update_text_layouts(world: &mut World) {
+    let batch = take_text_work(world, UiDirtyDomain::TextLayout);
+    if batch.as_ref().is_some_and(UiDirtyBatch::is_empty) {
+        return;
+    }
     let theme = world.get_resource::<Theme>().cloned().unwrap_or_default();
-    let entities = text_entities(world, true);
+    let subset = batch
+        .as_ref()
+        .filter(|batch| !batch.all)
+        .map(|batch| &batch.entities);
+    let entities = text_entities(world, true, subset);
     if entities.is_empty() {
+        settle_text_cursor(world);
         return;
     }
 
@@ -748,6 +922,27 @@ pub fn update_text_layouts(world: &mut World) {
             });
         });
     });
+    settle_text_cursor(world);
+}
+
+/// Refresh only text entities recorded as dirty by widget synchronization.
+pub fn update_text_layouts_if_dirty(world: &mut World) {
+    world.init_resource::<UiDirty>();
+    world.init_resource::<TextWorkCache>();
+    world.resource_mut::<TextWorkCache>().prepared_layout = true;
+    update_text_layouts(world);
+}
+
+fn take_text_work(world: &mut World, domain: UiDirtyDomain) -> Option<UiDirtyBatch> {
+    let prepared =
+        world
+            .get_resource_mut::<TextWorkCache>()
+            .is_some_and(|mut cache| match domain {
+                UiDirtyDomain::TextMeasure => std::mem::take(&mut cache.prepared_measure),
+                UiDirtyDomain::TextLayout => std::mem::take(&mut cache.prepared_layout),
+                _ => false,
+            });
+    prepared.then(|| world.resource_mut::<UiDirty>().take(domain))
 }
 
 #[derive(Clone)]
@@ -758,7 +953,30 @@ struct TextEntity {
     result: Option<UiLayoutResult>,
 }
 
-fn text_entities(world: &mut World, require_layout: bool) -> Vec<TextEntity> {
+fn text_entities(
+    world: &mut World,
+    require_layout: bool,
+    subset: Option<&HashSet<Entity>>,
+) -> Vec<TextEntity> {
+    if let Some(subset) = subset {
+        return subset
+            .iter()
+            .filter_map(|entity| {
+                let buffer = world.get::<TextBuffer>(*entity)?;
+                world.get::<UiTextLayout>(*entity)?;
+                let result = world.get::<UiLayoutResult>(*entity).copied();
+                if require_layout && result.is_none() {
+                    return None;
+                }
+                Some(TextEntity {
+                    entity: *entity,
+                    buffer: buffer.clone(),
+                    node: world.get::<UiLayoutNode>(*entity).copied(),
+                    result,
+                })
+            })
+            .collect();
+    }
     let mut query = world.query::<(Entity, &TextBuffer, &UiTextLayout)>();
     query
         .iter(world)

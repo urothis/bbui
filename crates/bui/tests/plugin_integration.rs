@@ -1,4 +1,5 @@
 use bevy::{
+    a11y::AccessibilityNode,
     asset::{AssetPlugin, Assets},
     camera::{Camera, CameraProjection, OrthographicProjection, RenderTarget, RenderTargetInfo},
     clipboard::ClipboardPlugin,
@@ -95,6 +96,32 @@ fn spawn_scene(app: &mut App) -> Scene {
         button: children[0],
         text_field: children[1],
     }
+}
+
+#[test]
+fn accessibility_tracks_direct_control_edits_and_removal_in_the_same_update() {
+    let mut app = test_app();
+    let scene = spawn_scene(&mut app);
+    app.update();
+    assert!(app.world().get::<AccessibilityNode>(scene.button).is_some());
+
+    app.world_mut()
+        .get_mut::<Button>(scene.button)
+        .unwrap()
+        .label = "Run again".into();
+    app.update();
+    assert_eq!(
+        app.world()
+            .get::<AccessibilityNode>(scene.button)
+            .unwrap()
+            .0
+            .label(),
+        Some("Run again")
+    );
+
+    app.world_mut().entity_mut(scene.button).remove::<Button>();
+    app.update();
+    assert!(app.world().get::<AccessibilityNode>(scene.button).is_none());
 }
 
 fn center(app: &App, entity: bevy::prelude::Entity) -> Vec2 {

@@ -1,6 +1,6 @@
 # BUI for Bevy
 
-This repository is an in-progress, original Rust implementation of Blender-style UI behavior for Bevy. The accepted feature contract is [the feature inventory](docs/feature-inventory.md). The workspace now includes a Bevy input bridge, shared layout and hit testing, a GPU UI renderer, a widget tree, and an interactive showcase. The complete feature inventory remains a work in progress; unchecked items require their full behavior, tests, and examples.
+This repository is an in-progress, original Rust implementation of Blender-style UI behavior for Bevy. The accepted feature contract is [the feature inventory](docs/feature-inventory.md), and the cross-crate change propagation rules are in the [UI invalidation contract](docs/invalidation.md). The workspace now includes a Bevy input bridge, shared layout and hit testing, a GPU UI renderer, a widget tree, and an interactive showcase. The complete feature inventory remains a work in progress; unchecked items require their full behavior, tests, and examples.
 
 ## Workspace
 

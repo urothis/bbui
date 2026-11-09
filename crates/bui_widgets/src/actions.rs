@@ -24,12 +24,15 @@ use crate::{
 use bevy_app::{App, Update};
 use bevy_asset::Assets;
 use bevy_ecs::change_detection::Mut;
+use bevy_ecs::lifecycle::Remove;
+use bevy_ecs::observer::On;
 use bevy_ecs::prelude::*;
 use bevy_text::{Font, FontCx, FontSize, LayoutCx, LineBreak, LineHeight, TextFont, TextPipeline};
 use bui_core::{
-    TextSelection, UiEnabled, UiFocus, UiFocusable, UiHitBox, UiKey, UiKeyCode, UiModifiers,
-    UiNode, UiParent, UiPointerButton, UiRect, UiRoutedEvent, UiRoutedEvents, UiSystems, UiVisible,
-    detach_from_parent, is_interactable, is_interactable_in_window, set_parent,
+    TextSelection, UiChildren, UiDirty, UiDirtyDomain, UiEnabled, UiFocus, UiFocusable, UiHitBox,
+    UiKey, UiKeyCode, UiLiveRegion, UiModifiers, UiNode, UiParent, UiPointerButton, UiRect,
+    UiRoutedEvent, UiRoutedEvents, UiSystems, UiVisible, detach_from_parent, is_interactable,
+    is_interactable_in_window, set_parent,
 };
 use bui_layout::{Rect, UiLayoutNode, UiLayoutResult, UiLayoutRoot, UiWheelHandled};
 use bui_render::{ClipRect, DisplayList, DrawItem, Primitive, TextRenderStyle};
@@ -629,9 +632,20 @@ pub struct WidgetInteractionState {
 #[derive(Resource, Debug, Default)]
 struct WidgetPaintCameras(HashSet<Entity>);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FocusTargetSnapshot {
+    window: Entity,
+    focused: Option<Entity>,
+    hovered: Option<Entity>,
+    captured: Option<Entity>,
+}
+
 #[derive(Resource, Debug, Default)]
 struct WidgetPaintCache {
     input_stamp: Option<u64>,
+    prepared: bool,
+    focus_active_window: Option<Entity>,
+    focus_targets: Vec<FocusTargetSnapshot>,
     skipped_frames: u64,
     rebuilt_frames: u64,
 }
@@ -751,6 +765,7 @@ pub fn install_widget_systems(app: &mut App) {
         .init_resource::<WidgetInteractionState>()
         .init_resource::<WidgetPaintCameras>()
         .init_resource::<WidgetPaintCache>()
+        .init_resource::<UiDirty>()
         .init_resource::<WidgetFileBrowserItems>()
         .init_resource::<WidgetFileBrowserFilterEdits>()
         .init_resource::<WidgetCollectionItems>()
@@ -785,11 +800,83 @@ pub fn install_widget_systems(app: &mut App) {
                 sync_node_graph_views,
                 sync_text_controls,
                 refresh_text_layouts_after_sync,
+                collect_widget_paint_changes,
                 collect_widget_paint,
             )
                 .chain()
                 .in_set(UiSystems::Widgets),
         );
+    macro_rules! register_paint_removals {
+        ($($component:ty),+ $(,)?) => {
+            $(app.add_observer(mark_paint_component_removed::<$component>);)+
+        };
+    }
+    register_paint_removals!(
+        UiNode,
+        UiParent,
+        UiChildren,
+        UiEnabled,
+        UiVisible,
+        UiLayoutResult,
+        UiLayoutRoot,
+        UiComputedStyle,
+        UiRole,
+        UiTextLayout,
+        TextBuffer,
+        UiFocusable,
+        UiLiveRegion,
+        UiReadOnly,
+        UiKey,
+        Button,
+        Checkbox,
+        IconButton,
+        Label,
+        RadioGroup,
+        NumericField,
+        Slider,
+        TextField,
+        TextArea,
+        Dropdown,
+        Panel,
+        Progress,
+        MenuControl,
+        MenuItemControl,
+        DropdownOptionControl,
+        FileBrowser,
+        FileBrowserItem,
+        ListModel<String>,
+        TreeModel<String>,
+        PreviewGrid,
+        CollectionItemControl,
+        DataTable,
+        DataTableHeaderControl,
+        DataTableCellControl,
+        ColorRamp,
+        HsvColorEditor,
+        CurveEditor,
+        NodeGraph,
+        Canvas,
+        Tooltip,
+        IconButtonAsset,
+        DropdownPopupState,
+        CollectionEditorState,
+        HsvColorEditorState,
+        ColorRampEditorState,
+        NodeGraphEditorState,
+        FileBrowserViewState,
+        crate::canvas::CanvasObjectControl,
+        crate::IconButtonAssetState,
+        NodeGraphNodeControl,
+        NodeGraphSocketControl,
+        NodeGraphLinkControl,
+        crate::PanelGroup,
+        RadioOptionControl,
+    );
+}
+
+fn mark_paint_component_removed<T: Component>(on: On<Remove<T>>, mut dirty: ResMut<UiDirty>) {
+    dirty.mark(UiDirtyDomain::Paint, on.entity);
+    dirty.mark(UiDirtyDomain::Accessibility, on.entity);
 }
 
 /// Recompute text geometry after widget synchronization and before paint.
@@ -800,7 +887,8 @@ pub fn install_widget_systems(app: &mut App) {
 /// same-frame paint, caret hit testing, and scrolling in agreement.
 fn refresh_text_layouts_after_sync(world: &mut World) {
     if world.contains_resource::<bevy_text::TextPipeline>() {
-        bui_text::update_text_layouts(world);
+        bui_text::collect_text_widget_changes(world);
+        bui_text::update_text_layouts_if_dirty(world);
     }
 }
 
@@ -7530,6 +7618,17 @@ fn node_graph_link_points(
 ) -> Option<[[f32; 2]; 4]> {
     let from = graph.nodes.iter().find(|node| node.id == link.from_node)?;
     let to = graph.nodes.iter().find(|node| node.id == link.to_node)?;
+    node_graph_link_points_between(graph, rect, link, from, to, spacing)
+}
+
+fn node_graph_link_points_between(
+    graph: &NodeGraph,
+    rect: Rect,
+    link: crate::NodeLink,
+    from: &crate::NodeModel,
+    to: &crate::NodeModel,
+    spacing: &bui_style::ThemeNodeGraphSpacing,
+) -> Option<[[f32; 2]; 4]> {
     let p0 = node_graph_socket_position(graph, rect, from, link.from_socket, spacing)?;
     let p3 = node_graph_socket_position(graph, rect, to, link.to_socket, spacing)?;
     let tangent = ((p3[0] - p0[0]).abs() * 0.5).max(spacing.connection_tangent_min * graph.zoom);
@@ -7540,6 +7639,31 @@ fn node_graph_link_points(
         [p3[0] - tangent * direction, p3[1]],
         p3,
     ])
+}
+
+fn node_graph_bezier_bounds(points: [[f32; 2]; 4], padding: f32) -> Rect {
+    let min_x = points
+        .iter()
+        .map(|point| point[0])
+        .fold(f32::INFINITY, f32::min);
+    let max_x = points
+        .iter()
+        .map(|point| point[0])
+        .fold(f32::NEG_INFINITY, f32::max);
+    let min_y = points
+        .iter()
+        .map(|point| point[1])
+        .fold(f32::INFINITY, f32::min);
+    let max_y = points
+        .iter()
+        .map(|point| point[1])
+        .fold(f32::NEG_INFINITY, f32::max);
+    Rect::new(
+        min_x - padding,
+        min_y - padding,
+        max_x - min_x + padding * 2.0,
+        max_y - min_y + padding * 2.0,
+    )
 }
 
 fn node_graph_hit(
@@ -7572,8 +7696,16 @@ fn node_graph_hit(
             };
         }
     }
+    let nodes_by_id: HashMap<_, _> = graph.nodes.iter().map(|node| (node.id, node)).collect();
     for link in graph.links.iter().rev() {
-        if let Some(points) = node_graph_link_points(graph, rect, *link, spacing)
+        let (Some(from), Some(to)) = (
+            nodes_by_id.get(&link.from_node),
+            nodes_by_id.get(&link.to_node),
+        ) else {
+            continue;
+        };
+        if let Some(points) = node_graph_link_points_between(graph, rect, *link, from, to, spacing)
+            && node_graph_bezier_bounds(points, 7.0).contains(position[0], position[1])
             && bezier_distance(points, position) <= 7.0
         {
             return NodeGraphHit::Link(link.id);
@@ -10816,6 +10948,10 @@ pub fn sync_node_graph_views(world: &mut World) {
 
 /// Keep legacy display models synchronized with the shared byte-indexed text buffer.
 pub fn sync_text_controls(world: &mut World) {
+    let batch = bui_text::take_text_sync(world);
+    if batch.as_ref().is_some_and(bui_core::UiDirtyBatch::is_empty) {
+        return;
+    }
     let mut query = world.query::<(
         Entity,
         &TextBuffer,
@@ -10825,6 +10961,11 @@ pub fn sync_text_controls(world: &mut World) {
     )>();
     let buffers: Vec<_> = query
         .iter(world)
+        .filter(|(entity, _, _, _, _)| {
+            batch
+                .as_ref()
+                .is_none_or(|batch| batch.all || batch.entities.contains(entity))
+        })
         .map(|(entity, buffer, label, field, area)| {
             let label = label.map_or_else(String::new, |label| label.text.clone());
             let placeholder = field
@@ -10847,6 +10988,7 @@ pub fn sync_text_controls(world: &mut World) {
         })
         .collect();
     let theme = world.get_resource::<Theme>().cloned().unwrap_or_default();
+    let mut changed_text_layouts = Vec::new();
     for (entity, text, caret, selection, read_only, label, placeholder, wrap, scroll_line) in
         buffers
     {
@@ -10863,29 +11005,56 @@ pub fn sync_text_controls(world: &mut World) {
             let line_height = text_line_height_pixels(layout, &entity_theme);
             display_scroll_line = (layout.scroll_offset[1].max(0.0) / line_height).round() as usize;
         }
-        if let Some(mut field) = world.get_mut::<TextField>(entity) {
+        let field_changed = world.get::<TextField>(entity).is_some_and(|field| {
+            field.text != text
+                || field.caret != caret_chars
+                || field.selection != selection_chars
+                || field.read_only != read_only
+        });
+        if field_changed && let Some(mut field) = world.get_mut::<TextField>(entity) {
             field.text.clone_from(&text);
             field.caret = caret_chars;
             field.selection = selection_chars.clone();
             field.read_only = read_only;
         }
-        if let Some(mut area) = world.get_mut::<TextArea>(entity) {
+        let area_changed = world.get::<TextArea>(entity).is_some_and(|area| {
+            area.field.text != text
+                || area.field.caret != caret_chars
+                || area.field.selection != selection_chars
+                || area.field.read_only != read_only
+                || area.scroll_line != display_scroll_line
+        });
+        if area_changed && let Some(mut area) = world.get_mut::<TextArea>(entity) {
             area.field.text.clone_from(&text);
             area.field.caret = caret_chars;
             area.field.selection = selection_chars;
             area.field.read_only = read_only;
             area.scroll_line = display_scroll_line;
         }
-        if let Some(mut layout) = world.get_mut::<UiTextLayout>(entity) {
-            layout.prefix = if label.is_empty() {
-                String::new()
-            } else {
-                format!("{label}: ")
-            };
+        let prefix = if label.is_empty() {
+            String::new()
+        } else {
+            format!("{label}: ")
+        };
+        let layout_changed = world.get::<UiTextLayout>(entity).is_some_and(|layout| {
+            layout.prefix != prefix
+                || layout.placeholder != placeholder
+                || (layout.multiline && layout.wrap != wrap)
+        });
+        if layout_changed && let Some(mut layout) = world.get_mut::<UiTextLayout>(entity) {
+            layout.prefix = prefix;
             layout.placeholder = placeholder;
             if layout.multiline {
                 layout.wrap = wrap;
             }
+        }
+        if field_changed || area_changed || layout_changed {
+            changed_text_layouts.push(entity);
+        }
+    }
+    if let Some(mut dirty) = world.get_resource_mut::<UiDirty>() {
+        for entity in changed_text_layouts {
+            dirty.mark(UiDirtyDomain::TextLayout, entity);
         }
     }
 }
@@ -11022,14 +11191,194 @@ fn styled_theme(world: &World, entity: Entity, base: &Theme) -> Theme {
 }
 
 /// Rebuild the shared draw list from current widget state and the completed layout pass.
+#[expect(
+    clippy::type_complexity,
+    reason = "Bevy change queries enumerate widget inputs"
+)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Bevy injects the independent widget queries"
+)]
+fn collect_widget_paint_changes(
+    base: Query<
+        Entity,
+        Or<(
+            Changed<UiNode>,
+            Changed<UiParent>,
+            Changed<UiChildren>,
+            Changed<UiEnabled>,
+            Changed<UiVisible>,
+            Changed<UiLayoutResult>,
+            Changed<UiLayoutRoot>,
+            Changed<UiComputedStyle>,
+            Changed<UiRole>,
+            Changed<UiTextLayout>,
+            Changed<TextBuffer>,
+        )>,
+    >,
+    semantic_base: Query<
+        Entity,
+        Or<(
+            Changed<UiNode>,
+            Changed<UiParent>,
+            Changed<UiChildren>,
+            Changed<UiEnabled>,
+            Changed<UiVisible>,
+            Changed<UiLayoutResult>,
+            Changed<TextBuffer>,
+        )>,
+    >,
+    controls: Query<
+        Entity,
+        Or<(
+            Changed<Button>,
+            Changed<Checkbox>,
+            Changed<IconButton>,
+            Changed<Label>,
+            Changed<RadioGroup>,
+            Changed<NumericField>,
+            Changed<Slider>,
+            Changed<TextField>,
+            Changed<TextArea>,
+            Changed<Dropdown>,
+            Changed<Panel>,
+            Changed<Progress>,
+            Changed<MenuControl>,
+            Changed<MenuItemControl>,
+        )>,
+    >,
+    models_a: Query<
+        Entity,
+        Or<(
+            Changed<DropdownOptionControl>,
+            Changed<FileBrowser>,
+            Changed<FileBrowserItem>,
+            Changed<ListModel<String>>,
+            Changed<TreeModel<String>>,
+            Changed<PreviewGrid>,
+            Changed<CollectionItemControl>,
+            Changed<DataTable>,
+        )>,
+    >,
+    models_b: Query<
+        Entity,
+        Or<(
+            Changed<DataTableHeaderControl>,
+            Changed<DataTableCellControl>,
+            Changed<ColorRamp>,
+            Changed<HsvColorEditor>,
+            Changed<CurveEditor>,
+            Changed<NodeGraph>,
+            Changed<Canvas>,
+            Changed<Tooltip>,
+        )>,
+    >,
+    states: Query<
+        Entity,
+        Or<(
+            Changed<IconButtonAsset>,
+            Changed<DropdownPopupState>,
+            Changed<CollectionEditorState>,
+            Changed<HsvColorEditorState>,
+            Changed<ColorRampEditorState>,
+            Changed<NodeGraphEditorState>,
+            Changed<FileBrowserViewState>,
+        )>,
+    >,
+    accessibility: Query<
+        Entity,
+        Or<(
+            Changed<UiFocusable>,
+            Changed<UiLiveRegion>,
+            Changed<UiReadOnly>,
+            Changed<UiKey>,
+            Changed<crate::canvas::CanvasObjectControl>,
+            Changed<crate::IconButtonAssetState>,
+            Changed<NodeGraphNodeControl>,
+            Changed<NodeGraphSocketControl>,
+            Changed<NodeGraphLinkControl>,
+            Changed<crate::PanelGroup>,
+            Changed<RadioOptionControl>,
+        )>,
+    >,
+    theme: Res<Theme>,
+    interaction: Res<WidgetInteractionState>,
+    menus: Res<WidgetMenuAnimations>,
+    focus: Option<Res<UiFocus>>,
+    canvas_images: Option<Res<crate::canvas::CanvasImageAssets>>,
+    mut cache: ResMut<WidgetPaintCache>,
+    mut dirty: ResMut<UiDirty>,
+) {
+    let active_window = focus.as_ref().and_then(|focus| focus.active_window);
+    let mut focus_targets: Vec<_> = focus
+        .iter()
+        .flat_map(|focus| &focus.windows)
+        .map(|(window, state)| FocusTargetSnapshot {
+            window: *window,
+            focused: state.focused,
+            hovered: state.hovered,
+            captured: state.captured,
+        })
+        .collect();
+    focus_targets.sort_unstable_by_key(|targets| targets.window);
+    let focus_changed =
+        cache.focus_active_window != active_window || cache.focus_targets != focus_targets;
+    if focus_changed {
+        cache.focus_active_window = active_window;
+        cache.focus_targets = focus_targets;
+    }
+    if theme.is_changed()
+        || interaction.is_changed()
+        || menus.is_changed()
+        || focus_changed
+        || canvas_images
+            .as_ref()
+            .is_some_and(|images| images.is_changed())
+    {
+        dirty.mark_all(UiDirtyDomain::Paint);
+    }
+    for entity in &base {
+        dirty.mark(UiDirtyDomain::Paint, entity);
+    }
+    for entity in &semantic_base {
+        dirty.mark(UiDirtyDomain::Accessibility, entity);
+    }
+    for entity in controls
+        .iter()
+        .chain(&models_a)
+        .chain(&models_b)
+        .chain(&states)
+    {
+        dirty.mark(UiDirtyDomain::Paint, entity);
+        dirty.mark(UiDirtyDomain::Accessibility, entity);
+    }
+    for entity in &accessibility {
+        dirty.mark(UiDirtyDomain::Accessibility, entity);
+    }
+    cache.prepared = true;
+}
+
 pub fn collect_widget_paint(world: &mut World) {
     world.init_resource::<WidgetPaintCache>();
+    if std::mem::take(&mut world.resource_mut::<WidgetPaintCache>().prepared) {
+        let batch = world.resource_mut::<UiDirty>().take(UiDirtyDomain::Paint);
+        if batch.is_empty() {
+            world.resource_mut::<WidgetPaintCache>().skipped_frames += 1;
+            return;
+        }
+        collect_widget_paint_full(world, None);
+        return;
+    }
     let input_stamp = widget_paint_input_stamp(world);
     if world.resource::<WidgetPaintCache>().input_stamp == Some(input_stamp) {
         world.resource_mut::<WidgetPaintCache>().skipped_frames += 1;
         return;
     }
 
+    collect_widget_paint_full(world, Some(input_stamp));
+}
+
+fn collect_widget_paint_full(world: &mut World, input_stamp: Option<u64>) {
     let base_theme = world.resource::<Theme>().clone();
     let mut entity_query = world.query_filtered::<Entity, With<UiLayoutResult>>();
     let entities: Vec<_> = entity_query.iter(world).collect();
@@ -12236,7 +12585,7 @@ pub fn collect_widget_paint(world: &mut World) {
     }
     world.resource_mut::<WidgetPaintCameras>().0 = current_cameras;
     let mut cache = world.resource_mut::<WidgetPaintCache>();
-    cache.input_stamp = Some(input_stamp);
+    cache.input_stamp = input_stamp;
     cache.rebuilt_frames = cache.rebuilt_frames.saturating_add(1);
 }
 
@@ -14024,10 +14373,24 @@ fn paint_node_graph(paint: NodeGraphPaint<'_>, output: &mut Vec<DrawItem>) {
         columns += 1;
     }
 
+    let nodes_by_id: HashMap<_, _> = graph.nodes.iter().map(|node| (node.id, node)).collect();
     for link in &graph.links {
-        let Some(points) = node_graph_link_points(graph, rect, *link, spacing) else {
+        let (Some(from), Some(to)) = (
+            nodes_by_id.get(&link.from_node),
+            nodes_by_id.get(&link.to_node),
+        ) else {
             continue;
         };
+        let Some(points) = node_graph_link_points_between(graph, rect, *link, from, to, spacing)
+        else {
+            continue;
+        };
+        if node_graph_bezier_bounds(points, 8.0)
+            .intersection(viewport)
+            .is_none()
+        {
+            continue;
+        }
         let selected = graph.selected_link == Some(link.id);
         output.push(item(
             viewport_clip,
@@ -14038,7 +14401,11 @@ fn paint_node_graph(paint: NodeGraphPaint<'_>, output: &mut Vec<DrawItem>) {
                 color: if selected {
                     theme.accent
                 } else {
-                    node_socket_color(graph, link.from_node, link.from_socket, theme)
+                    from.sockets
+                        .get(link.from_socket)
+                        .map_or(theme.text_muted, |socket| {
+                            socket_type_color(socket.socket_type, theme)
+                        })
                 },
             },
         ));
@@ -14471,22 +14838,6 @@ fn measure_node_graph_output_label_widths(
             })
         })
     })
-}
-
-fn node_socket_color(
-    graph: &NodeGraph,
-    node_id: NodeId,
-    socket_index: usize,
-    theme: &Theme,
-) -> Rgba {
-    graph
-        .nodes
-        .iter()
-        .find(|node| node.id == node_id)
-        .and_then(|node| node.sockets.get(socket_index))
-        .map_or(theme.text_muted, |socket| {
-            socket_type_color(socket.socket_type, theme)
-        })
 }
 
 fn socket_type_color(socket_type: crate::SocketType, theme: &Theme) -> Rgba {
@@ -17596,6 +17947,41 @@ mod tests {
             "layout changes repaint before the frame is presented"
         );
         assert_eq!(app.world().resource::<WidgetPaintCache>().rebuilt_frames, 4);
+    }
+
+    #[test]
+    fn pointer_position_alone_does_not_repaint_widgets() {
+        let mut app = App::new();
+        app.add_plugins(WidgetPlugin).init_resource::<UiFocus>();
+        let window = app.world_mut().spawn_empty().id();
+        app.world_mut()
+            .resource_mut::<UiFocus>()
+            .state_mut(window)
+            .pointer_position = Some([4.0, 4.0]);
+        app.world_mut().spawn((
+            UiNode,
+            Checkbox::new("steady", false),
+            UiLayoutResult {
+                window,
+                rect: UiRect::new(0.0, 0.0, 120.0, 24.0),
+                clip: None,
+                z: 0,
+                content_size: [120.0, 24.0],
+                dpi_scale: 1.0,
+            },
+        ));
+        app.update();
+        let rebuilt = app.world().resource::<WidgetPaintCache>().rebuilt_frames;
+
+        app.world_mut()
+            .resource_mut::<UiFocus>()
+            .state_mut(window)
+            .pointer_position = Some([5.0, 5.0]);
+        app.update();
+        assert_eq!(
+            app.world().resource::<WidgetPaintCache>().rebuilt_frames,
+            rebuilt
+        );
     }
 
     #[test]
