@@ -3,7 +3,10 @@
 //! [`BuiRenderPlugin`] translates [`DisplayList`] items into Bevy UI nodes. Bevy's UI render
 //! pipeline draws those nodes on the GPU; this crate does not rasterize widgets on the CPU.
 
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{BTreeMap, HashMap, HashSet},
+    sync::OnceLock,
+};
 
 use bevy::{
     asset::{Asset, Assets, Handle, RenderAssetUsages},
@@ -129,6 +132,19 @@ pub struct DrawItem {
     pub clip: ClipRect,
     pub z: i32,
     pub primitive: Primitive,
+}
+
+/// Incremental widget paint output keyed by the widget's stable ECS entity.
+///
+/// `order` preserves the widget painter's stable traversal rank for equal-z items. Items within
+/// one fragment retain their vector order. `target_camera` selects the independent screen or
+/// camera render layer.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WidgetRenderFragment {
+    pub entity: Entity,
+    pub order: u64,
+    pub target_camera: Option<Entity>,
+    pub items: Vec<DrawItem>,
 }
 
 /// A paint description attached to a BUI entity. `UiLayoutResult` supplies its final position,
@@ -258,21 +274,31 @@ pub struct DisplayList {
     overlay_widget_items: Vec<DrawItem>,
     camera_items: HashMap<Entity, Vec<DrawItem>>,
     overlay_camera_items: HashMap<Entity, Vec<DrawItem>>,
-    camera_order: Vec<Entity>,
-    items: Vec<DrawItem>,
+    widget_fragments: HashMap<Entity, WidgetRenderFragment>,
+    pending_widget_fragment_changes: HashSet<Entity>,
+    pending_full_change: bool,
+    widget_items_view: OnceLock<Vec<DrawItem>>,
+    camera_items_view: OnceLock<HashMap<Entity, Vec<DrawItem>>>,
+    items_view: OnceLock<Vec<DrawItem>>,
+    item_count: usize,
 }
 
 impl DisplayList {
     pub fn push(&mut self, item: DrawItem) {
         self.manual_items.push(item);
-        self.rebuild_merged_items();
+        self.item_count = self.item_count.saturating_add(1);
+        self.mark_full_change();
     }
 
     /// Replace the widget-generated layer while preserving manually pushed draw items.
     pub fn replace_widget_items(&mut self, items: Vec<DrawItem>) {
         if self.widget_items != items {
+            self.item_count = self
+                .item_count
+                .saturating_sub(self.widget_items.len())
+                .saturating_add(items.len());
             self.widget_items = items;
-            self.rebuild_merged_items();
+            self.mark_full_change();
         }
     }
 
@@ -280,9 +306,74 @@ impl DisplayList {
     /// items. Overlay items sort after the base widget layer at equal z.
     pub fn replace_overlay_widget_items(&mut self, items: Vec<DrawItem>) {
         if self.overlay_widget_items != items {
+            self.item_count = self
+                .item_count
+                .saturating_sub(self.overlay_widget_items.len())
+                .saturating_add(items.len());
             self.overlay_widget_items = items;
-            self.rebuild_merged_items();
+            self.mark_full_change();
         }
+    }
+
+    /// Publish or replace one widget's ordered paint fragment.
+    ///
+    /// Returns `true` only when the fragment differs from the previously published fragment.
+    /// This records a per-entity delta and does not flatten or sort the complete display list.
+    pub fn upsert_widget_fragment(&mut self, fragment: WidgetRenderFragment) -> bool {
+        if self.widget_fragments.get(&fragment.entity) == Some(&fragment) {
+            return false;
+        }
+        let entity = fragment.entity;
+        let new_len = fragment.items.len();
+        if let Some(previous) = self.widget_fragments.insert(entity, fragment) {
+            self.item_count = self.item_count.saturating_sub(previous.items.len());
+        }
+        self.item_count = self.item_count.saturating_add(new_len);
+        self.pending_widget_fragment_changes.insert(entity);
+        self.invalidate_views();
+        true
+    }
+
+    /// Remove a previously published widget fragment.
+    ///
+    /// Returns `true` only when a fragment existed. The renderer consumes this as a targeted
+    /// removal and leaves other widget fragments untouched.
+    pub fn remove_widget_fragment(&mut self, entity: Entity) -> bool {
+        let Some(previous) = self.widget_fragments.remove(&entity) else {
+            return false;
+        };
+        self.item_count = self.item_count.saturating_sub(previous.items.len());
+        self.pending_widget_fragment_changes.insert(entity);
+        self.invalidate_views();
+        true
+    }
+
+    /// Read the currently published keyed widget fragments without materializing a merged list.
+    pub fn widget_fragments(&self) -> &HashMap<Entity, WidgetRenderFragment> {
+        &self.widget_fragments
+    }
+
+    /// Number of draw items across the merged display list, computed without allocating a view.
+    pub fn item_count(&self) -> usize {
+        self.item_count
+    }
+
+    pub(crate) fn has_pending_full_change(&self) -> bool {
+        self.pending_full_change
+    }
+
+    pub(crate) fn pending_widget_fragment_changes(&self) -> impl Iterator<Item = Entity> + '_ {
+        self.pending_widget_fragment_changes.iter().copied()
+    }
+
+    pub(crate) fn take_widget_fragment_changes(&mut self) -> Vec<Entity> {
+        let mut entities: Vec<_> = self.pending_widget_fragment_changes.drain().collect();
+        entities.sort_unstable_by_key(|entity| entity.to_bits());
+        entities
+    }
+
+    pub(crate) fn take_pending_full_change(&mut self) -> bool {
+        std::mem::take(&mut self.pending_full_change)
     }
 
     /// Alias for [`replace_widget_items`](Self::replace_widget_items).
@@ -298,6 +389,7 @@ impl DisplayList {
         match camera {
             None => self.replace_widget_items(items),
             Some(camera) => {
+                let previous_len = self.camera_items.get(&camera).map_or(0, Vec::len);
                 let changed = if items.is_empty() {
                     self.camera_items.remove(&camera).is_some()
                 } else if self.camera_items.get(&camera) != Some(&items) {
@@ -307,7 +399,11 @@ impl DisplayList {
                     false
                 };
                 if changed {
-                    self.rebuild_merged_items();
+                    self.item_count = self
+                        .item_count
+                        .saturating_sub(previous_len)
+                        .saturating_add(self.camera_items.get(&camera).map_or(0, Vec::len));
+                    self.mark_full_change();
                 }
             }
         }
@@ -319,6 +415,7 @@ impl DisplayList {
     /// pass, such as thumbnails owned by a virtualized browser. Its items join the same stable z
     /// ordering as camera items, after the base camera layer at equal z.
     pub fn replace_overlay_camera_items(&mut self, camera: Entity, items: Vec<DrawItem>) {
+        let previous_len = self.overlay_camera_items.get(&camera).map_or(0, Vec::len);
         let changed = if items.is_empty() {
             self.overlay_camera_items.remove(&camera).is_some()
         } else if self.overlay_camera_items.get(&camera) != Some(&items) {
@@ -328,13 +425,30 @@ impl DisplayList {
             false
         };
         if changed {
-            self.rebuild_merged_items();
+            self.item_count = self
+                .item_count
+                .saturating_sub(previous_len)
+                .saturating_add(self.overlay_camera_items.get(&camera).map_or(0, Vec::len));
+            self.mark_full_change();
         }
     }
 
     /// Read the widget-generated layer before z-order merging.
     pub fn widget_items(&self) -> &[DrawItem] {
-        &self.widget_items
+        self.widget_items_view.get_or_init(|| {
+            let mut fragments: Vec<_> = self
+                .widget_fragments
+                .values()
+                .filter(|fragment| fragment.target_camera.is_none())
+                .collect();
+            fragments.sort_unstable_by_key(|fragment| (fragment.order, fragment.entity.to_bits()));
+            let mut items = Vec::new();
+            for fragment in fragments {
+                items.extend(fragment.items.iter().cloned());
+            }
+            items.extend(self.widget_items.iter().cloned());
+            items
+        })
     }
 
     /// Read the screen UI overlay layer before z-order merging.
@@ -343,7 +457,25 @@ impl DisplayList {
     }
 
     pub fn camera_items(&self, camera: Entity) -> Option<&[DrawItem]> {
-        self.camera_items.get(&camera).map(Vec::as_slice)
+        self.camera_items_view
+            .get_or_init(|| {
+                let mut view = self.camera_items.clone();
+                let mut fragments: Vec<_> = self
+                    .widget_fragments
+                    .values()
+                    .filter(|fragment| fragment.target_camera.is_some())
+                    .collect();
+                fragments
+                    .sort_unstable_by_key(|fragment| (fragment.order, fragment.entity.to_bits()));
+                for fragment in fragments {
+                    view.entry(fragment.target_camera.expect("filtered camera fragment"))
+                        .or_default()
+                        .extend(fragment.items.iter().cloned());
+                }
+                view
+            })
+            .get(&camera)
+            .map(Vec::as_slice)
     }
 
     /// Read the auxiliary camera layer used for post-widget GPU overlays.
@@ -357,17 +489,22 @@ impl DisplayList {
     }
 
     pub fn ordered(&mut self) -> &[DrawItem] {
-        self.items.sort_by_key(|item| item.z);
-        &self.items
+        let mut items = self.flatten_items();
+        items.sort_by_key(|item| item.z);
+        self.items_view.take();
+        let _ = self.items_view.set(items);
+        self.items_view.get().map(Vec::as_slice).unwrap_or_default()
     }
 
     /// Read the draw items in ascending z order.
     pub fn items(&self) -> &[DrawItem] {
-        &self.items
+        self.items_view
+            .get_or_init(|| self.flatten_items())
+            .as_slice()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.items.is_empty()
+        self.item_count() == 0
     }
 
     pub fn clear(&mut self) {
@@ -376,31 +513,142 @@ impl DisplayList {
         self.overlay_widget_items.clear();
         self.camera_items.clear();
         self.overlay_camera_items.clear();
-        self.camera_order.clear();
-        self.items.clear();
+        self.widget_fragments.clear();
+        self.pending_widget_fragment_changes.clear();
+        self.item_count = 0;
+        self.mark_full_change();
     }
 
-    fn rebuild_merged_items(&mut self) {
-        self.items.clear();
-        self.items.extend(self.manual_items.iter().cloned());
-        self.items.extend(self.widget_items.iter().cloned());
-        self.items.extend(self.overlay_widget_items.iter().cloned());
-        self.camera_order.clear();
-        self.camera_order.extend(self.camera_items.keys().copied());
-        self.camera_order
-            .extend(self.overlay_camera_items.keys().copied());
-        self.camera_order
-            .sort_unstable_by_key(|camera| camera.to_bits());
-        self.camera_order.dedup();
-        for camera in &self.camera_order {
-            if let Some(items) = self.camera_items.get(camera) {
-                self.items.extend(items.iter().cloned());
+    fn mark_full_change(&mut self) {
+        self.pending_full_change = true;
+        self.invalidate_views();
+    }
+
+    fn invalidate_views(&mut self) {
+        self.widget_items_view.take();
+        self.camera_items_view.take();
+        self.items_view.take();
+    }
+
+    fn flatten_items(&self) -> Vec<DrawItem> {
+        let mut tagged = Vec::with_capacity(self.item_count());
+        tagged.extend(
+            self.manual_items
+                .iter()
+                .cloned()
+                .enumerate()
+                .map(|(index, item)| (item.z, 0u8, 0u64, 0u64, 0u64, index as u64, 0u64, item)),
+        );
+        tagged.extend(
+            self.widget_items
+                .iter()
+                .cloned()
+                .enumerate()
+                .map(|(index, item)| (item.z, 2, 1, index as u64, 0, 0, 0, item)),
+        );
+        let mut fragments: Vec<_> = self
+            .widget_fragments
+            .values()
+            .filter(|fragment| fragment.target_camera.is_none())
+            .collect();
+        fragments.sort_unstable_by_key(|fragment| (fragment.order, fragment.entity.to_bits()));
+        for fragment in fragments {
+            tagged.extend(
+                fragment
+                    .items
+                    .iter()
+                    .cloned()
+                    .enumerate()
+                    .map(|(index, item)| {
+                        (
+                            item.z,
+                            2,
+                            0,
+                            fragment.order,
+                            fragment.entity.to_bits(),
+                            index as u64,
+                            0,
+                            item,
+                        )
+                    }),
+            );
+        }
+        tagged.extend(
+            self.overlay_widget_items
+                .iter()
+                .cloned()
+                .enumerate()
+                .map(|(index, item)| (item.z, 3, 0, index as u64, 0, 0, 0, item)),
+        );
+        let mut cameras: Vec<_> = self
+            .camera_items
+            .keys()
+            .copied()
+            .chain(self.overlay_camera_items.keys().copied())
+            .chain(
+                self.widget_fragments
+                    .values()
+                    .filter_map(|fragment| fragment.target_camera),
+            )
+            .collect();
+        cameras.sort_unstable_by_key(|camera| camera.to_bits());
+        cameras.dedup();
+        for (camera_rank, camera) in cameras.into_iter().enumerate() {
+            if let Some(items) = self.camera_items.get(&camera) {
+                tagged.extend(items.iter().cloned().enumerate().map(|(index, item)| {
+                    (item.z, 4, 0, camera_rank as u64, 0, index as u64, 0, item)
+                }));
             }
-            if let Some(items) = self.overlay_camera_items.get(camera) {
-                self.items.extend(items.iter().cloned());
+            let mut fragments: Vec<_> = self
+                .widget_fragments
+                .values()
+                .filter(|fragment| fragment.target_camera == Some(camera))
+                .collect();
+            fragments.sort_unstable_by_key(|fragment| (fragment.order, fragment.entity.to_bits()));
+            for fragment in fragments {
+                tagged.extend(
+                    fragment
+                        .items
+                        .iter()
+                        .cloned()
+                        .enumerate()
+                        .map(|(index, item)| {
+                            (
+                                item.z,
+                                4,
+                                1,
+                                camera_rank as u64,
+                                fragment.order,
+                                fragment.entity.to_bits(),
+                                index as u64,
+                                item,
+                            )
+                        }),
+                );
+            }
+            if let Some(items) = self.overlay_camera_items.get(&camera) {
+                tagged.extend(items.iter().cloned().enumerate().map(|(index, item)| {
+                    (item.z, 5, 0, camera_rank as u64, 0, index as u64, 0, item)
+                }));
             }
         }
-        self.items.sort_by_key(|item| item.z);
+        tagged.sort_unstable_by_key(
+            |(z, layer, sublayer, major, minor, tertiary, quaternary, _)| {
+                (
+                    *z,
+                    *layer,
+                    *sublayer,
+                    *major,
+                    *minor,
+                    *tertiary,
+                    *quaternary,
+                )
+            },
+        );
+        tagged
+            .into_iter()
+            .map(|(_, _, _, _, _, _, _, item)| item)
+            .collect()
     }
 }
 
@@ -409,6 +657,7 @@ impl DisplayList {
 pub struct ImageRegistry {
     images: HashMap<u64, Handle<Image>>,
     next_id: u64,
+    changed_ids: HashSet<u64>,
 }
 
 impl Default for ImageRegistry {
@@ -416,6 +665,7 @@ impl Default for ImageRegistry {
         Self {
             images: HashMap::new(),
             next_id: 1,
+            changed_ids: HashSet::new(),
         }
     }
 }
@@ -442,15 +692,32 @@ impl ImageRegistry {
 
     /// Register or replace the Bevy image referenced by `asset_id`.
     pub fn insert(&mut self, asset_id: u64, image: Handle<Image>) -> Option<Handle<Image>> {
-        self.images.insert(asset_id, image)
+        let changed = self.images.get(&asset_id) != Some(&image);
+        let previous = self.images.insert(asset_id, image);
+        if changed {
+            self.changed_ids.insert(asset_id);
+        }
+        previous
     }
 
     pub fn remove(&mut self, asset_id: u64) -> Option<Handle<Image>> {
-        self.images.remove(&asset_id)
+        let previous = self.images.remove(&asset_id);
+        if previous.is_some() {
+            self.changed_ids.insert(asset_id);
+        }
+        previous
     }
 
     pub fn get(&self, asset_id: u64) -> Option<&Handle<Image>> {
         self.images.get(&asset_id)
+    }
+
+    fn pending_changed_ids(&self) -> impl Iterator<Item = u64> + '_ {
+        self.changed_ids.iter().copied()
+    }
+
+    fn take_changed_ids(&mut self) -> HashSet<u64> {
+        std::mem::take(&mut self.changed_ids)
     }
 }
 
@@ -581,6 +848,7 @@ impl Plugin for BuiRenderPlugin {
             .init_resource::<ImageRegistry>()
             .init_resource::<RenderTargetCamera>()
             .init_resource::<RenderCache>()
+            .init_resource::<RenderSyncStats>()
             .add_systems(
                 Update,
                 register_default_ui_font
@@ -607,10 +875,39 @@ struct RenderedClipGroup;
 struct RenderCache {
     items: HashMap<RenderKey, CachedItem>,
     clip_groups: HashMap<ClipGroupKey, CachedClipGroup>,
+    clip_group_users: HashMap<ClipGroupKey, usize>,
     bezier_batches: HashMap<BezierBatchKey, CachedBezierBatch>,
     desired: Vec<DesiredItem>,
+    fragment_keys: HashMap<Entity, Vec<RenderKey>>,
+    fragment_order_keys: HashMap<Entity, Vec<WidgetOrderKey>>,
+    widget_order_labels: BTreeMap<WidgetOrderKey, i32>,
+    fragment_batches: HashMap<Entity, Vec<BezierBatchKey>>,
+    bezier_batch_for_key: HashMap<RenderKey, BezierBatchKey>,
+    layout_order: HashMap<Entity, usize>,
+    layout_entity_order_keys: HashMap<Entity, LayoutOrderKey>,
+    layout_order_labels: BTreeMap<LayoutOrderKey, i32>,
+    image_users: HashMap<u64, HashSet<RenderKey>>,
+    parents_by_entity: HashMap<Entity, Entity>,
+    children_by_parent: HashMap<Entity, Vec<Entity>>,
+    layout_entities_by_window: HashMap<Entity, HashSet<Entity>>,
+    layout_window_by_entity: HashMap<Entity, Entity>,
+    widget_fragments_by_camera: HashMap<Entity, HashSet<Entity>>,
+    widget_fragment_camera: HashMap<Entity, Entity>,
     generation: u64,
     target_camera: Option<Entity>,
+}
+
+/// Counters for verifying that a renderer update stays scoped to the changed paint fragments.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Resource)]
+pub struct RenderSyncStats {
+    /// Draw keys resolved or compared during the most recent update.
+    pub scanned_draw_keys: usize,
+    /// Render cache entries whose GPU/UI nodes were replaced or removed.
+    pub updated_render_entries: usize,
+    /// Number of complete display-list synchronization passes so far.
+    pub full_syncs: u64,
+    /// Number of entity-scoped synchronization passes so far.
+    pub incremental_syncs: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -620,6 +917,7 @@ struct BezierBatchKey {
     clip: ClipGroupKey,
 }
 
+#[derive(Clone)]
 struct CachedBezierBatch {
     entity: Entity,
     material: Handle<BezierBatchMaterial>,
@@ -627,6 +925,7 @@ struct CachedBezierBatch {
     curves: Handle<ShaderBuffer>,
     tile_indices: Handle<ShaderBuffer>,
     signature: Vec<DrawItem>,
+    keys: Vec<RenderKey>,
     rect: ClipRect,
     first_z: i32,
     local_z: i32,
@@ -641,32 +940,298 @@ struct BezierBatchSyncContext<'a, 'w, 's> {
     generation: u64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 enum RenderKey {
     ManualDisplayListIndex(usize),
     WidgetDisplayListIndex(usize),
     OverlayWidgetDisplayListIndex(usize),
     CameraDisplayListIndex(Entity, usize),
     OverlayCameraDisplayListIndex(Entity, usize),
+    WidgetFragment(Entity, usize),
     LayoutEntity(Entity),
 }
 
 impl RenderKey {
-    fn stable_order(self) -> (u8, u64, u64) {
+    fn stable_order(
+        self,
+        fragment_order: Option<u64>,
+        hierarchy_depth: u32,
+        target_camera: Option<Entity>,
+    ) -> RenderOrder {
         match self {
-            Self::ManualDisplayListIndex(index) => (0, index as u64, 0),
+            Self::ManualDisplayListIndex(index) => RenderOrder::Manual(index as u64),
             // Entity-attached UI paints include root backgrounds. At equal z they must be
             // created before display-list widget content, otherwise a root-sized background can
             // cover its same-z labels and controls.
-            Self::LayoutEntity(entity) => (1, entity.to_bits(), 0),
-            Self::WidgetDisplayListIndex(index) => (2, index as u64, 0),
-            Self::OverlayWidgetDisplayListIndex(index) => (3, index as u64, 0),
-            Self::CameraDisplayListIndex(camera, index) => (4, camera.to_bits(), index as u64),
+            Self::LayoutEntity(entity) => RenderOrder::Layout(hierarchy_depth, entity.to_bits()),
+            Self::WidgetFragment(entity, index) => match target_camera {
+                None => RenderOrder::WidgetFragment(
+                    fragment_order.unwrap_or_default(),
+                    entity.to_bits(),
+                    index as u64,
+                ),
+                Some(camera) => RenderOrder::CameraFragment(
+                    camera.to_bits(),
+                    fragment_order.unwrap_or_default(),
+                    entity.to_bits(),
+                    index as u64,
+                ),
+            },
+            Self::WidgetDisplayListIndex(index) => RenderOrder::WidgetList(index as u64),
+            Self::OverlayWidgetDisplayListIndex(index) => RenderOrder::OverlayWidget(index as u64),
+            Self::CameraDisplayListIndex(camera, index) => {
+                RenderOrder::Camera(camera.to_bits(), index as u64)
+            }
             Self::OverlayCameraDisplayListIndex(camera, index) => {
-                (5, camera.to_bits(), index as u64)
+                RenderOrder::OverlayCamera(camera.to_bits(), index as u64)
             }
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum RenderOrder {
+    Manual(u64),
+    Layout(u32, u64),
+    WidgetFragment(u64, u64, u64),
+    WidgetList(u64),
+    OverlayWidget(u64),
+    Camera(u64, u64),
+    CameraFragment(u64, u64, u64, u64),
+    OverlayCamera(u64, u64),
+}
+
+const LOCAL_Z_LAYER_STRIDE: i32 = 300_000_000;
+const WIDGET_FRAGMENT_LOCAL_Z_START: i32 = LOCAL_Z_LAYER_STRIDE * 2;
+const WIDGET_FRAGMENT_LOCAL_Z_END: i32 = LOCAL_Z_LAYER_STRIDE * 3;
+const CAMERA_FRAGMENT_LOCAL_Z_START: i32 = LOCAL_Z_LAYER_STRIDE * 5 + 100_000_000;
+const CAMERA_FRAGMENT_LOCAL_Z_END: i32 = LOCAL_Z_LAYER_STRIDE * 6;
+
+fn desired_local_z(
+    desired: &DesiredItem,
+    layout_order: &HashMap<Entity, usize>,
+    layout_order_labels: &BTreeMap<LayoutOrderKey, i32>,
+    widget_order_labels: &BTreeMap<WidgetOrderKey, i32>,
+) -> i32 {
+    let (layer, order) = match desired.key {
+        RenderKey::ManualDisplayListIndex(index) => (0, index as u64),
+        RenderKey::LayoutEntity(entity) => {
+            let _ = layout_order;
+            return layout_order_labels
+                .get(&LayoutOrderKey {
+                    depth: desired.hierarchy_depth,
+                    entity_bits: entity.to_bits(),
+                })
+                .copied()
+                .or_else(|| {
+                    layout_order
+                        .get(&entity)
+                        .map(|rank| LOCAL_Z_LAYER_STRIDE + *rank as i32)
+                })
+                .unwrap_or(LOCAL_Z_LAYER_STRIDE);
+        }
+        RenderKey::WidgetFragment(entity, index) => {
+            let key = WidgetOrderKey {
+                order: desired.fragment_order.unwrap_or_default(),
+                entity_bits: entity.to_bits(),
+                item_index: index,
+            };
+            let label = widget_order_labels
+                .get(&key)
+                .copied()
+                .unwrap_or(WIDGET_FRAGMENT_LOCAL_Z_START);
+            return if desired.target_camera.is_some() {
+                let relative = i64::from(label - WIDGET_FRAGMENT_LOCAL_Z_START);
+                let scaled = relative
+                    * i64::from(CAMERA_FRAGMENT_LOCAL_Z_END - CAMERA_FRAGMENT_LOCAL_Z_START)
+                    / i64::from(WIDGET_FRAGMENT_LOCAL_Z_END - WIDGET_FRAGMENT_LOCAL_Z_START);
+                CAMERA_FRAGMENT_LOCAL_Z_START + scaled as i32
+            } else {
+                label
+            };
+        }
+        RenderKey::WidgetDisplayListIndex(index) => (3, index as u64),
+        RenderKey::OverlayWidgetDisplayListIndex(index) => (4, index as u64),
+        RenderKey::CameraDisplayListIndex(_, index) => (5, index as u64),
+        RenderKey::OverlayCameraDisplayListIndex(_, index) => (6, index as u64),
+    };
+    let rank = i32::try_from(order.min((LOCAL_Z_LAYER_STRIDE - 1) as u64))
+        .unwrap_or(LOCAL_Z_LAYER_STRIDE - 1);
+    layer * LOCAL_Z_LAYER_STRIDE + rank
+}
+
+fn rebuild_widget_order_labels(cache: &mut RenderCache, desired: &[DesiredItem]) {
+    cache.fragment_order_keys.clear();
+    cache.widget_order_labels.clear();
+    let mut keys: Vec<_> = desired
+        .iter()
+        .filter_map(|desired| {
+            let RenderKey::WidgetFragment(entity, item_index) = desired.key else {
+                return None;
+            };
+            Some((
+                entity,
+                WidgetOrderKey {
+                    order: desired.fragment_order.unwrap_or_default(),
+                    entity_bits: entity.to_bits(),
+                    item_index,
+                },
+            ))
+        })
+        .collect();
+    keys.sort_unstable_by_key(|(_, key)| *key);
+    if keys.is_empty() {
+        return;
+    }
+    let width = i64::from(WIDGET_FRAGMENT_LOCAL_Z_END - WIDGET_FRAGMENT_LOCAL_Z_START);
+    let step = (width / (keys.len() as i64 + 1)).max(1);
+    for (rank, (entity, key)) in keys.into_iter().enumerate() {
+        let rank = i64::try_from(rank + 1).unwrap_or(i64::MAX);
+        let label = i64::from(WIDGET_FRAGMENT_LOCAL_Z_START)
+            .saturating_add(step.saturating_mul(rank))
+            .min(i64::from(WIDGET_FRAGMENT_LOCAL_Z_END - 1)) as i32;
+        cache.widget_order_labels.insert(key, label);
+        cache
+            .fragment_order_keys
+            .entry(entity)
+            .or_default()
+            .push(key);
+    }
+}
+
+fn update_widget_order_labels(
+    cache: &mut RenderCache,
+    entity: Entity,
+    fragment: Option<&WidgetRenderFragment>,
+) -> bool {
+    if let Some(previous) = cache.fragment_order_keys.remove(&entity) {
+        for key in previous {
+            cache.widget_order_labels.remove(&key);
+        }
+    }
+    let Some(fragment) = fragment else {
+        return true;
+    };
+    if fragment.items.is_empty() {
+        cache.fragment_order_keys.insert(entity, Vec::new());
+        return true;
+    }
+    let keys: Vec<_> = (0..fragment.items.len())
+        .map(|item_index| WidgetOrderKey {
+            order: fragment.order,
+            entity_bits: entity.to_bits(),
+            item_index,
+        })
+        .collect();
+    let first = keys[0];
+    let last = *keys.last().expect("nonempty fragment key set");
+    let previous = cache
+        .widget_order_labels
+        .range(..first)
+        .next_back()
+        .map(|(_, label)| *label)
+        .unwrap_or(WIDGET_FRAGMENT_LOCAL_Z_START);
+    let next = cache
+        .widget_order_labels
+        .range(last..)
+        .next()
+        .map(|(_, label)| *label)
+        .unwrap_or(WIDGET_FRAGMENT_LOCAL_Z_END);
+    let gap = i64::from(next) - i64::from(previous);
+    if gap <= keys.len() as i64 {
+        return false;
+    }
+    let step = gap / (keys.len() as i64 + 1);
+    let mut labels = Vec::with_capacity(keys.len());
+    for (index, key) in keys.into_iter().enumerate() {
+        let offset = step.saturating_mul(index as i64 + 1);
+        let label = (i64::from(previous) + offset) as i32;
+        cache.widget_order_labels.insert(key, label);
+        labels.push(key);
+    }
+    cache.fragment_order_keys.insert(entity, labels);
+    true
+}
+
+fn rebuild_layout_order_labels(cache: &mut RenderCache, desired: &[DesiredItem]) {
+    cache.layout_entity_order_keys.clear();
+    cache.layout_order_labels.clear();
+    let mut keys: Vec<_> = desired
+        .iter()
+        .filter_map(|desired| match desired.key {
+            RenderKey::LayoutEntity(entity) => Some((
+                entity,
+                LayoutOrderKey {
+                    depth: desired.hierarchy_depth,
+                    entity_bits: entity.to_bits(),
+                },
+            )),
+            _ => None,
+        })
+        .collect();
+    keys.sort_unstable_by_key(|(_, key)| *key);
+    let width = i64::from(LOCAL_Z_LAYER_STRIDE);
+    let step = (width / (keys.len() as i64 + 1)).max(1);
+    for (index, (entity, key)) in keys.into_iter().enumerate() {
+        let offset = step.saturating_mul(index as i64 + 1);
+        let label = (i64::from(LOCAL_Z_LAYER_STRIDE) + offset)
+            .min(i64::from(LOCAL_Z_LAYER_STRIDE * 2 - 1)) as i32;
+        cache.layout_entity_order_keys.insert(entity, key);
+        cache.layout_order_labels.insert(key, label);
+    }
+}
+
+fn insert_layout_order_label(cache: &mut RenderCache, entity: Entity, key: LayoutOrderKey) -> bool {
+    let previous = cache
+        .layout_order_labels
+        .range(..key)
+        .next_back()
+        .map(|(_, label)| *label)
+        .unwrap_or(LOCAL_Z_LAYER_STRIDE);
+    let next = cache
+        .layout_order_labels
+        .range(key..)
+        .next()
+        .map(|(_, label)| *label)
+        .unwrap_or(LOCAL_Z_LAYER_STRIDE * 2);
+    if i64::from(next) - i64::from(previous) <= 1 {
+        return false;
+    }
+    let label = previous + (next - previous) / 2;
+    cache.layout_entity_order_keys.insert(entity, key);
+    cache.layout_order_labels.insert(key, label);
+    true
+}
+
+fn update_layout_order_labels_for_entities(
+    cache: &mut RenderCache,
+    entities: impl IntoIterator<Item = Entity>,
+) -> bool {
+    let entities: HashSet<_> = entities
+        .into_iter()
+        .filter(|entity| cache.layout_order.contains_key(entity))
+        .collect();
+    let mut keys = Vec::with_capacity(entities.len());
+    for entity in entities {
+        let key = LayoutOrderKey {
+            depth: hierarchy_depth(entity, &cache.parents_by_entity),
+            entity_bits: entity.to_bits(),
+        };
+        if cache.layout_entity_order_keys.get(&entity) == Some(&key) {
+            continue;
+        }
+        if let Some(previous) = cache.layout_entity_order_keys.remove(&entity) {
+            cache.layout_order_labels.remove(&previous);
+        }
+        keys.push((entity, key));
+    }
+    keys.sort_unstable_by_key(|(_, key)| *key);
+    for (entity, key) in keys {
+        if !insert_layout_order_label(cache, entity, key) {
+            return false;
+        }
+    }
+    true
 }
 
 #[derive(Clone, Copy)]
@@ -675,6 +1240,26 @@ struct DesiredItem {
     z: i32,
     target_camera: Option<Entity>,
     hierarchy_depth: u32,
+    fragment_order: Option<u64>,
+}
+
+struct CurrentBezierEntry {
+    desired: DesiredItem,
+    item: Option<DrawItem>,
+    order: RenderOrder,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct WidgetOrderKey {
+    order: u64,
+    entity_bits: u64,
+    item_index: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct LayoutOrderKey {
+    depth: u32,
+    entity_bits: u64,
 }
 
 fn hierarchy_depth(entity: Entity, parents: &HashMap<Entity, Entity>) -> u32 {
@@ -689,6 +1274,124 @@ fn hierarchy_depth(entity: Entity, parents: &HashMap<Entity, Entity>) -> u32 {
         current = parent;
     }
     depth
+}
+
+fn display_list_item(display_list: &DisplayList, key: RenderKey) -> Option<&DrawItem> {
+    match key {
+        RenderKey::ManualDisplayListIndex(index) => display_list.manual_items.get(index),
+        RenderKey::WidgetDisplayListIndex(index) => display_list.widget_items.get(index),
+        RenderKey::OverlayWidgetDisplayListIndex(index) => {
+            display_list.overlay_widget_items.get(index)
+        }
+        RenderKey::CameraDisplayListIndex(camera, index) => {
+            display_list.camera_items.get(&camera)?.get(index)
+        }
+        RenderKey::OverlayCameraDisplayListIndex(camera, index) => {
+            display_list.overlay_camera_items.get(&camera)?.get(index)
+        }
+        RenderKey::WidgetFragment(entity, index) => {
+            display_list.widget_fragments.get(&entity)?.items.get(index)
+        }
+        RenderKey::LayoutEntity(_) => None,
+    }
+}
+
+fn order_for_desired(desired: &DesiredItem) -> RenderOrder {
+    desired.key.stable_order(
+        desired.fragment_order,
+        desired.hierarchy_depth,
+        desired.target_camera,
+    )
+}
+
+fn update_cached_parent(cache: &mut RenderCache, entity: Entity, parent: Option<Entity>) {
+    if let Some(previous) = cache.parents_by_entity.remove(&entity)
+        && let Some(children) = cache.children_by_parent.get_mut(&previous)
+    {
+        children.retain(|child| *child != entity);
+        if children.is_empty() {
+            cache.children_by_parent.remove(&previous);
+        }
+    }
+    if let Some(parent) = parent {
+        cache.parents_by_entity.insert(entity, parent);
+        let children = cache.children_by_parent.entry(parent).or_default();
+        if !children.contains(&entity) {
+            children.push(entity);
+        }
+    }
+}
+
+fn rebuild_cached_hierarchy(
+    cache: &mut RenderCache,
+    hierarchy: &Query<(Entity, Option<&UiParent>)>,
+) {
+    cache.parents_by_entity.clear();
+    cache.children_by_parent.clear();
+    for (entity, parent) in hierarchy.iter() {
+        if let Some(parent) = parent {
+            cache.parents_by_entity.insert(entity, parent.0);
+            cache
+                .children_by_parent
+                .entry(parent.0)
+                .or_default()
+                .push(entity);
+        }
+    }
+}
+
+fn update_layout_window(cache: &mut RenderCache, entity: Entity, window: Option<Entity>) {
+    if let Some(previous) = cache.layout_window_by_entity.remove(&entity)
+        && let Some(entities) = cache.layout_entities_by_window.get_mut(&previous)
+    {
+        entities.remove(&entity);
+        if entities.is_empty() {
+            cache.layout_entities_by_window.remove(&previous);
+        }
+    }
+    if let Some(window) = window {
+        cache.layout_window_by_entity.insert(entity, window);
+        cache
+            .layout_entities_by_window
+            .entry(window)
+            .or_default()
+            .insert(entity);
+    }
+}
+
+fn update_widget_fragment_camera(cache: &mut RenderCache, entity: Entity, camera: Option<Entity>) {
+    if let Some(previous) = cache.widget_fragment_camera.remove(&entity)
+        && let Some(entities) = cache.widget_fragments_by_camera.get_mut(&previous)
+    {
+        entities.remove(&entity);
+        if entities.is_empty() {
+            cache.widget_fragments_by_camera.remove(&previous);
+        }
+    }
+    if let Some(camera) = camera {
+        cache.widget_fragment_camera.insert(entity, camera);
+        cache
+            .widget_fragments_by_camera
+            .entry(camera)
+            .or_default()
+            .insert(entity);
+    }
+}
+
+fn cached_subtree(cache: &RenderCache, root: Entity) -> Vec<Entity> {
+    let mut stack = vec![root];
+    let mut visited = HashSet::new();
+    let mut subtree = Vec::new();
+    while let Some(entity) = stack.pop() {
+        if !visited.insert(entity) {
+            continue;
+        }
+        subtree.push(entity);
+        if let Some(children) = cache.children_by_parent.get(&entity) {
+            stack.extend(children.iter().copied());
+        }
+    }
+    subtree
 }
 
 #[derive(Default)]
@@ -771,6 +1474,7 @@ struct CachedItem {
     text_font_size: Option<f32>,
     text_line_height: Option<f32>,
     image: Option<Handle<Image>>,
+    image_asset_id: Option<u64>,
     hsv_wheel_values: Option<(f32, f32, f32)>,
     hsv_material: Option<Handle<HsvWheelMaterial>>,
     bezier_values: Option<BezierMaterialValues>,
@@ -837,8 +1541,8 @@ struct CachedClipGroup {
 #[derive(SystemParam)]
 struct RendererSync<'w, 's> {
     commands: Commands<'w, 's>,
-    display_list: Res<'w, DisplayList>,
-    images: Res<'w, ImageRegistry>,
+    display_list: ResMut<'w, DisplayList>,
+    images: ResMut<'w, ImageRegistry>,
     hsv_wheel_materials: Option<ResMut<'w, Assets<HsvWheelMaterial>>>,
     bezier_materials: Option<ResMut<'w, Assets<BezierMaterial>>>,
     bezier_batch_materials: Option<ResMut<'w, Assets<BezierBatchMaterial>>>,
@@ -858,6 +1562,7 @@ struct RendererSync<'w, 's> {
     hierarchy_query: bevy::ecs::system::Query<'w, 's, (Entity, Option<&'static UiParent>)>,
     dirty: ResMut<'w, UiDirty>,
     cache: ResMut<'w, RenderCache>,
+    stats: ResMut<'w, RenderSyncStats>,
 }
 
 #[expect(
@@ -871,38 +1576,1069 @@ struct RendererSync<'w, 's> {
 fn collect_render_changes(
     display_list: Res<DisplayList>,
     images: Res<ImageRegistry>,
+    mut cache: ResMut<RenderCache>,
     target_camera: Res<RenderTargetCamera>,
     theme: Option<Res<Theme>>,
-    changed_paints: Query<
-        Entity,
-        Or<(
-            Changed<UiLayoutResult>,
-            Changed<UiPaint>,
-            Changed<UiParent>,
-            Changed<Camera>,
-        )>,
-    >,
+    changed_paints: Query<Entity, Or<(Changed<UiLayoutResult>, Changed<UiPaint>)>>,
+    changed_parents: Query<Entity, Changed<UiParent>>,
+    changed_cameras: Query<Entity, Changed<Camera>>,
+    hierarchy_query: Query<(Entity, Option<&UiParent>)>,
     mut removed_paints: RemovedComponents<UiPaint>,
     mut removed_layouts: RemovedComponents<UiLayoutResult>,
     mut removed_parents: RemovedComponents<UiParent>,
     mut removed_cameras: RemovedComponents<Camera>,
     mut dirty: ResMut<UiDirty>,
 ) {
-    if display_list.is_changed()
-        || images.is_changed()
-        || target_camera.is_changed()
-        || theme.as_ref().is_some_and(DetectChanges::is_changed)
-        || changed_paints.iter().next().is_some()
-        || removed_paints.read().next().is_some()
-        || removed_layouts.read().next().is_some()
-        || removed_parents.read().next().is_some()
-        || removed_cameras.read().next().is_some()
+    let changed_parent_entities: Vec<_> = changed_parents.iter().collect();
+    let removed_parent_entities: Vec<_> = removed_parents.read().collect();
+    let changed_camera_entities: Vec<_> = changed_cameras.iter().collect();
+    let removed_camera_entities: Vec<_> = removed_cameras.read().collect();
+    let mut parent_affected = HashSet::new();
+    for entity in changed_parent_entities
+        .iter()
+        .chain(removed_parent_entities.iter())
     {
+        parent_affected.extend(cached_subtree(&cache, *entity));
+    }
+    for entity in removed_parent_entities {
+        update_cached_parent(&mut cache, entity, None);
+    }
+    for entity in changed_parent_entities {
+        let parent = hierarchy_query
+            .get(entity)
+            .ok()
+            .and_then(|(_, parent)| parent.map(|parent| parent.0));
+        update_cached_parent(&mut cache, entity, parent);
+    }
+    let mut scoped_entities: HashSet<_> = parent_affected
+        .into_iter()
+        .filter(|entity| {
+            cache.layout_order.contains_key(entity) || cache.fragment_keys.contains_key(entity)
+        })
+        .collect();
+    for camera in changed_camera_entities
+        .iter()
+        .chain(removed_camera_entities.iter())
+    {
+        if let Some(entities) = cache.layout_entities_by_window.get(camera) {
+            scoped_entities.extend(entities.iter().copied());
+        }
+        if let Some(entities) = cache.widget_fragments_by_camera.get(camera) {
+            scoped_entities.extend(entities.iter().copied());
+        }
+    }
+    let mut image_full_change = false;
+    let mut image_entities = HashSet::new();
+    for asset_id in images.pending_changed_ids() {
+        if let Some(users) = cache.image_users.get(&asset_id) {
+            for key in users {
+                match key {
+                    RenderKey::WidgetFragment(entity, _) | RenderKey::LayoutEntity(entity) => {
+                        image_entities.insert(*entity);
+                    }
+                    _ => image_full_change = true,
+                }
+            }
+        }
+    }
+    let full_change = display_list.has_pending_full_change()
+        || image_full_change
+        || target_camera.is_changed()
+        || theme.as_ref().is_some_and(DetectChanges::is_changed);
+    let changed_paint_entities: Vec<_> = changed_paints.iter().collect();
+    let removed_paint_entities: Vec<_> = removed_paints.read().collect();
+    let removed_layout_entities: Vec<_> = removed_layouts.read().collect();
+    if full_change {
         dirty.mark_all(UiDirtyDomain::Render);
+    } else {
+        for entity in changed_paint_entities
+            .into_iter()
+            .chain(removed_paint_entities)
+            .chain(removed_layout_entities)
+            .chain(image_entities)
+            .chain(scoped_entities)
+            .chain(display_list.pending_widget_fragment_changes())
+        {
+            dirty.mark(UiDirtyDomain::Render, entity);
+        }
     }
 }
 
-fn sync_display_list(sync: RendererSync) {
+fn sync_display_list(mut sync: RendererSync) {
+    sync.stats.scanned_draw_keys = 0;
+    sync.stats.updated_render_entries = 0;
+    let _changed_image_ids = sync.images.take_changed_ids();
+    let changes = sync.dirty.take(UiDirtyDomain::Render);
+    let full_change = sync.display_list.take_pending_full_change();
+    let mut fragment_changes = sync.display_list.take_widget_fragment_changes();
+    let mut fragment_entities: HashSet<_> = fragment_changes.iter().copied().collect();
+    for entity in &changes.entities {
+        if sync.cache.fragment_keys.contains_key(entity) && fragment_entities.insert(*entity) {
+            fragment_changes.push(*entity);
+        }
+    }
+    if changes.is_empty() && !full_change && fragment_changes.is_empty() {
+        return;
+    }
+    let direct_entities: Vec<_> = changes
+        .entities
+        .iter()
+        .copied()
+        .filter(|entity| {
+            sync.paint_query
+                .get(*entity)
+                .is_ok_and(|(_, layout, paint)| layout.is_changed() || paint.is_changed())
+                || sync
+                    .cache
+                    .items
+                    .contains_key(&RenderKey::LayoutEntity(*entity))
+        })
+        .collect();
+    let direct_entities_are_known = direct_entities.iter().all(|entity| {
+        let key = RenderKey::LayoutEntity(*entity);
+        match sync.paint_query.get(*entity) {
+            Ok((_, layout, paint)) => {
+                let new_item = paint.draw_item(&layout);
+                if let Some(batch_key) = sync.cache.bezier_batch_for_key.get(&key) {
+                    sync.cache
+                        .bezier_batches
+                        .get(batch_key)
+                        .is_some_and(|batch| batch.keys.contains(&key))
+                } else {
+                    sync.cache
+                        .items
+                        .get(&key)
+                        .is_some_and(|cached| cached.item.z == new_item.z)
+                }
+            }
+            Err(_) => !sync.cache.bezier_batch_for_key.contains_key(&key),
+        }
+    });
+    let mut labels_available = true;
+    if !full_change && !changes.all && direct_entities_are_known && sync.cache.generation > 0 {
+        if !update_layout_order_labels_for_entities(
+            &mut sync.cache,
+            direct_entities.iter().copied(),
+        ) {
+            labels_available = false;
+        }
+        for entity in &fragment_changes {
+            if !labels_available {
+                break;
+            }
+            let fragment = sync.display_list.widget_fragments.get(entity);
+            if !update_widget_order_labels(&mut sync.cache, *entity, fragment) {
+                labels_available = false;
+                break;
+            }
+        }
+    }
+    if !full_change
+        && !changes.all
+        && (!fragment_changes.is_empty() || !direct_entities.is_empty())
+        && direct_entities_are_known
+        && labels_available
+        && sync.cache.generation > 0
+    {
+        sync_widget_fragments(sync, fragment_changes, direct_entities);
+    } else {
+        sync_display_list_full(sync, changes);
+    }
+}
+
+fn decrement_clip_group_users(
+    clip: ClipGroupKey,
+    commands: &mut Commands,
+    cache: &mut RenderCache,
+) {
+    let Some(users) = cache.clip_group_users.get_mut(&clip) else {
+        return;
+    };
+    *users = users.saturating_sub(1);
+    if *users != 0 {
+        return;
+    }
+    cache.clip_group_users.remove(&clip);
+    if let Some(group) = cache.clip_groups.remove(&clip) {
+        commands.entity(group.entity).despawn();
+    }
+}
+
+fn retire_bezier_batch(
+    key: BezierBatchKey,
+    commands: &mut Commands,
+    cache: &mut RenderCache,
+    materials: &mut Option<ResMut<Assets<BezierBatchMaterial>>>,
+    buffers: &mut Option<ResMut<Assets<ShaderBuffer>>>,
+) -> bool {
+    let Some(batch) = cache.bezier_batches.remove(&key) else {
+        return false;
+    };
+    commands.entity(batch.entity).despawn();
+    if let Some(materials) = materials.as_mut() {
+        materials.remove(batch.material.id());
+    }
+    if let Some(buffers) = buffers.as_mut() {
+        buffers.remove(batch.segments.id());
+        buffers.remove(batch.curves.id());
+        buffers.remove(batch.tile_indices.id());
+    }
+    decrement_clip_group_users(key.clip, commands, cache);
+    true
+}
+
+fn remove_cached_item(
+    key: RenderKey,
+    commands: &mut Commands,
+    cache: &mut RenderCache,
+    hsv_wheel_materials: &mut Option<ResMut<Assets<HsvWheelMaterial>>>,
+    bezier_materials: &mut Option<ResMut<Assets<BezierMaterial>>>,
+) -> bool {
+    let Some(cached) = cache.items.remove(&key) else {
+        return false;
+    };
+    cached.nodes.despawn(commands);
+    if let Some(asset_id) = cached.image_asset_id
+        && let Some(users) = cache.image_users.get_mut(&asset_id)
+    {
+        users.remove(&key);
+        if users.is_empty() {
+            cache.image_users.remove(&asset_id);
+        }
+    }
+    if let Some(material) = cached.hsv_material
+        && let Some(materials) = hsv_wheel_materials.as_mut()
+    {
+        materials.remove(material.id());
+    }
+    if let Some(material) = cached.bezier_material
+        && let Some(materials) = bezier_materials.as_mut()
+    {
+        materials.remove(material.id());
+    }
+    if let Some(clip) = cached.clip_group {
+        decrement_clip_group_users(clip, commands, cache);
+    }
+    true
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Renderer resources are independently injected and mutated"
+)]
+fn spawn_incremental_item(
+    key: RenderKey,
+    desired: DesiredItem,
+    item: &DrawItem,
+    commands: &mut Commands,
+    cache: &mut RenderCache,
+    images: &ImageRegistry,
+    hsv_wheel_materials: &mut Option<ResMut<Assets<HsvWheelMaterial>>>,
+    bezier_materials: &mut Option<ResMut<Assets<BezierMaterial>>>,
+    text_font_size: f32,
+    text_line_height: f32,
+    default_text_font: &TextFont,
+) {
+    let local_z = desired_local_z(
+        &desired,
+        &cache.layout_order,
+        &cache.layout_order_labels,
+        &cache.widget_order_labels,
+    );
+    let clip_group =
+        valid_clip(item.clip).then(|| ClipGroupKey::new(item.clip, desired.target_camera));
+    let clip_group_entity = if let Some(group_key) = clip_group {
+        let entity = if let Some(group) = cache.clip_groups.get_mut(&group_key) {
+            group.generation = cache.generation;
+            group.entity
+        } else {
+            let entity = spawn_clip_group(commands, group_key);
+            cache.clip_groups.insert(
+                group_key,
+                CachedClipGroup {
+                    entity,
+                    generation: cache.generation,
+                },
+            );
+            entity
+        };
+        *cache.clip_group_users.entry(group_key).or_default() += 1;
+        Some(entity)
+    } else {
+        None
+    };
+    let wheel_values = match (&item.primitive, clip_group_entity) {
+        (Primitive::HsvWheel { rect, .. }, Some(_)) if valid_clip(*rect) => {
+            hsv_wheel_parameters(&item.primitive)
+        }
+        _ => None,
+    };
+    let hsv_material = wheel_values.and_then(|(hue_degrees, saturation, value)| {
+        hsv_wheel_materials.as_mut().map(|materials| {
+            materials.add(HsvWheelMaterial {
+                parameters: Vec4::new(hue_degrees, saturation, value, 0.0),
+            })
+        })
+    });
+    let bezier_values = match (&item.primitive, clip_group_entity) {
+        (Primitive::Bezier { .. }, Some(_)) => bezier_material_values(item),
+        _ => None,
+    };
+    let bezier_material = bezier_values.and_then(|values| {
+        bezier_materials.as_mut().map(|materials| {
+            materials.add(BezierMaterial {
+                points_01: values.points_01,
+                points_23: values.points_23,
+                color: values.color,
+                style: values.style,
+            })
+        })
+    });
+    let item_font_size = uses_theme_font_size(&item.primitive).then_some(text_font_size);
+    let item_line_height = uses_theme_line_height(&item.primitive).then_some(text_line_height);
+    let resolved_image = image_handle(images, &item.primitive).cloned();
+    let image_asset_id = image_asset_id(&item.primitive);
+    let mut nodes = RenderedNodes::default();
+    if let Some(group) = clip_group_entity {
+        commands.entity(group).with_children(|parent| {
+            spawn_primitive(
+                parent,
+                item,
+                images,
+                PrimitiveRenderContext {
+                    text_line_height,
+                    default_text_font: default_text_font.clone(),
+                    hsv_material: hsv_material.as_ref(),
+                    bezier_material: bezier_material.as_ref(),
+                    local_z,
+                },
+                &mut nodes,
+            );
+        });
+    }
+    cache.items.insert(
+        key,
+        CachedItem {
+            item: item.clone(),
+            nodes,
+            local_z,
+            clip_group,
+            target_camera: desired.target_camera,
+            text_font_size: item_font_size,
+            text_line_height: item_line_height,
+            image: resolved_image,
+            image_asset_id,
+            hsv_wheel_values: wheel_values,
+            hsv_material,
+            bezier_values,
+            bezier_material,
+            generation: cache.generation,
+        },
+    );
+    if let Some(asset_id) = image_asset_id {
+        cache.image_users.entry(asset_id).or_default().insert(key);
+    }
+}
+
+fn sync_widget_fragments(
+    sync: RendererSync,
+    fragment_entities: Vec<Entity>,
+    direct_entities: Vec<Entity>,
+) {
+    let RendererSync {
+        mut commands,
+        display_list,
+        images,
+        mut hsv_wheel_materials,
+        mut bezier_materials,
+        mut bezier_batch_materials,
+        mut shader_buffers,
+        target_camera,
+        theme,
+        camera_query,
+        paint_query,
+        mut cache,
+        mut stats,
+        ..
+    } = sync;
+    let text_font_size = theme
+        .as_ref()
+        .map(|theme| theme.font_size)
+        .filter(|size| size.is_finite() && *size > 0.0)
+        .unwrap_or(14.0);
+    let text_line_height = theme
+        .as_ref()
+        .map(|theme| theme.line_height)
+        .filter(|height| height.is_finite() && *height > 0.0)
+        .unwrap_or(1.25);
+    let default_text_font = ui_default_text_font(text_font_size);
+    let mut old_keys = Vec::new();
+    let mut old_fragment_batches = HashMap::new();
+    for entity in &fragment_entities {
+        update_widget_fragment_camera(
+            &mut cache,
+            *entity,
+            display_list
+                .widget_fragments
+                .get(entity)
+                .and_then(|fragment| fragment.target_camera),
+        );
+        if let Some(keys) = cache.fragment_keys.remove(entity) {
+            for key in keys {
+                cache.bezier_batch_for_key.remove(&key);
+                old_keys.push(key);
+            }
+        }
+        if let Some(batch_keys) = cache.fragment_batches.remove(entity) {
+            old_fragment_batches.insert(*entity, batch_keys);
+        }
+    }
+    old_keys.sort_unstable_by_key(|key| match key {
+        RenderKey::WidgetFragment(entity, index) => (entity.to_bits(), *index as u64),
+        RenderKey::LayoutEntity(entity) => (entity.to_bits(), u64::MAX),
+        _ => (0, 0),
+    });
+    old_keys.dedup();
+    stats.scanned_draw_keys = stats.scanned_draw_keys.saturating_add(old_keys.len());
+    for key in old_keys {
+        if remove_cached_item(
+            key,
+            &mut commands,
+            &mut cache,
+            &mut hsv_wheel_materials,
+            &mut bezier_materials,
+        ) {
+            stats.updated_render_entries = stats.updated_render_entries.saturating_add(1);
+        }
+    }
+
+    for entity in fragment_entities {
+        if let Some(fragment) = display_list.widget_fragments.get(&entity) {
+            let mut desired: Vec<_> = fragment
+                .items
+                .iter()
+                .enumerate()
+                .map(|(index, item)| DesiredItem {
+                    key: RenderKey::WidgetFragment(entity, index),
+                    z: item.z,
+                    target_camera: fragment.target_camera,
+                    hierarchy_depth: 0,
+                    fragment_order: Some(fragment.order),
+                })
+                .collect();
+            desired.sort_unstable_by(|first, second| {
+                first.z.cmp(&second.z).then_with(|| {
+                    first
+                        .key
+                        .stable_order(
+                            first.fragment_order,
+                            first.hierarchy_depth,
+                            first.target_camera,
+                        )
+                        .cmp(&second.key.stable_order(
+                            second.fragment_order,
+                            second.hierarchy_depth,
+                            second.target_camera,
+                        ))
+                })
+            });
+            let mut keys = Vec::with_capacity(desired.len());
+            let mut batch_keys = Vec::new();
+            let mut batched = HashSet::new();
+            if let (Some(materials), Some(buffers)) =
+                (bezier_batch_materials.as_mut(), shader_buffers.as_mut())
+            {
+                let mut start = 0;
+                while start < desired.len() {
+                    let fragment_item = |position: usize| {
+                        let RenderKey::WidgetFragment(_, item_index) = desired[position].key else {
+                            return None;
+                        };
+                        fragment.items.get(item_index)
+                    };
+                    let Some(first_item) = fragment_item(start) else {
+                        start += 1;
+                        continue;
+                    };
+                    let Some(clip) = valid_clip(first_item.clip)
+                        .then(|| ClipGroupKey::new(first_item.clip, desired[start].target_camera))
+                    else {
+                        start += 1;
+                        continue;
+                    };
+                    if !matches!(first_item.primitive, Primitive::Bezier { .. }) {
+                        start += 1;
+                        continue;
+                    }
+                    let mut end = start + 1;
+                    while end < desired.len() {
+                        let Some(next_item) = fragment_item(end) else {
+                            break;
+                        };
+                        if desired[end].target_camera != desired[start].target_camera
+                            || next_item.z != first_item.z
+                            || !matches!(next_item.primitive, Primitive::Bezier { .. })
+                            || !valid_clip(next_item.clip)
+                            || ClipGroupKey::new(next_item.clip, desired[end].target_camera) != clip
+                        {
+                            break;
+                        }
+                        end += 1;
+                    }
+                    if end - start < 2 {
+                        start += 1;
+                        continue;
+                    }
+                    let signature: Vec<_> =
+                        (start..end).filter_map(fragment_item).cloned().collect();
+                    let key = BezierBatchKey {
+                        first: desired[start].key,
+                        last: desired[end - 1].key,
+                        clip,
+                    };
+                    if let Some(values) = build_bezier_batch_values(&signature, clip.clip()) {
+                        let local_z = desired_local_z(
+                            &desired[start],
+                            &cache.layout_order,
+                            &cache.layout_order_labels,
+                            &cache.widget_order_labels,
+                        );
+                        let reused_batch = cache.bezier_batches.contains_key(&key);
+                        let generation = cache.generation;
+                        let batch_member_keys =
+                            desired[start..end].iter().map(|entry| entry.key).collect();
+                        let updated = BezierBatchSyncContext {
+                            commands: &mut commands,
+                            cache: &mut cache,
+                            materials,
+                            buffers,
+                            generation,
+                        }
+                        .sync(
+                            key,
+                            batch_member_keys,
+                            signature,
+                            values,
+                            desired[start].z,
+                            local_z,
+                        );
+                        if cache.bezier_batches.contains_key(&key) {
+                            if !reused_batch {
+                                *cache.clip_group_users.entry(clip).or_default() += 1;
+                            }
+                            if updated {
+                                stats.updated_render_entries =
+                                    stats.updated_render_entries.saturating_add(1);
+                            }
+                            batch_keys.push(key);
+                            for entry in &desired[start..end] {
+                                cache.bezier_batch_for_key.insert(entry.key, key);
+                            }
+                            for entry in &desired[start..end] {
+                                batched.insert(entry.key);
+                            }
+                        }
+                    }
+                    start = end;
+                }
+            }
+            for entry in desired {
+                let RenderKey::WidgetFragment(_, index) = entry.key else {
+                    continue;
+                };
+                let Some(item) = fragment.items.get(index) else {
+                    continue;
+                };
+                if !batched.contains(&entry.key) {
+                    spawn_incremental_item(
+                        entry.key,
+                        entry,
+                        item,
+                        &mut commands,
+                        &mut cache,
+                        &images,
+                        &mut hsv_wheel_materials,
+                        &mut bezier_materials,
+                        text_font_size,
+                        text_line_height,
+                        &default_text_font,
+                    );
+                    stats.updated_render_entries = stats.updated_render_entries.saturating_add(1);
+                }
+                keys.push(entry.key);
+                stats.scanned_draw_keys = stats.scanned_draw_keys.saturating_add(1);
+            }
+            cache.fragment_keys.insert(entity, keys);
+            let retained: HashSet<_> = batch_keys.iter().copied().collect();
+            if !batch_keys.is_empty() {
+                cache.fragment_batches.insert(entity, batch_keys);
+            }
+            if let Some(old_batches) = old_fragment_batches.remove(&entity) {
+                for old_key in old_batches {
+                    if !retained.contains(&old_key)
+                        && retire_bezier_batch(
+                            old_key,
+                            &mut commands,
+                            &mut cache,
+                            &mut bezier_batch_materials,
+                            &mut shader_buffers,
+                        )
+                    {
+                        stats.updated_render_entries =
+                            stats.updated_render_entries.saturating_add(1);
+                    }
+                }
+            }
+        }
+    }
+
+    for old_batches in old_fragment_batches.into_values() {
+        for old_key in old_batches {
+            if retire_bezier_batch(
+                old_key,
+                &mut commands,
+                &mut cache,
+                &mut bezier_batch_materials,
+                &mut shader_buffers,
+            ) {
+                stats.updated_render_entries = stats.updated_render_entries.saturating_add(1);
+            }
+        }
+    }
+
+    let mut touched_batches = HashSet::new();
+    for entity in &direct_entities {
+        if let Some(batch_key) = cache
+            .bezier_batch_for_key
+            .get(&RenderKey::LayoutEntity(*entity))
+        {
+            touched_batches.insert(*batch_key);
+        }
+    }
+    let mut touched_batches: Vec<_> = touched_batches.into_iter().collect();
+    touched_batches.sort_unstable_by_key(|key| (key.first, key.last));
+    for old_batch_key in touched_batches {
+        let Some(batch) = cache.bezier_batches.get(&old_batch_key).cloned() else {
+            continue;
+        };
+        let mut entries: Vec<_> = batch
+            .keys
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(index, key)| {
+                let old_item = batch.signature.get(index).cloned();
+                let (item, target_camera, fragment_order, hierarchy_depth) = match key {
+                    RenderKey::LayoutEntity(entity) => match paint_query.get(entity) {
+                        Ok((_, layout, paint)) => (
+                            Some(paint.draw_item(&layout)),
+                            camera_query.get(layout.window).ok().map(|_| layout.window),
+                            None,
+                            hierarchy_depth(entity, &cache.parents_by_entity),
+                        ),
+                        Err(_) => (
+                            None,
+                            old_batch_key.clip.target_camera,
+                            None,
+                            hierarchy_depth(entity, &cache.parents_by_entity),
+                        ),
+                    },
+                    RenderKey::WidgetFragment(entity, _) => {
+                        let fragment = display_list.widget_fragments.get(&entity);
+                        (
+                            display_list_item(&display_list, key).cloned(),
+                            fragment.and_then(|fragment| fragment.target_camera),
+                            fragment.map(|fragment| fragment.order),
+                            0,
+                        )
+                    }
+                    RenderKey::ManualDisplayListIndex(_) => (
+                        display_list_item(&display_list, key).cloned(),
+                        target_camera.0,
+                        None,
+                        0,
+                    ),
+                    RenderKey::CameraDisplayListIndex(camera, _)
+                    | RenderKey::OverlayCameraDisplayListIndex(camera, _) => (
+                        display_list_item(&display_list, key).cloned(),
+                        Some(camera),
+                        None,
+                        0,
+                    ),
+                    _ => (
+                        display_list_item(&display_list, key).cloned(),
+                        None,
+                        None,
+                        0,
+                    ),
+                };
+                let z = item
+                    .as_ref()
+                    .or(old_item.as_ref())
+                    .map_or(batch.first_z, |item| item.z);
+                let desired = DesiredItem {
+                    key,
+                    z,
+                    target_camera,
+                    hierarchy_depth,
+                    fragment_order,
+                };
+                CurrentBezierEntry {
+                    order: order_for_desired(&desired),
+                    desired,
+                    item,
+                }
+            })
+            .collect();
+        entries.sort_unstable_by(|first, second| {
+            first
+                .desired
+                .z
+                .cmp(&second.desired.z)
+                .then_with(|| first.order.cmp(&second.order))
+        });
+        stats.scanned_draw_keys = stats.scanned_draw_keys.saturating_add(entries.len());
+        let entries_are_compatible = entries.iter().all(|entry| {
+            entry.item.as_ref().is_some_and(|item| {
+                matches!(item.primitive, Primitive::Bezier { .. })
+                    && item.z == batch.first_z
+                    && entry.desired.target_camera == old_batch_key.clip.target_camera
+                    && ClipGroupKey::new(item.clip, entry.desired.target_camera)
+                        == old_batch_key.clip
+            })
+        });
+        let sorted_keys: Vec<_> = entries.iter().map(|entry| entry.desired.key).collect();
+        if entries_are_compatible {
+            let new_key = BezierBatchKey {
+                first: sorted_keys[0],
+                last: *sorted_keys.last().expect("batch has keys"),
+                clip: old_batch_key.clip,
+            };
+            let signature: Vec<_> = entries
+                .iter()
+                .filter_map(|entry| entry.item.clone())
+                .collect();
+            let first = &entries[0];
+            let local_z = desired_local_z(
+                &first.desired,
+                &cache.layout_order,
+                &cache.layout_order_labels,
+                &cache.widget_order_labels,
+            );
+            let order_changed = sorted_keys != batch.keys || new_key != old_batch_key;
+            let local_z_changed = batch.local_z != local_z;
+            if order_changed || local_z_changed {
+                if new_key != old_batch_key {
+                    if let Some(previous) = cache.bezier_batches.remove(&old_batch_key) {
+                        cache.bezier_batches.insert(new_key, previous);
+                    }
+                    for key in &batch.keys {
+                        cache.bezier_batch_for_key.insert(*key, new_key);
+                    }
+                    for batch_keys in cache.fragment_batches.values_mut() {
+                        for key in batch_keys.iter_mut() {
+                            if *key == old_batch_key {
+                                *key = new_key;
+                            }
+                        }
+                    }
+                }
+                if let (Some(materials), Some(buffers)) =
+                    (bezier_batch_materials.as_mut(), shader_buffers.as_mut())
+                {
+                    let generation = cache.generation;
+                    let updated = BezierBatchSyncContext {
+                        commands: &mut commands,
+                        cache: &mut cache,
+                        materials,
+                        buffers,
+                        generation,
+                    }
+                    .sync(
+                        new_key,
+                        sorted_keys.clone(),
+                        signature,
+                        build_bezier_batch_values(
+                            &entries
+                                .iter()
+                                .filter_map(|entry| entry.item.clone())
+                                .collect::<Vec<_>>(),
+                            new_key.clip.clip(),
+                        )
+                        .expect("compatible Bezier batch has GPU data"),
+                        first.desired.z,
+                        local_z,
+                    );
+                    if updated {
+                        stats.updated_render_entries =
+                            stats.updated_render_entries.saturating_add(1);
+                    }
+                }
+            }
+            continue;
+        }
+
+        for key in &batch.keys {
+            cache.bezier_batch_for_key.remove(key);
+        }
+        for batch_keys in cache.fragment_batches.values_mut() {
+            batch_keys.retain(|key| *key != old_batch_key);
+        }
+        if retire_bezier_batch(
+            old_batch_key,
+            &mut commands,
+            &mut cache,
+            &mut bezier_batch_materials,
+            &mut shader_buffers,
+        ) {
+            stats.updated_render_entries = stats.updated_render_entries.saturating_add(1);
+        }
+
+        let direct_keys: HashSet<_> = direct_entities
+            .iter()
+            .map(|entity| RenderKey::LayoutEntity(*entity))
+            .collect();
+        let mut start = 0;
+        while start < entries.len() {
+            let Some(item) = entries[start].item.as_ref() else {
+                start += 1;
+                continue;
+            };
+            let clip = ClipGroupKey::new(item.clip, entries[start].desired.target_camera);
+            let first_z = item.z;
+            let mut end = start + 1;
+            while end < entries.len() {
+                let Some(next_item) = entries[end].item.as_ref() else {
+                    break;
+                };
+                if !matches!(next_item.primitive, Primitive::Bezier { .. })
+                    || next_item.z != first_z
+                    || entries[end].desired.target_camera != clip.target_camera
+                    || ClipGroupKey::new(next_item.clip, entries[end].desired.target_camera) != clip
+                {
+                    break;
+                }
+                end += 1;
+            }
+            if !matches!(item.primitive, Primitive::Bezier { .. })
+                || !valid_clip(item.clip)
+                || end - start < 2
+            {
+                if let Some(item) = entries[start].item.as_ref()
+                    && !direct_keys.contains(&entries[start].desired.key)
+                {
+                    spawn_incremental_item(
+                        entries[start].desired.key,
+                        entries[start].desired,
+                        item,
+                        &mut commands,
+                        &mut cache,
+                        &images,
+                        &mut hsv_wheel_materials,
+                        &mut bezier_materials,
+                        text_font_size,
+                        text_line_height,
+                        &default_text_font,
+                    );
+                    stats.updated_render_entries = stats.updated_render_entries.saturating_add(1);
+                }
+                start += 1;
+                continue;
+            }
+            let run = &entries[start..end];
+            let signature: Vec<_> = run.iter().filter_map(|entry| entry.item.clone()).collect();
+            let keys: Vec<_> = run.iter().map(|entry| entry.desired.key).collect();
+            let key = BezierBatchKey {
+                first: keys[0],
+                last: *keys.last().expect("batch run has keys"),
+                clip,
+            };
+            if let (Some(values), Some(materials), Some(buffers)) = (
+                build_bezier_batch_values(&signature, clip.clip()),
+                bezier_batch_materials.as_mut(),
+                shader_buffers.as_mut(),
+            ) {
+                let local_z = desired_local_z(
+                    &run[0].desired,
+                    &cache.layout_order,
+                    &cache.layout_order_labels,
+                    &cache.widget_order_labels,
+                );
+                let generation = cache.generation;
+                let updated = BezierBatchSyncContext {
+                    commands: &mut commands,
+                    cache: &mut cache,
+                    materials,
+                    buffers,
+                    generation,
+                }
+                .sync(key, keys.clone(), signature, values, first_z, local_z);
+                if cache.bezier_batches.contains_key(&key) {
+                    *cache.clip_group_users.entry(clip).or_default() += 1;
+                    for member in &keys {
+                        cache.bezier_batch_for_key.insert(*member, key);
+                    }
+                    if let Some(owner) = keys.iter().find_map(|member| match member {
+                        RenderKey::WidgetFragment(entity, _) => Some(*entity),
+                        _ => None,
+                    }) {
+                        cache.fragment_batches.entry(owner).or_default().push(key);
+                    }
+                }
+                if updated {
+                    stats.updated_render_entries = stats.updated_render_entries.saturating_add(1);
+                }
+            }
+            start = end;
+        }
+    }
+
+    for entity in direct_entities {
+        if let Ok((_, layout, paint)) = paint_query.get(entity) {
+            let key = RenderKey::LayoutEntity(entity);
+            if !cache.layout_order.contains_key(&entity) {
+                continue;
+            }
+            let target = camera_query.get(layout.window).ok().map(|_| layout.window);
+            let item = paint.draw_item(&layout);
+            update_layout_window(&mut cache, entity, Some(layout.window));
+            if let Some(batch_key) = cache.bezier_batch_for_key.get(&key).copied() {
+                let Some(batch) = cache.bezier_batches.get(&batch_key) else {
+                    continue;
+                };
+                let Some(index) = batch.keys.iter().position(|member| *member == key) else {
+                    continue;
+                };
+                let mut signature = batch.signature.clone();
+                signature[index] = item;
+                let keys = batch.keys.clone();
+                let local_z = batch.local_z;
+                let first_z = batch.first_z;
+                let Some(values) = build_bezier_batch_values(&signature, batch_key.clip.clip())
+                else {
+                    continue;
+                };
+                if let (Some(materials), Some(buffers)) =
+                    (bezier_batch_materials.as_mut(), shader_buffers.as_mut())
+                {
+                    let generation = cache.generation;
+                    let updated = BezierBatchSyncContext {
+                        commands: &mut commands,
+                        cache: &mut cache,
+                        materials,
+                        buffers,
+                        generation,
+                    }
+                    .sync(batch_key, keys, signature, values, first_z, local_z);
+                    stats.scanned_draw_keys = stats.scanned_draw_keys.saturating_add(1);
+                    if updated {
+                        stats.updated_render_entries =
+                            stats.updated_render_entries.saturating_add(1);
+                    }
+                }
+                continue;
+            }
+            let desired = DesiredItem {
+                key,
+                z: item.z,
+                target_camera: target,
+                hierarchy_depth: hierarchy_depth(entity, &cache.parents_by_entity),
+                fragment_order: None,
+            };
+            let local_z = desired_local_z(
+                &desired,
+                &cache.layout_order,
+                &cache.layout_order_labels,
+                &cache.widget_order_labels,
+            );
+            let clip_group = valid_clip(item.clip).then(|| ClipGroupKey::new(item.clip, target));
+            let resolved_image = image_handle(&images, &item.primitive).cloned();
+            let resolved_image_asset_id = image_asset_id(&item.primitive);
+            let item_font_size = uses_theme_font_size(&item.primitive).then_some(text_font_size);
+            let item_line_height =
+                uses_theme_line_height(&item.primitive).then_some(text_line_height);
+            let wheel_values = match (&item.primitive, clip_group) {
+                (Primitive::HsvWheel { rect, .. }, Some(_)) if valid_clip(*rect) => {
+                    hsv_wheel_parameters(&item.primitive)
+                }
+                _ => None,
+            };
+            let bezier_values = match (&item.primitive, clip_group) {
+                (Primitive::Bezier { .. }, Some(_)) => bezier_material_values(&item),
+                _ => None,
+            };
+            let unchanged = cache.items.get(&key).is_some_and(|cached| {
+                cached.item == item
+                    && cached.target_camera == target
+                    && cached.clip_group == clip_group
+                    && cached.text_font_size == item_font_size
+                    && cached.text_line_height == item_line_height
+                    && cached.image == resolved_image
+                    && cached.image_asset_id == resolved_image_asset_id
+                    && cached.hsv_wheel_values == wheel_values
+                    && cached.bezier_values == bezier_values
+            });
+            if unchanged {
+                let mut local_z_changed = false;
+                if let Some(cached) = cache.items.get_mut(&key)
+                    && cached.local_z != local_z
+                {
+                    cached.nodes.set_local_z(&mut commands, local_z);
+                    cached.local_z = local_z;
+                    local_z_changed = true;
+                }
+                stats.scanned_draw_keys = stats.scanned_draw_keys.saturating_add(1);
+                if local_z_changed {
+                    stats.updated_render_entries = stats.updated_render_entries.saturating_add(1);
+                }
+                continue;
+            }
+            if remove_cached_item(
+                key,
+                &mut commands,
+                &mut cache,
+                &mut hsv_wheel_materials,
+                &mut bezier_materials,
+            ) {
+                stats.updated_render_entries = stats.updated_render_entries.saturating_add(1);
+            }
+            spawn_incremental_item(
+                key,
+                desired,
+                &item,
+                &mut commands,
+                &mut cache,
+                &images,
+                &mut hsv_wheel_materials,
+                &mut bezier_materials,
+                text_font_size,
+                text_line_height,
+                &default_text_font,
+            );
+            stats.scanned_draw_keys = stats.scanned_draw_keys.saturating_add(1);
+            stats.updated_render_entries = stats.updated_render_entries.saturating_add(1);
+        } else {
+            cache.layout_order.remove(&entity);
+            if let Some(key) = cache.layout_entity_order_keys.remove(&entity) {
+                cache.layout_order_labels.remove(&key);
+            }
+            update_layout_window(&mut cache, entity, None);
+            let key = RenderKey::LayoutEntity(entity);
+            if remove_cached_item(
+                key,
+                &mut commands,
+                &mut cache,
+                &mut hsv_wheel_materials,
+                &mut bezier_materials,
+            ) {
+                stats.updated_render_entries = stats.updated_render_entries.saturating_add(1);
+            }
+        }
+    }
+    stats.incremental_syncs = stats.incremental_syncs.saturating_add(1);
+}
+
+fn sync_display_list_full(sync: RendererSync, changes: bui_core::UiDirtyBatch) {
     let RendererSync {
         mut commands,
         display_list,
@@ -916,14 +2652,11 @@ fn sync_display_list(sync: RendererSync) {
         camera_query,
         paint_query,
         hierarchy_query,
-        mut dirty,
+        dirty: _,
         mut cache,
+        mut stats,
     } = sync;
-    let changes = dirty.take(UiDirtyDomain::Render);
-    if changes.is_empty() {
-        return;
-    }
-    let images_changed = images.is_changed();
+    let _ = changes;
     let text_font_size = theme
         .as_ref()
         .map(|theme| theme.font_size)
@@ -937,7 +2670,12 @@ fn sync_display_list(sync: RendererSync) {
     let default_text_font = ui_default_text_font(text_font_size);
     let mut desired = std::mem::take(&mut cache.desired);
     desired.clear();
-    desired.reserve(display_list.items.len());
+    desired.reserve(display_list.item_count());
+    cache.layout_entities_by_window.clear();
+    cache.layout_window_by_entity.clear();
+    cache.widget_fragments_by_camera.clear();
+    cache.widget_fragment_camera.clear();
+    rebuild_cached_hierarchy(&mut cache, &hierarchy_query);
     let hierarchy_parents: HashMap<_, _> = hierarchy_query
         .iter()
         .filter_map(|(entity, parent)| parent.map(|parent| (entity, parent.0)))
@@ -948,6 +2686,7 @@ fn sync_display_list(sync: RendererSync) {
             z: item.z,
             target_camera: target_camera.0,
             hierarchy_depth: 0,
+            fragment_order: None,
         });
     }
     for (index, item) in display_list.widget_items.iter().enumerate() {
@@ -956,6 +2695,7 @@ fn sync_display_list(sync: RendererSync) {
             z: item.z,
             target_camera: None,
             hierarchy_depth: 0,
+            fragment_order: None,
         });
     }
     for (index, item) in display_list.overlay_widget_items.iter().enumerate() {
@@ -964,7 +2704,20 @@ fn sync_display_list(sync: RendererSync) {
             z: item.z,
             target_camera: None,
             hierarchy_depth: 0,
+            fragment_order: None,
         });
+    }
+    for fragment in display_list.widget_fragments.values() {
+        update_widget_fragment_camera(&mut cache, fragment.entity, fragment.target_camera);
+        for (index, item) in fragment.items.iter().enumerate() {
+            desired.push(DesiredItem {
+                key: RenderKey::WidgetFragment(fragment.entity, index),
+                z: item.z,
+                target_camera: fragment.target_camera,
+                hierarchy_depth: 0,
+                fragment_order: Some(fragment.order),
+            });
+        }
     }
     for (camera, items) in &display_list.camera_items {
         for (index, item) in items.iter().enumerate() {
@@ -973,6 +2726,7 @@ fn sync_display_list(sync: RendererSync) {
                 z: item.z,
                 target_camera: Some(*camera),
                 hierarchy_depth: 0,
+                fragment_order: None,
             });
         }
     }
@@ -983,37 +2737,66 @@ fn sync_display_list(sync: RendererSync) {
                 z: item.z,
                 target_camera: Some(*camera),
                 hierarchy_depth: 0,
+                fragment_order: None,
             });
         }
     }
     for (entity, layout, _) in &paint_query {
+        update_layout_window(&mut cache, entity, Some(layout.window));
         let camera = camera_query.get(layout.window).ok().map(|_| layout.window);
         desired.push(DesiredItem {
             key: RenderKey::LayoutEntity(entity),
             z: layout.z,
             target_camera: camera,
             hierarchy_depth: hierarchy_depth(entity, &hierarchy_parents),
+            fragment_order: None,
         });
     }
     desired.sort_unstable_by(|first, second| {
         first.z.cmp(&second.z).then_with(|| {
-            let first_order = first.key.stable_order();
-            let second_order = second.key.stable_order();
-            if first_order.0 == 1 && second_order.0 == 1 {
-                first
-                    .hierarchy_depth
-                    .cmp(&second.hierarchy_depth)
-                    .then_with(|| first_order.cmp(&second_order))
-            } else {
-                first_order.cmp(&second_order)
-            }
+            first
+                .key
+                .stable_order(
+                    first.fragment_order,
+                    first.hierarchy_depth,
+                    first.target_camera,
+                )
+                .cmp(&second.key.stable_order(
+                    second.fragment_order,
+                    second.hierarchy_depth,
+                    second.target_camera,
+                ))
         })
     });
+    rebuild_widget_order_labels(&mut cache, &desired);
     cache.generation = cache.generation.wrapping_add(1);
     let generation = cache.generation;
+    cache.fragment_keys.clear();
+    cache.fragment_batches.clear();
+    cache.bezier_batch_for_key.clear();
+    cache.layout_order.clear();
+    let mut next_layout_order = 0usize;
+    for item in &desired {
+        match item.key {
+            RenderKey::WidgetFragment(entity, _) => {
+                cache
+                    .fragment_keys
+                    .entry(entity)
+                    .or_default()
+                    .push(item.key);
+            }
+            RenderKey::LayoutEntity(entity) => {
+                cache.layout_order.insert(entity, next_layout_order);
+                next_layout_order = next_layout_order.saturating_add(1);
+            }
+            _ => {}
+        }
+    }
+    rebuild_layout_order_labels(&mut cache, &desired);
     let mut retired_hsv_materials = Vec::new();
     let mut retired_bezier_materials = Vec::new();
     let mut retired_bezier_batches = Vec::new();
+    let mut updated_render_entries = 0usize;
     let resolved_items: Vec<Option<DrawItem>> = desired
         .iter()
         .map(|desired_item| match desired_item.key {
@@ -1036,6 +2819,11 @@ fn sync_display_list(sync: RendererSync) {
                 .get(&camera)
                 .and_then(|items| items.get(index))
                 .cloned(),
+            RenderKey::WidgetFragment(entity, index) => display_list
+                .widget_fragments
+                .get(&entity)
+                .and_then(|fragment| fragment.items.get(index))
+                .cloned(),
             RenderKey::LayoutEntity(entity) => paint_query
                 .get(entity)
                 .ok()
@@ -1052,6 +2840,10 @@ fn sync_display_list(sync: RendererSync) {
                 start += 1;
                 continue;
             };
+            let fragment_owner = match desired[start].key {
+                RenderKey::WidgetFragment(entity, _) => Some(entity),
+                _ => None,
+            };
             let Some(clip) = valid_clip(item.clip)
                 .then(|| ClipGroupKey::new(item.clip, desired[start].target_camera))
             else {
@@ -1067,7 +2859,13 @@ fn sync_display_list(sync: RendererSync) {
                 let Some(next_item) = resolved_items[end].as_ref() else {
                     break;
                 };
+                let next_fragment_owner = match desired[end].key {
+                    RenderKey::WidgetFragment(entity, _) => Some(entity),
+                    _ => None,
+                };
                 if desired[end].target_camera != desired[start].target_camera
+                    || next_item.z != item.z
+                    || next_fragment_owner != fragment_owner
                     || !matches!(&next_item.primitive, Primitive::Bezier { .. })
                     || !valid_clip(next_item.clip)
                     || ClipGroupKey::new(next_item.clip, desired[end].target_camera) != clip
@@ -1089,17 +2887,32 @@ fn sync_display_list(sync: RendererSync) {
                             .zip(&cached.signature)
                             .all(|(item, previous)| item.as_ref() == Some(previous))
                 });
-                let local_z = i32::try_from(start).unwrap_or(i32::MAX);
+                let local_z = desired_local_z(
+                    &desired[start],
+                    &cache.layout_order,
+                    &cache.layout_order_labels,
+                    &cache.widget_order_labels,
+                );
                 if signature_unchanged {
                     if let Some(cached) = cache.bezier_batches.get_mut(&key) {
-                        if cached.local_z != local_z {
-                            commands.entity(cached.entity).insert(ZIndex(local_z));
+                        if cached.local_z != local_z || cached.first_z != desired[start].z {
+                            commands
+                                .entity(cached.entity)
+                                .insert((GlobalZIndex(desired[start].z), ZIndex(local_z)));
+                            updated_render_entries = updated_render_entries.saturating_add(1);
                             cached.local_z = local_z;
                         }
+                        cached.first_z = desired[start].z;
                         cached.generation = generation;
                     }
                     if let Some(group) = cache.clip_groups.get_mut(&clip) {
                         group.generation = generation;
+                    }
+                    if let Some(entity) = fragment_owner {
+                        cache.fragment_batches.entry(entity).or_default().push(key);
+                    }
+                    for item in &desired[start..end] {
+                        cache.bezier_batch_for_key.insert(item.key, key);
                     }
                     batched_keys.extend(desired[start..end].iter().map(|item| item.key));
                 } else {
@@ -1108,7 +2921,9 @@ fn sync_display_list(sync: RendererSync) {
                         .filter_map(Clone::clone)
                         .collect();
                     if let Some(values) = build_bezier_batch_values(&signature, clip.clip()) {
-                        BezierBatchSyncContext {
+                        let batch_member_keys =
+                            desired[start..end].iter().map(|entry| entry.key).collect();
+                        let updated = BezierBatchSyncContext {
                             commands: &mut commands,
                             cache: &mut cache,
                             materials,
@@ -1117,11 +2932,21 @@ fn sync_display_list(sync: RendererSync) {
                         }
                         .sync(
                             key,
+                            batch_member_keys,
                             signature,
                             values,
                             desired[start].z,
                             local_z,
                         );
+                        if updated {
+                            updated_render_entries = updated_render_entries.saturating_add(1);
+                        }
+                        if let Some(entity) = fragment_owner {
+                            cache.fragment_batches.entry(entity).or_default().push(key);
+                        }
+                        for entry in &desired[start..end] {
+                            cache.bezier_batch_for_key.insert(entry.key, key);
+                        }
                         batched_keys.extend(desired[start..end].iter().map(|item| item.key));
                     }
                 }
@@ -1135,8 +2960,9 @@ fn sync_display_list(sync: RendererSync) {
         let DesiredItem {
             key,
             target_camera: target,
-            z: _,
-            hierarchy_depth: _,
+            z,
+            hierarchy_depth,
+            fragment_order,
         } = desired_item;
         if batched_keys.contains(&key) {
             continue;
@@ -1144,7 +2970,18 @@ fn sync_display_list(sync: RendererSync) {
         let Some(item) = resolved_items[order].as_ref() else {
             continue;
         };
-        let local_z = i32::try_from(order).unwrap_or(i32::MAX);
+        let local_z = desired_local_z(
+            &DesiredItem {
+                key,
+                z,
+                target_camera: target,
+                hierarchy_depth,
+                fragment_order,
+            },
+            &cache.layout_order,
+            &cache.layout_order_labels,
+            &cache.widget_order_labels,
+        );
         let clip_group = valid_clip(item.clip).then(|| ClipGroupKey::new(item.clip, target));
         let clip_group_entity = if let Some(group_key) = clip_group {
             if let Some(group) = cache.clip_groups.get_mut(&group_key) {
@@ -1162,6 +2999,7 @@ fn sync_display_list(sync: RendererSync) {
         };
 
         let resolved_image = image_handle(&images, &item.primitive).cloned();
+        let resolved_image_asset_id = image_asset_id(&item.primitive);
         let wheel_values = match (&item.primitive, clip_group_entity) {
             (Primitive::HsvWheel { rect, .. }, Some(_)) if valid_clip(*rect) => {
                 hsv_wheel_parameters(&item.primitive)
@@ -1174,27 +3012,22 @@ fn sync_display_list(sync: RendererSync) {
         };
         let item_font_size = uses_theme_font_size(&item.primitive).then_some(text_font_size);
         let item_line_height = uses_theme_line_height(&item.primitive).then_some(text_line_height);
-        let image_changed = images_changed
-            && cache
-                .items
-                .get(&key)
-                .is_some_and(|cached| cached.image != resolved_image);
-        let unchanged = !image_changed
-            && cache.items.get(&key).is_some_and(|cached| {
-                cached.item == *item
-                    && cached.target_camera == target
-                    && cached.clip_group == clip_group
-                    && cached.text_font_size == item_font_size
-                    && cached.text_line_height == item_line_height
-                    && cached.image == resolved_image
-                    && cached.hsv_wheel_values == wheel_values
-                    && cached.bezier_values == bezier_values
-            });
+        let unchanged = cache.items.get(&key).is_some_and(|cached| {
+            cached.item == *item
+                && cached.target_camera == target
+                && cached.clip_group == clip_group
+                && cached.text_font_size == item_font_size
+                && cached.text_line_height == item_line_height
+                && cached.image == resolved_image
+                && cached.hsv_wheel_values == wheel_values
+                && cached.bezier_values == bezier_values
+        });
         if unchanged {
             if let Some(cached) = cache.items.get_mut(&key) {
                 if cached.local_z != local_z {
                     cached.nodes.set_local_z(&mut commands, local_z);
                     cached.local_z = local_z;
+                    updated_render_entries = updated_render_entries.saturating_add(1);
                 }
                 cached.generation = generation;
             }
@@ -1240,6 +3073,7 @@ fn sync_display_list(sync: RendererSync) {
                 }
                 cached.generation = generation;
             }
+            updated_render_entries = updated_render_entries.saturating_add(1);
             continue;
         }
 
@@ -1275,6 +3109,7 @@ fn sync_display_list(sync: RendererSync) {
                 }
                 cached.generation = generation;
             }
+            updated_render_entries = updated_render_entries.saturating_add(1);
             continue;
         }
 
@@ -1343,6 +3178,7 @@ fn sync_display_list(sync: RendererSync) {
                 text_font_size: item_font_size,
                 text_line_height: item_line_height,
                 image: resolved_image,
+                image_asset_id: resolved_image_asset_id,
                 hsv_wheel_values: wheel_values,
                 hsv_material,
                 bezier_values,
@@ -1350,6 +3186,7 @@ fn sync_display_list(sync: RendererSync) {
                 generation,
             },
         );
+        updated_render_entries = updated_render_entries.saturating_add(1);
     }
 
     cache.items.retain(|_, cached| {
@@ -1365,6 +3202,7 @@ fn sync_display_list(sync: RendererSync) {
         if let Some(material) = &cached.bezier_material {
             retired_bezier_materials.push(material.clone());
         }
+        updated_render_entries = updated_render_entries.saturating_add(1);
         false
     });
     cache.bezier_batches.retain(|_, batch| {
@@ -1372,6 +3210,7 @@ fn sync_display_list(sync: RendererSync) {
             return true;
         }
         commands.entity(batch.entity).despawn();
+        updated_render_entries = updated_render_entries.saturating_add(1);
         retired_bezier_batches.push((
             batch.material.clone(),
             batch.segments.clone(),
@@ -1387,6 +3226,25 @@ fn sync_display_list(sync: RendererSync) {
         commands.entity(group.entity).despawn();
         false
     });
+    cache.clip_group_users.clear();
+    let clip_users: Vec<_> = cache
+        .items
+        .values()
+        .filter_map(|cached| cached.clip_group)
+        .chain(cache.bezier_batches.keys().map(|key| key.clip))
+        .collect();
+    for key in clip_users {
+        *cache.clip_group_users.entry(key).or_default() += 1;
+    }
+    cache.image_users.clear();
+    let image_users: Vec<_> = cache
+        .items
+        .iter()
+        .filter_map(|(key, cached)| cached.image_asset_id.map(|asset_id| (asset_id, *key)))
+        .collect();
+    for (asset_id, key) in image_users {
+        cache.image_users.entry(asset_id).or_default().insert(key);
+    }
     if let Some(materials) = hsv_wheel_materials.as_mut() {
         for handle in retired_hsv_materials {
             materials.remove(handle.id());
@@ -1411,6 +3269,9 @@ fn sync_display_list(sync: RendererSync) {
     }
     cache.desired = desired;
     cache.target_camera = target_camera.0;
+    stats.scanned_draw_keys = resolved_items.len();
+    stats.updated_render_entries = updated_render_entries;
+    stats.full_syncs = stats.full_syncs.saturating_add(1);
 }
 
 fn spawn_clip_group(commands: &mut Commands, key: ClipGroupKey) -> Entity {
@@ -1426,6 +3287,13 @@ fn image_handle<'a>(images: &'a ImageRegistry, primitive: &Primitive) -> Option<
         Primitive::Image { asset_id, .. } | Primitive::Icon { asset_id, .. } => {
             images.get(*asset_id)
         }
+        _ => None,
+    }
+}
+
+fn image_asset_id(primitive: &Primitive) -> Option<u64> {
+    match primitive {
+        Primitive::Image { asset_id, .. } | Primitive::Icon { asset_id, .. } => Some(*asset_id),
         _ => None,
     }
 }
@@ -1682,11 +3550,12 @@ impl BezierBatchSyncContext<'_, '_, '_> {
     fn sync(
         &mut self,
         key: BezierBatchKey,
+        keys: Vec<RenderKey>,
         signature: Vec<DrawItem>,
         values: BezierBatchValues,
         first_z: i32,
         local_z: i32,
-    ) {
+    ) -> bool {
         let Self {
             commands,
             cache,
@@ -1709,16 +3578,18 @@ impl BezierBatchSyncContext<'_, '_, '_> {
 
         if let Some(mut cached) = cache.bezier_batches.remove(&key) {
             if cached.signature == signature {
-                if cached.local_z != local_z {
+                let changed = cached.local_z != local_z || cached.first_z != first_z;
+                if changed {
                     commands
                         .entity(cached.entity)
                         .insert((GlobalZIndex(first_z), ZIndex(local_z)));
                 }
                 cached.first_z = first_z;
                 cached.local_z = local_z;
+                cached.keys = keys;
                 cached.generation = generation;
                 cache.bezier_batches.insert(key, cached);
-                return;
+                return changed;
             }
             let segments_updated = if let Some(mut buffer) = buffers.get_mut(&cached.segments) {
                 buffer.clear();
@@ -1760,12 +3631,13 @@ impl BezierBatchSyncContext<'_, '_, '_> {
                     ));
                 }
                 cached.signature = signature;
+                cached.keys = keys;
                 cached.rect = values.rect;
                 cached.first_z = first_z;
                 cached.local_z = local_z;
                 cached.generation = generation;
                 cache.bezier_batches.insert(key, cached);
-                return;
+                return true;
             }
             commands.entity(cached.entity).despawn();
             materials.remove(cached.material.id());
@@ -1815,12 +3687,14 @@ impl BezierBatchSyncContext<'_, '_, '_> {
                 curves,
                 tile_indices,
                 signature,
+                keys,
                 rect: values.rect,
                 first_z,
                 local_z,
                 generation,
             },
         );
+        true
     }
 }
 
@@ -2244,6 +4118,30 @@ mod tests {
         }
     }
 
+    fn widget_fragment(
+        entity: Entity,
+        order: u64,
+        target_camera: Option<Entity>,
+        items: Vec<DrawItem>,
+    ) -> WidgetRenderFragment {
+        WidgetRenderFragment {
+            entity,
+            order,
+            target_camera,
+            items,
+        }
+    }
+
+    fn cached_single_node(cache: &RenderCache, key: RenderKey) -> Entity {
+        match &cache.items[&key].nodes {
+            RenderedNodes::Single(entity) => *entity,
+            RenderedNodes::Multiple(entities) => *entities
+                .first()
+                .expect("fragment item should render a Bevy node"),
+            RenderedNodes::Empty => panic!("fragment item should render a Bevy node"),
+        }
+    }
+
     #[test]
     fn display_list_is_stably_ordered_by_z() {
         let mut list = DisplayList::default();
@@ -2256,6 +4154,410 @@ mod tests {
         );
         assert_eq!(list.items()[1].primitive, rect_item(4, 1.0).primitive);
         assert_eq!(list.items()[2].primitive, rect_item(4, 3.0).primitive);
+    }
+
+    #[test]
+    fn keyed_fragments_keep_merged_views_and_camera_order_compatible() {
+        let mut list = DisplayList::default();
+        let first = Entity::from_bits(1);
+        let second = Entity::from_bits(2);
+        let camera = Entity::from_bits(3);
+        assert!(list.upsert_widget_fragment(widget_fragment(
+            first,
+            20,
+            None,
+            vec![rect_item(4, 20.0)]
+        )));
+        assert!(list.upsert_widget_fragment(widget_fragment(
+            second,
+            10,
+            None,
+            vec![rect_item(4, 10.0)]
+        )));
+        assert!(list.upsert_widget_fragment(widget_fragment(
+            camera,
+            0,
+            Some(camera),
+            vec![rect_item(4, 30.0)]
+        )));
+        list.replace_widget_items(vec![rect_item(4, 15.0)]);
+        list.replace_camera_items(Some(camera), vec![rect_item(4, 25.0)]);
+        list.replace_overlay_camera_items(camera, vec![rect_item(4, 35.0)]);
+        assert!(!list.upsert_widget_fragment(widget_fragment(
+            first,
+            20,
+            None,
+            vec![rect_item(4, 20.0)]
+        )));
+        assert_eq!(list.item_count(), 6);
+        assert_eq!(list.widget_items().len(), 3);
+        assert_eq!(list.camera_items(camera).unwrap().len(), 2);
+        let positions: Vec<_> = list
+            .items()
+            .iter()
+            .map(|item| match item.primitive {
+                Primitive::RoundedRect { rect, .. } => rect.x,
+                _ => unreachable!(),
+            })
+            .collect();
+        assert_eq!(positions, [10.0, 20.0, 15.0, 25.0, 30.0, 35.0]);
+
+        assert!(list.remove_widget_fragment(second));
+        assert!(!list.remove_widget_fragment(second));
+        assert_eq!(list.item_count(), 5);
+        assert_eq!(list.items().len(), 5);
+    }
+
+    #[test]
+    fn same_z_overlapping_fragment_items_keep_local_and_cross_fragment_order() {
+        let mut app = App::new();
+        app.add_plugins(BuiRenderPlugin);
+        let first = app.world_mut().spawn_empty().id();
+        let second = app.world_mut().spawn_empty().id();
+        let mut back = rect_item(3, 0.0);
+        if let Primitive::RoundedRect { color, .. } = &mut back.primitive {
+            *color = Rgba(1.0, 0.0, 0.0, 1.0);
+        }
+        let mut front = rect_item(3, 0.0);
+        if let Primitive::RoundedRect { color, .. } = &mut front.primitive {
+            *color = Rgba(0.0, 1.0, 0.0, 1.0);
+        }
+        {
+            let mut list = app.world_mut().resource_mut::<DisplayList>();
+            list.upsert_widget_fragment(widget_fragment(
+                first,
+                10,
+                None,
+                vec![back.clone(), front.clone()],
+            ));
+            list.upsert_widget_fragment(widget_fragment(second, 20, None, vec![rect_item(3, 0.0)]));
+        }
+        app.update();
+        let labels = |app: &App| {
+            let cache = app.world().resource::<RenderCache>();
+            [
+                cache.items[&RenderKey::WidgetFragment(first, 0)].local_z,
+                cache.items[&RenderKey::WidgetFragment(first, 1)].local_z,
+                cache.items[&RenderKey::WidgetFragment(second, 0)].local_z,
+            ]
+        };
+        let initial = labels(&app);
+        assert!(initial[0] < initial[1] && initial[1] < initial[2]);
+
+        if let Primitive::RoundedRect { color, .. } = &mut front.primitive {
+            *color = Rgba(0.0, 0.0, 1.0, 1.0);
+        }
+        app.world_mut()
+            .resource_mut::<DisplayList>()
+            .upsert_widget_fragment(widget_fragment(first, 10, None, vec![back, front]));
+        app.update();
+        let updated = labels(&app);
+        assert!(updated[0] < updated[1] && updated[1] < updated[2]);
+        assert_eq!(updated[2], initial[2], "other fragment labels stay stable");
+    }
+
+    #[test]
+    fn one_keyed_fragment_edit_scans_only_its_draw_keys_across_ten_thousand_fragments() {
+        const FRAGMENT_COUNT: usize = 10_000;
+        let mut app = App::new();
+        app.add_plugins(BuiRenderPlugin);
+        let entities: Vec<_> = (0..FRAGMENT_COUNT)
+            .map(|_| app.world_mut().spawn_empty().id())
+            .collect();
+        {
+            let mut display_list = app.world_mut().resource_mut::<DisplayList>();
+            for (index, entity) in entities.iter().copied().enumerate() {
+                display_list.upsert_widget_fragment(widget_fragment(
+                    entity,
+                    index as u64 + 1,
+                    None,
+                    vec![rect_item(5, index as f32)],
+                ));
+            }
+        }
+        app.update();
+        assert_eq!(
+            app.world().resource::<DisplayList>().item_count(),
+            FRAGMENT_COUNT
+        );
+        assert_eq!(
+            app.world().resource::<RenderCache>().items.len(),
+            FRAGMENT_COUNT
+        );
+        assert_eq!(app.world().resource::<RenderSyncStats>().full_syncs, 1);
+
+        let stable_key = RenderKey::WidgetFragment(entities[0], 0);
+        let stable_node = cached_single_node(app.world().resource::<RenderCache>(), stable_key);
+        let stable_local_z = app.world().resource::<RenderCache>().items[&stable_key].local_z;
+        {
+            let mut display_list = app.world_mut().resource_mut::<DisplayList>();
+            display_list.upsert_widget_fragment(widget_fragment(
+                entities[FRAGMENT_COUNT - 1],
+                FRAGMENT_COUNT as u64,
+                None,
+                vec![rect_item(5, -20.0)],
+            ));
+        }
+        app.update();
+        let stats = *app.world().resource::<RenderSyncStats>();
+        assert_eq!(
+            stats.full_syncs, 1,
+            "content-only fragment edits stay incremental"
+        );
+        assert_eq!(stats.incremental_syncs, 1);
+        assert_eq!(
+            stats.scanned_draw_keys, 2,
+            "only the old and new fragment key are visited"
+        );
+        assert_eq!(stats.updated_render_entries, 2);
+        assert_eq!(
+            cached_single_node(app.world().resource::<RenderCache>(), stable_key),
+            stable_node,
+            "unchanged fragments retain their Bevy nodes"
+        );
+        assert_eq!(
+            app.world().resource::<RenderCache>().items[&stable_key].local_z,
+            stable_local_z,
+            "sparse order labels keep existing siblings in place"
+        );
+
+        app.update();
+        let idle_stats = *app.world().resource::<RenderSyncStats>();
+        assert_eq!(idle_stats.scanned_draw_keys, 0);
+        assert_eq!(idle_stats.updated_render_entries, 0);
+
+        {
+            let mut display_list = app.world_mut().resource_mut::<DisplayList>();
+            display_list.upsert_widget_fragment(widget_fragment(
+                entities[FRAGMENT_COUNT - 1],
+                FRAGMENT_COUNT as u64,
+                None,
+                vec![rect_item(-5, -20.0), rect_item(5, 2.0), rect_item(8, 3.0)],
+            ));
+        }
+        app.update();
+        assert_eq!(app.world().resource::<RenderSyncStats>().full_syncs, 1);
+        assert_eq!(
+            app.world().resource::<RenderSyncStats>().scanned_draw_keys,
+            4
+        );
+        assert_eq!(
+            app.world().resource::<DisplayList>().item_count(),
+            FRAGMENT_COUNT + 2
+        );
+        assert_eq!(
+            app.world().resource::<RenderCache>().items
+                [&RenderKey::WidgetFragment(entities[FRAGMENT_COUNT - 1], 0,)]
+                .item
+                .z,
+            -5,
+            "z changes update the affected fragment's GlobalZIndex"
+        );
+
+        let inserted = app.world_mut().spawn_empty().id();
+        let old_label = stable_local_z;
+        app.world_mut()
+            .resource_mut::<DisplayList>()
+            .upsert_widget_fragment(widget_fragment(
+                inserted,
+                0,
+                None,
+                vec![rect_item(5, 900.0), rect_item(5, 901.0)],
+            ));
+        app.update();
+        assert_eq!(
+            app.world().resource::<RenderSyncStats>().scanned_draw_keys,
+            2
+        );
+        assert_eq!(
+            app.world().resource::<RenderCache>().items[&stable_key].local_z,
+            old_label,
+            "inserting before many fragments leaves existing order labels unchanged"
+        );
+        assert!(
+            app.world().resource::<RenderCache>().items[&RenderKey::WidgetFragment(inserted, 0)]
+                .local_z
+                < old_label
+        );
+
+        app.world_mut()
+            .resource_mut::<DisplayList>()
+            .remove_widget_fragment(entities[FRAGMENT_COUNT - 1]);
+        app.update();
+        assert_eq!(
+            app.world().resource::<RenderSyncStats>().scanned_draw_keys,
+            3
+        );
+        assert_eq!(
+            app.world().resource::<DisplayList>().item_count(),
+            FRAGMENT_COUNT + 1
+        );
+        assert!(
+            !app.world()
+                .resource::<RenderCache>()
+                .items
+                .contains_key(&RenderKey::WidgetFragment(entities[FRAGMENT_COUNT - 1], 0))
+        );
+    }
+
+    #[test]
+    fn keyed_fragment_batch_updates_keep_a_large_graph_in_one_gpu_batch() {
+        const CURVE_COUNT: usize = 4_000;
+        let mut app = App::new();
+        app.insert_resource(Assets::<BezierMaterial>::default());
+        app.insert_resource(Assets::<BezierBatchMaterial>::default());
+        app.insert_resource(Assets::<ShaderBuffer>::default());
+        app.add_plugins(BuiRenderPlugin);
+        let entity = app.world_mut().spawn_empty().id();
+        let clip = ClipRect {
+            x: 0.0,
+            y: 0.0,
+            width: 1200.0,
+            height: 800.0,
+        };
+        let make_items = |color: Rgba| {
+            (0..CURVE_COUNT)
+                .map(|index| {
+                    let x = (index % 100) as f32 * 10.0;
+                    let y = (index / 100) as f32 * 18.0;
+                    DrawItem {
+                        clip,
+                        z: 7,
+                        primitive: Primitive::Bezier {
+                            points: [
+                                [x, y],
+                                [x + 30.0, y + 18.0],
+                                [x + 50.0, y - 12.0],
+                                [x + 80.0, y + 2.0],
+                            ],
+                            width: 1.5,
+                            color,
+                        },
+                    }
+                })
+                .collect::<Vec<_>>()
+        };
+        app.world_mut()
+            .resource_mut::<DisplayList>()
+            .upsert_widget_fragment(widget_fragment(
+                entity,
+                0,
+                None,
+                make_items(Rgba(0.2, 0.75, 0.9, 1.0)),
+            ));
+        app.update();
+        assert_eq!(
+            app.world().resource::<RenderCache>().fragment_batches[&entity].len(),
+            1
+        );
+        assert_eq!(
+            app.world().resource::<RenderCache>().bezier_batches.len(),
+            1
+        );
+        assert_eq!(
+            app.world().resource::<Assets<BezierBatchMaterial>>().len(),
+            1
+        );
+        assert_eq!(app.world().resource::<Assets<ShaderBuffer>>().len(), 3);
+        let mut query = app
+            .world_mut()
+            .query_filtered::<Entity, With<MaterialNode<BezierBatchMaterial>>>();
+        let first_batch = query.single(app.world()).unwrap();
+        assert_eq!(query.iter(app.world()).count(), 1);
+
+        let batch_key = app.world().resource::<RenderCache>().fragment_batches[&entity][0];
+        let (first_material, first_segments, first_curves, first_tiles) = {
+            let cache = app.world().resource::<RenderCache>();
+            let batch = &cache.bezier_batches[&batch_key];
+            (
+                batch.material.id(),
+                batch.segments.id(),
+                batch.curves.id(),
+                batch.tile_indices.id(),
+            )
+        };
+
+        let mut updated = make_items(Rgba(0.2, 0.75, 0.9, 1.0));
+        updated[CURVE_COUNT / 2].primitive = match updated[CURVE_COUNT / 2].primitive.clone() {
+            Primitive::Bezier { points, width, .. } => Primitive::Bezier {
+                points,
+                width,
+                color: Rgba(0.9, 0.1, 0.2, 1.0),
+            },
+            _ => unreachable!(),
+        };
+        app.world_mut()
+            .resource_mut::<DisplayList>()
+            .upsert_widget_fragment(widget_fragment(entity, 0, None, updated));
+        app.update();
+        assert_eq!(
+            app.world().resource::<RenderCache>().fragment_batches[&entity].len(),
+            1
+        );
+        assert_eq!(
+            app.world().resource::<RenderCache>().bezier_batches.len(),
+            1
+        );
+        assert_eq!(app.world().resource::<RenderSyncStats>().full_syncs, 1);
+        assert_eq!(
+            app.world().resource::<Assets<BezierBatchMaterial>>().len(),
+            1
+        );
+        assert_eq!(app.world().resource::<Assets<ShaderBuffer>>().len(), 3);
+        assert_eq!(
+            app.world()
+                .resource::<RenderSyncStats>()
+                .updated_render_entries,
+            1
+        );
+        let updated_batch = &app.world().resource::<RenderCache>().bezier_batches[&batch_key];
+        assert_eq!(updated_batch.material.id(), first_material);
+        assert_eq!(updated_batch.segments.id(), first_segments);
+        assert_eq!(updated_batch.curves.id(), first_curves);
+        assert_eq!(updated_batch.tile_indices.id(), first_tiles);
+        let mut query = app
+            .world_mut()
+            .query_filtered::<Entity, With<MaterialNode<BezierBatchMaterial>>>();
+        assert_eq!(query.single(app.world()).unwrap(), first_batch);
+        assert_eq!(query.iter(app.world()).count(), 1);
+    }
+
+    #[test]
+    fn bezier_batch_stops_at_global_z_boundary() {
+        let mut app = App::new();
+        app.insert_resource(Assets::<BezierMaterial>::default());
+        app.insert_resource(Assets::<BezierBatchMaterial>::default());
+        app.insert_resource(Assets::<ShaderBuffer>::default());
+        app.add_plugins(BuiRenderPlugin);
+        let clip = ClipRect {
+            x: 0.0,
+            y: 0.0,
+            width: 100.0,
+            height: 80.0,
+        };
+        let bezier = |z, offset| DrawItem {
+            clip,
+            z,
+            primitive: Primitive::Bezier {
+                points: [
+                    [offset, 10.0],
+                    [offset + 20.0, 30.0],
+                    [offset + 40.0, 20.0],
+                    [offset + 60.0, 40.0],
+                ],
+                width: 2.0,
+                color: Rgba(0.4, 0.6, 0.8, 1.0),
+            },
+        };
+        app.world_mut()
+            .resource_mut::<DisplayList>()
+            .replace_widget_items(vec![bezier(1, 0.0), bezier(2, 10.0)]);
+        app.update();
+        let cache = app.world().resource::<RenderCache>();
+        assert!(cache.bezier_batches.is_empty());
+        assert_eq!(cache.items.len(), 2);
+        assert_eq!(cache.items[&RenderKey::WidgetDisplayListIndex(0)].item.z, 1);
+        assert_eq!(cache.items[&RenderKey::WidgetDisplayListIndex(1)].item.z, 2);
     }
 
     #[test]
@@ -2535,7 +4837,8 @@ mod tests {
                 cache.clip_groups[&cache.items[&key].clip_group.unwrap()].entity,
             )
         };
-        assert_eq!(app.world().get::<ZIndex>(second_entity), Some(&ZIndex(1)));
+        let second_local_z = *app.world().get::<ZIndex>(second_entity).unwrap();
+        assert_eq!(second_local_z, ZIndex(900_000_001));
 
         let mut moved_first = first;
         moved_first.z = 3;
@@ -2544,7 +4847,14 @@ mod tests {
             .replace_widget_items(vec![moved_first, rect_item(2, 50.0)]);
         app.update();
         assert!(app.world().entities().contains(second_entity));
-        assert_eq!(app.world().get::<ZIndex>(second_entity), Some(&ZIndex(0)));
+        assert_eq!(
+            app.world().get::<ZIndex>(second_entity),
+            Some(&second_local_z)
+        );
+        assert_eq!(
+            app.world().get::<GlobalZIndex>(second_entity),
+            Some(&GlobalZIndex(2))
+        );
         assert!(app.world().entities().contains(group));
     }
 
@@ -2781,6 +5091,91 @@ mod tests {
     }
 
     #[test]
+    fn one_image_registry_change_updates_only_its_keyed_fragment() {
+        const FRAGMENT_COUNT: usize = 10_000;
+        let mut app = App::new();
+        app.insert_resource(Assets::<Image>::default());
+        app.add_plugins(BuiRenderPlugin);
+        let (first_image, second_image) = {
+            let mut images = app.world_mut().resource_mut::<Assets<Image>>();
+            (images.add(Image::default()), images.add(Image::default()))
+        };
+        let entities: Vec<_> = (0..FRAGMENT_COUNT)
+            .map(|_| app.world_mut().spawn_empty().id())
+            .collect();
+        let clip = ClipRect {
+            x: 0.0,
+            y: 0.0,
+            width: 120.0,
+            height: 80.0,
+        };
+        for (index, entity) in entities.iter().copied().enumerate() {
+            let asset_id = index as u64 + 1;
+            app.world_mut()
+                .resource_mut::<ImageRegistry>()
+                .insert(asset_id, first_image.clone());
+            app.world_mut()
+                .resource_mut::<DisplayList>()
+                .upsert_widget_fragment(widget_fragment(
+                    entity,
+                    index as u64,
+                    None,
+                    vec![DrawItem {
+                        clip,
+                        z: 2,
+                        primitive: Primitive::Image {
+                            rect: ClipRect {
+                                x: index as f32,
+                                y: 1.0,
+                                width: 12.0,
+                                height: 12.0,
+                            },
+                            asset_id,
+                        },
+                    }],
+                ));
+        }
+        app.update();
+        let stable_key = RenderKey::WidgetFragment(entities[0], 0);
+        let stable_node = cached_single_node(app.world().resource::<RenderCache>(), stable_key);
+        let changed_entity = entities[FRAGMENT_COUNT - 1];
+        let changed_key = RenderKey::WidgetFragment(changed_entity, 0);
+        let initial_node = cached_single_node(app.world().resource::<RenderCache>(), changed_key);
+
+        app.world_mut()
+            .resource_mut::<ImageRegistry>()
+            .insert(u64::MAX, second_image.clone());
+        app.update();
+        assert_eq!(
+            app.world().resource::<RenderSyncStats>().scanned_draw_keys,
+            0
+        );
+
+        app.world_mut()
+            .resource_mut::<ImageRegistry>()
+            .insert(FRAGMENT_COUNT as u64, second_image.clone());
+        app.update();
+        let stats = *app.world().resource::<RenderSyncStats>();
+        assert_eq!(stats.full_syncs, 1);
+        assert_eq!(stats.scanned_draw_keys, 2);
+        assert_eq!(stats.updated_render_entries, 2);
+        assert_eq!(
+            cached_single_node(app.world().resource::<RenderCache>(), stable_key),
+            stable_node
+        );
+        let new_node = cached_single_node(app.world().resource::<RenderCache>(), changed_key);
+        assert_ne!(new_node, initial_node);
+        assert_eq!(
+            app.world().get::<ImageNode>(new_node).unwrap().image.id(),
+            second_image.id()
+        );
+        assert_eq!(
+            app.world().resource::<RenderCache>().image_users[&(FRAGMENT_COUNT as u64)].len(),
+            1
+        );
+    }
+
+    #[test]
     fn repeated_theme_and_clip_changes_keep_render_cache_bounded() {
         let mut app = App::new();
         app.insert_resource(Theme::default());
@@ -3011,6 +5406,161 @@ mod tests {
             child_z.1,
             text_z.1
         );
+    }
+
+    #[test]
+    fn reparenting_invalidates_only_the_rendered_subtree() {
+        const STATIC_COUNT: usize = 256;
+        let mut app = App::new();
+        app.add_plugins(BuiRenderPlugin);
+        let source_parent = app.world_mut().spawn(bui_core::UiNode).id();
+        let destination_root = app.world_mut().spawn(bui_core::UiNode).id();
+        let destination_middle = app.world_mut().spawn(bui_core::UiNode).id();
+        let destination_parent = app.world_mut().spawn(bui_core::UiNode).id();
+        bui_core::set_parent(app.world_mut(), destination_middle, destination_root).unwrap();
+        bui_core::set_parent(app.world_mut(), destination_parent, destination_middle).unwrap();
+
+        let make_painted = |world: &mut bevy::prelude::World| {
+            world
+                .spawn((
+                    bui_core::UiNode,
+                    UiPaint(Primitive::RoundedRect {
+                        rect: ClipRect {
+                            x: 0.0,
+                            y: 0.0,
+                            width: 20.0,
+                            height: 20.0,
+                        },
+                        radius: 0.0,
+                        color: Rgba(0.4, 0.5, 0.6, 1.0),
+                    }),
+                    UiLayoutResult {
+                        window: Entity::PLACEHOLDER,
+                        rect: Rect::new(0.0, 0.0, 20.0, 20.0),
+                        clip: None,
+                        z: 0,
+                        content_size: [20.0, 20.0],
+                        dpi_scale: 1.0,
+                    },
+                ))
+                .id()
+        };
+        let moving = make_painted(app.world_mut());
+        let descendant = make_painted(app.world_mut());
+        bui_core::set_parent(app.world_mut(), descendant, moving).unwrap();
+        bui_core::set_parent(app.world_mut(), moving, source_parent).unwrap();
+        let static_entities: Vec<_> = (0..STATIC_COUNT)
+            .map(|_| make_painted(app.world_mut()))
+            .collect();
+
+        app.update();
+        let moving_key = RenderKey::LayoutEntity(moving);
+        let descendant_key = RenderKey::LayoutEntity(descendant);
+        let stable_key = RenderKey::LayoutEntity(static_entities[0]);
+        let (moving_node, descendant_node, stable_node, original_depth_order) = {
+            let cache = app.world().resource::<RenderCache>();
+            (
+                cached_single_node(cache, moving_key),
+                cached_single_node(cache, descendant_key),
+                cached_single_node(cache, stable_key),
+                (
+                    cache.layout_entity_order_keys[&moving].depth,
+                    cache.layout_entity_order_keys[&descendant].depth,
+                ),
+            )
+        };
+        assert_eq!(original_depth_order, (1, 2));
+
+        bui_core::set_parent(app.world_mut(), moving, destination_parent).unwrap();
+        app.update();
+
+        let stats = *app.world().resource::<RenderSyncStats>();
+        assert_eq!(stats.full_syncs, 1, "a reparent stays scoped");
+        assert_eq!(stats.incremental_syncs, 1);
+        assert_eq!(
+            stats.scanned_draw_keys, 2,
+            "only the moved subtree is visited"
+        );
+        let cache = app.world().resource::<RenderCache>();
+        assert_eq!(
+            cache.parents_by_entity.get(&moving),
+            Some(&destination_parent)
+        );
+        assert_eq!(cache.layout_entity_order_keys[&moving].depth, 3);
+        assert_eq!(cache.layout_entity_order_keys[&descendant].depth, 4);
+        assert_eq!(cached_single_node(cache, moving_key), moving_node);
+        assert_eq!(cached_single_node(cache, descendant_key), descendant_node);
+        assert_eq!(cached_single_node(cache, stable_key), stable_node);
+    }
+
+    #[test]
+    fn camera_presence_changes_invalidate_only_layouts_for_that_window() {
+        const ITEMS_PER_WINDOW: usize = 32;
+        let mut app = App::new();
+        app.add_plugins(BuiRenderPlugin);
+        let first_window = app.world_mut().spawn_empty().id();
+        let second_window = app.world_mut().spawn_empty().id();
+        let make_painted = |world: &mut bevy::prelude::World, window| {
+            world
+                .spawn((
+                    UiPaint(Primitive::RoundedRect {
+                        rect: ClipRect {
+                            x: 0.0,
+                            y: 0.0,
+                            width: 20.0,
+                            height: 20.0,
+                        },
+                        radius: 0.0,
+                        color: Rgba(0.4, 0.5, 0.6, 1.0),
+                    }),
+                    UiLayoutResult {
+                        window,
+                        rect: Rect::new(0.0, 0.0, 20.0, 20.0),
+                        clip: None,
+                        z: 0,
+                        content_size: [20.0, 20.0],
+                        dpi_scale: 1.0,
+                    },
+                ))
+                .id()
+        };
+        let first_items: Vec<_> = (0..ITEMS_PER_WINDOW)
+            .map(|_| make_painted(app.world_mut(), first_window))
+            .collect();
+        let second_items: Vec<_> = (0..ITEMS_PER_WINDOW)
+            .map(|_| make_painted(app.world_mut(), second_window))
+            .collect();
+        app.update();
+
+        let stable_key = RenderKey::LayoutEntity(second_items[0]);
+        let stable_node = cached_single_node(app.world().resource::<RenderCache>(), stable_key);
+        app.world_mut()
+            .entity_mut(first_window)
+            .insert(Camera::default());
+        app.update();
+        let stats = *app.world().resource::<RenderSyncStats>();
+        assert_eq!(stats.full_syncs, 1, "camera addition stays window-scoped");
+        assert_eq!(stats.incremental_syncs, 1);
+        assert_eq!(stats.scanned_draw_keys, ITEMS_PER_WINDOW);
+        let cache = app.world().resource::<RenderCache>();
+        assert_eq!(
+            cache.items[&RenderKey::LayoutEntity(first_items[0])].target_camera,
+            Some(first_window)
+        );
+        assert_eq!(cached_single_node(cache, stable_key), stable_node);
+
+        app.world_mut().entity_mut(first_window).remove::<Camera>();
+        app.update();
+        let stats = *app.world().resource::<RenderSyncStats>();
+        assert_eq!(stats.full_syncs, 1, "camera removal stays window-scoped");
+        assert_eq!(stats.incremental_syncs, 2);
+        assert_eq!(stats.scanned_draw_keys, ITEMS_PER_WINDOW);
+        let cache = app.world().resource::<RenderCache>();
+        assert_eq!(
+            cache.items[&RenderKey::LayoutEntity(first_items[0])].target_camera,
+            None
+        );
+        assert_eq!(cached_single_node(cache, stable_key), stable_node);
     }
 
     #[test]
@@ -3289,6 +5839,117 @@ mod tests {
     }
 
     #[test]
+    fn direct_bezier_topology_edit_rebuilds_only_its_batch_boundary() {
+        const CURVE_COUNT: usize = 16;
+        const STATIC_COUNT: usize = 256;
+        let mut app = App::new();
+        app.insert_resource(Assets::<BezierMaterial>::default());
+        app.insert_resource(Assets::<BezierBatchMaterial>::default());
+        app.insert_resource(Assets::<ShaderBuffer>::default());
+        app.add_plugins(BuiRenderPlugin);
+        let clip = ClipRect {
+            x: 0.0,
+            y: 0.0,
+            width: 200.0,
+            height: 80.0,
+        };
+        let mut curves = Vec::new();
+        for index in 0..CURVE_COUNT {
+            let x = index as f32 * 8.0;
+            curves.push(
+                app.world_mut()
+                    .spawn((
+                        UiPaint(Primitive::Bezier {
+                            points: [[x, 10.0], [x + 2.0, 12.0], [x + 4.0, 8.0], [x + 6.0, 10.0]],
+                            width: 1.5,
+                            color: Rgba(0.2, 0.75, 0.9, 1.0),
+                        }),
+                        UiLayoutResult {
+                            window: Entity::PLACEHOLDER,
+                            rect: Rect::new(0.0, 0.0, 180.0, 40.0),
+                            clip: Some(Rect::new(clip.x, clip.y, clip.width, clip.height)),
+                            z: 0,
+                            content_size: [180.0, 40.0],
+                            dpi_scale: 1.0,
+                        },
+                    ))
+                    .id(),
+            );
+        }
+        let static_entities: Vec<_> = (0..STATIC_COUNT)
+            .map(|index| {
+                app.world_mut()
+                    .spawn((
+                        UiPaint(Primitive::RoundedRect {
+                            rect: clip,
+                            radius: 0.0,
+                            color: Rgba(0.4, 0.5, 0.6, 1.0),
+                        }),
+                        UiLayoutResult {
+                            window: Entity::PLACEHOLDER,
+                            rect: Rect::new(index as f32, 0.0, 1.0, 1.0),
+                            clip: Some(Rect::new(clip.x, clip.y, clip.width, clip.height)),
+                            z: 0,
+                            content_size: [1.0, 1.0],
+                            dpi_scale: 1.0,
+                        },
+                    ))
+                    .id()
+            })
+            .collect();
+        app.update();
+
+        let changed = curves[CURVE_COUNT / 2];
+        let stable_key = RenderKey::LayoutEntity(static_entities[0]);
+        let (old_batch_entity, stable_node) = {
+            let mut query = app
+                .world_mut()
+                .query_filtered::<Entity, With<MaterialNode<BezierBatchMaterial>>>();
+            (
+                query.single(app.world()).unwrap(),
+                cached_single_node(app.world().resource::<RenderCache>(), stable_key),
+            )
+        };
+        app.world_mut()
+            .entity_mut(changed)
+            .insert(UiPaint(Primitive::RoundedRect {
+                rect: clip,
+                radius: 2.0,
+                color: Rgba(0.9, 0.2, 0.1, 1.0),
+            }));
+        app.update();
+
+        let stats = *app.world().resource::<RenderSyncStats>();
+        assert_eq!(
+            stats.full_syncs, 1,
+            "a local batch boundary stays incremental"
+        );
+        assert_eq!(stats.incremental_syncs, 1);
+        assert_eq!(stats.scanned_draw_keys, CURVE_COUNT + 1);
+        let mut query = app
+            .world_mut()
+            .query_filtered::<Entity, With<MaterialNode<BezierBatchMaterial>>>();
+        let batch_entities: HashSet<_> = query.iter(app.world()).collect();
+        assert_eq!(batch_entities.len(), 2);
+        assert!(!batch_entities.contains(&old_batch_entity));
+        assert_eq!(
+            app.world().resource::<RenderCache>().bezier_batches.len(),
+            2
+        );
+        assert_eq!(
+            cached_single_node(app.world().resource::<RenderCache>(), stable_key),
+            stable_node,
+            "items outside the affected batch keep their Bevy nodes"
+        );
+        assert!(
+            app.world()
+                .resource::<RenderCache>()
+                .items
+                .contains_key(&RenderKey::LayoutEntity(changed))
+        );
+    }
+
+    #[test]
     fn four_thousand_beziers_share_batched_render_and_release_gpu_assets() {
         const CURVE_COUNT: usize = 4_000;
         let mut app = App::new();
@@ -3308,7 +5969,7 @@ mod tests {
                 let y = (index / 100) as f32 * 18.0;
                 DrawItem {
                     clip,
-                    z: index as i32,
+                    z: 0,
                     primitive: Primitive::Bezier {
                         points: [
                             [x, y],

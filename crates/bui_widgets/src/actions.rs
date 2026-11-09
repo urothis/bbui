@@ -24,9 +24,10 @@ use crate::{
 use bevy_app::{App, Update};
 use bevy_asset::Assets;
 use bevy_ecs::change_detection::Mut;
-use bevy_ecs::lifecycle::Remove;
+use bevy_ecs::lifecycle::{Add, Remove};
 use bevy_ecs::observer::On;
 use bevy_ecs::prelude::*;
+use bevy_ecs::system::SystemParam;
 use bevy_text::{Font, FontCx, FontSize, LayoutCx, LineBreak, LineHeight, TextFont, TextPipeline};
 use bui_core::{
     TextSelection, UiChildren, UiDirty, UiDirtyBatch, UiDirtyDomain, UiEnabled, UiFocus,
@@ -35,7 +36,9 @@ use bui_core::{
     detach_from_parent, is_interactable, is_interactable_in_window, set_parent,
 };
 use bui_layout::{Rect, UiLayoutNode, UiLayoutResult, UiLayoutRoot, UiWheelHandled};
-use bui_render::{ClipRect, DisplayList, DrawItem, Primitive, TextRenderStyle};
+use bui_render::{
+    ClipRect, DisplayList, DrawItem, Primitive, TextRenderStyle, WidgetRenderFragment,
+};
 use bui_style::{
     Rgba, Theme, ThemeColorToken, ThemeMotionToken, UiClasses, UiComputedStyle, UiInlineStyle,
     UiRole, UiStyleProperty, UiStyleSheet, UiStyleState, UiStyleValue, set_ui_style_state,
@@ -656,9 +659,6 @@ impl WidgetInteractionState {
     }
 }
 
-#[derive(Resource, Debug, Default)]
-struct WidgetPaintCameras(HashSet<Entity>);
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct FocusTargetSnapshot {
     window: Entity,
@@ -667,22 +667,24 @@ struct FocusTargetSnapshot {
     captured: Option<Entity>,
 }
 
-#[derive(Debug, Default)]
-struct WidgetPaintFragment {
-    camera: Option<Entity>,
-    items: Vec<DrawItem>,
-}
-
 struct PaintFragmentGuard<'a> {
-    fragments: &'a mut HashMap<Entity, WidgetPaintFragment>,
+    fragment_entities: &'a mut HashSet<Entity>,
+    changed_outputs: &'a mut HashMap<Entity, WidgetRenderFragment>,
+    removed_fragments: &'a mut HashSet<Entity>,
     entity: Entity,
-    fragment: WidgetPaintFragment,
+    fragment: Option<WidgetRenderFragment>,
 }
 
 impl Drop for PaintFragmentGuard<'_> {
     fn drop(&mut self) {
-        self.fragments
-            .insert(self.entity, std::mem::take(&mut self.fragment));
+        let Some(fragment) = self.fragment.take() else {
+            return;
+        };
+        if !fragment.items.is_empty() {
+            self.removed_fragments.remove(&self.entity);
+            self.fragment_entities.insert(self.entity);
+            self.changed_outputs.insert(self.entity, fragment);
+        }
     }
 }
 
@@ -693,12 +695,18 @@ struct WidgetPaintCache {
     focus_active_window: Option<Entity>,
     focus_targets: Vec<FocusTargetSnapshot>,
     interaction_targets: HashSet<Entity>,
-    fragments: HashMap<Entity, WidgetPaintFragment>,
-    paint_ranks: HashMap<Entity, usize>,
-    painted_order: BTreeMap<usize, Entity>,
+    fragments: HashSet<Entity>,
+    paint_ranks: HashMap<Entity, u64>,
+    paint_order_keys: BTreeMap<u64, Entity>,
+    paint_children: HashMap<Entity, Vec<Entity>>,
+    paint_roots: BTreeMap<u32, Entity>,
+    paint_parents: HashMap<Entity, Entity>,
+    pending_parent_changes: HashSet<Entity>,
+    pending_children_changes: HashSet<Entity>,
     skipped_frames: u64,
     rebuilt_frames: u64,
     repainted_entities: usize,
+    published_fragments: usize,
 }
 
 #[derive(Resource, Debug, Default)]
@@ -814,7 +822,6 @@ pub fn install_widget_systems(app: &mut App) {
         .init_resource::<ClipboardRequestQueue>()
         .init_resource::<CursorCaptureRequestQueue>()
         .init_resource::<WidgetInteractionState>()
-        .init_resource::<WidgetPaintCameras>()
         .init_resource::<WidgetPaintCache>()
         .init_resource::<UiDirty>()
         .init_resource::<WidgetFileBrowserItems>()
@@ -864,12 +871,7 @@ pub fn install_widget_systems(app: &mut App) {
     }
     register_paint_removals!(
         UiNode,
-        UiParent,
-        UiChildren,
-        UiEnabled,
-        UiVisible,
         UiLayoutResult,
-        UiLayoutRoot,
         UiComputedStyle,
         UiRole,
         UiTextLayout,
@@ -923,11 +925,190 @@ pub fn install_widget_systems(app: &mut App) {
         crate::PanelGroup,
         RadioOptionControl,
     );
+    app.add_observer(mark_widget_parent_removed);
+    app.add_observer(mark_widget_children_removed);
+    app.add_observer(mark_widget_layout_root_removed);
+    app.add_observer(remove_widget_paint_layout_rank);
+    app.add_observer(prune_widget_paint_root);
+    app.add_observer(mark_inherited_paint_component_removed::<UiEnabled>);
+    app.add_observer(mark_inherited_paint_component_removed::<UiVisible>);
+    app.add_observer(mark_widget_paint_camera_added);
+    app.add_observer(mark_widget_paint_camera_removed);
 }
 
 fn mark_paint_component_removed<T: Component>(on: On<Remove<T>>, mut dirty: ResMut<UiDirty>) {
     dirty.mark(UiDirtyDomain::Paint, on.entity);
     dirty.mark(UiDirtyDomain::Accessibility, on.entity);
+}
+
+fn mark_inherited_paint_component_removed<T: Component>(
+    on: On<Remove<T>>,
+    children: Query<'_, '_, &'static UiChildren>,
+    mut dirty: ResMut<UiDirty>,
+) {
+    mark_widget_paint_subtree(on.entity, &children, &mut dirty);
+}
+
+fn mark_widget_parent_removed(
+    on: On<Remove<UiParent>>,
+    children: Query<'_, '_, &'static UiChildren>,
+    mut dirty: ResMut<UiDirty>,
+    mut cache: ResMut<WidgetPaintCache>,
+) {
+    cache.pending_parent_changes.insert(on.entity);
+    mark_widget_paint_subtree(on.entity, &children, &mut dirty);
+}
+
+#[expect(
+    clippy::type_complexity,
+    reason = "the observer checks the remaining hierarchy component set"
+)]
+fn mark_widget_children_removed(
+    on: On<Remove<UiChildren>>,
+    children: Query<'_, '_, &'static UiChildren>,
+    remaining: Query<
+        Entity,
+        Or<(
+            With<UiNode>,
+            With<UiParent>,
+            With<UiChildren>,
+            With<UiLayoutResult>,
+        )>,
+    >,
+    mut dirty: ResMut<UiDirty>,
+    mut cache: ResMut<WidgetPaintCache>,
+) {
+    cache.pending_children_changes.insert(on.entity);
+    dirty.mark(UiDirtyDomain::Paint, on.entity);
+    dirty.mark(UiDirtyDomain::Accessibility, on.entity);
+    if let Some(previous_children) = cache.paint_children.get(&on.entity) {
+        for child in previous_children {
+            mark_widget_paint_subtree(*child, &children, &mut dirty);
+        }
+    }
+    if remaining.get(on.entity).is_err() {
+        prune_widget_order_cache(on.entity, &mut cache);
+    }
+}
+
+fn mark_widget_layout_root_removed(
+    on: On<Remove<UiLayoutRoot>>,
+    children: Query<'_, '_, &'static UiChildren>,
+    mut dirty: ResMut<UiDirty>,
+) {
+    mark_widget_paint_subtree(on.entity, &children, &mut dirty);
+}
+
+fn remove_widget_paint_layout_rank(
+    on: On<Remove<UiLayoutResult>>,
+    mut cache: ResMut<WidgetPaintCache>,
+) {
+    if let Some(rank) = cache.paint_ranks.remove(&on.entity) {
+        cache.paint_order_keys.remove(&rank);
+    }
+}
+
+#[expect(
+    clippy::type_complexity,
+    reason = "the observer checks the remaining hierarchy component set"
+)]
+fn prune_widget_paint_root(
+    on: On<Remove<UiNode>>,
+    remaining: Query<
+        Entity,
+        Or<(
+            With<UiNode>,
+            With<UiParent>,
+            With<UiChildren>,
+            With<UiLayoutResult>,
+        )>,
+    >,
+    mut cache: ResMut<WidgetPaintCache>,
+) {
+    if remaining.get(on.entity).is_ok() {
+        return;
+    }
+    prune_widget_order_cache(on.entity, &mut cache);
+}
+
+fn prune_widget_order_cache(entity: Entity, cache: &mut WidgetPaintCache) {
+    if cache.paint_roots.get(&entity.index_u32()) == Some(&entity) {
+        cache.paint_roots.remove(&entity.index_u32());
+    }
+    if let Some(rank) = cache.paint_ranks.remove(&entity) {
+        cache.paint_order_keys.remove(&rank);
+    }
+}
+
+fn mark_widget_paint_subtree(
+    root: Entity,
+    children: &Query<'_, '_, &'static UiChildren>,
+    dirty: &mut UiDirty,
+) {
+    let mut pending = vec![root];
+    let mut visited = HashSet::new();
+    while let Some(entity) = pending.pop() {
+        if !visited.insert(entity) {
+            continue;
+        }
+        dirty.mark(UiDirtyDomain::Paint, entity);
+        dirty.mark(UiDirtyDomain::Accessibility, entity);
+        if let Ok(children) = children.get(entity) {
+            pending.extend(children.0.iter().copied());
+        }
+    }
+}
+
+fn widget_paint_subtree(world: &World, root: Entity) -> HashSet<Entity> {
+    let mut pending = vec![root];
+    let mut visited = HashSet::new();
+    while let Some(entity) = pending.pop() {
+        if !visited.insert(entity) {
+            continue;
+        }
+        if let Some(children) = world.get::<UiChildren>(entity) {
+            pending.extend(children.0.iter().copied());
+        }
+    }
+    visited
+}
+
+fn mark_menu_paint_subtree(world: &mut World, owner: Entity) {
+    let mut affected = widget_paint_subtree(world, owner);
+    if let Some(menu) = world.get::<MenuControl>(owner) {
+        for item in &menu.items {
+            affected.extend(widget_paint_subtree(world, *item));
+        }
+    }
+    if let Some(mut dirty) = world.get_resource_mut::<UiDirty>() {
+        for entity in affected {
+            dirty.mark(UiDirtyDomain::Paint, entity);
+        }
+    }
+}
+
+fn mark_widget_paint_camera_removed(
+    on: On<Remove<bevy_camera::Camera>>,
+    layouts: Query<(Entity, &UiLayoutResult)>,
+    mut dirty: ResMut<UiDirty>,
+) {
+    for (entity, layout) in &layouts {
+        if layout.window == on.entity {
+            dirty.mark(UiDirtyDomain::Paint, entity);
+        }
+    }
+}
+
+fn mark_widget_paint_camera_added(
+    on: On<Add<bevy_camera::Camera>>,
+    layouts: Query<(Entity, &UiLayoutResult)>,
+    mut dirty: ResMut<UiDirty>,
+) {
+    for (entity, layout) in &layouts {
+        if layout.window == on.entity {
+            dirty.mark(UiDirtyDomain::Paint, entity);
+        }
+    }
 }
 
 /// Recompute text geometry after widget synchronization and before paint.
@@ -8634,7 +8815,8 @@ fn advance_menu_animations_by(world: &mut World, delta_seconds: f32) {
         (delta_seconds.max(0.0) * motion_scale / duration).clamp(0.0, 1.0)
     };
 
-    let mut next = world.resource::<WidgetMenuAnimations>().clone();
+    let previous = world.resource::<WidgetMenuAnimations>().clone();
+    let mut next = previous.clone();
     next.0.retain(|entity, _| live.contains(entity));
     for (entity, open, anchor, popup) in menus {
         let Some(state) = next.0.get_mut(&entity) else {
@@ -8669,7 +8851,17 @@ fn advance_menu_animations_by(world: &mut World, delta_seconds: f32) {
     }
     next.0
         .retain(|_, state| state.target_open || state.progress > f32::EPSILON);
-    if *world.resource::<WidgetMenuAnimations>() != next {
+    if previous != next {
+        let changed_owners: HashSet<_> = previous
+            .0
+            .keys()
+            .chain(next.0.keys())
+            .copied()
+            .filter(|owner| previous.0.get(owner) != next.0.get(owner))
+            .collect();
+        for owner in changed_owners {
+            mark_menu_paint_subtree(world, owner);
+        }
         *world.resource_mut::<WidgetMenuAnimations>() = next;
     }
 }
@@ -11241,6 +11433,20 @@ fn styled_theme(world: &World, entity: Entity, base: &Theme) -> Theme {
     theme
 }
 
+#[expect(
+    clippy::type_complexity,
+    reason = "Bevy change filters enumerate inherited paint state"
+)]
+#[derive(SystemParam)]
+struct WidgetPaintInvalidations<'w, 's> {
+    parent_changes: Query<'w, 's, Entity, Changed<UiParent>>,
+    children_changes: Query<'w, 's, Entity, Changed<UiChildren>>,
+    root_changes: Query<'w, 's, Entity, Changed<UiLayoutRoot>>,
+    inherited_state: Query<'w, 's, Entity, Or<(Changed<UiEnabled>, Changed<UiVisible>)>>,
+    children: Query<'w, 's, &'static UiChildren>,
+    canvases: Query<'w, 's, Entity, With<Canvas>>,
+}
+
 /// Rebuild the shared draw list from current widget state and the completed layout pass.
 #[expect(
     clippy::type_complexity,
@@ -11251,16 +11457,7 @@ fn styled_theme(world: &World, entity: Entity, base: &Theme) -> Theme {
     reason = "Bevy injects the independent widget queries"
 )]
 fn collect_widget_paint_changes(
-    structural: Query<
-        Entity,
-        Or<(
-            Changed<UiParent>,
-            Changed<UiChildren>,
-            Changed<UiEnabled>,
-            Changed<UiVisible>,
-            Changed<UiLayoutRoot>,
-        )>,
-    >,
+    invalidations: WidgetPaintInvalidations,
     base: Query<
         Entity,
         Or<(
@@ -11364,7 +11561,6 @@ fn collect_widget_paint_changes(
     >,
     theme: Res<Theme>,
     interaction: Res<WidgetInteractionState>,
-    menus: Res<WidgetMenuAnimations>,
     focus: Option<Res<UiFocus>>,
     canvas_images: Option<Res<crate::canvas::CanvasImageAssets>>,
     mut cache: ResMut<WidgetPaintCache>,
@@ -11404,14 +11600,36 @@ fn collect_widget_paint_changes(
         }
         cache.interaction_targets = targets;
     }
-    if !structural.is_empty()
-        || theme.is_changed()
-        || menus.is_changed()
-        || canvas_images
-            .as_ref()
-            .is_some_and(|images| images.is_changed())
-    {
+    let topology_changed = !invalidations.parent_changes.is_empty()
+        || !invalidations.children_changes.is_empty()
+        || !invalidations.root_changes.is_empty();
+    if topology_changed {
+        cache
+            .pending_parent_changes
+            .extend(invalidations.parent_changes.iter());
+        cache
+            .pending_children_changes
+            .extend(invalidations.children_changes.iter());
+    }
+    for entity in &invalidations.parent_changes {
+        mark_widget_paint_subtree(entity, &invalidations.children, &mut dirty);
+    }
+    for entity in &invalidations.root_changes {
+        mark_widget_paint_subtree(entity, &invalidations.children, &mut dirty);
+    }
+    if theme.is_changed() {
         dirty.mark_all(UiDirtyDomain::Paint);
+    }
+    for entity in &invalidations.inherited_state {
+        mark_widget_paint_subtree(entity, &invalidations.children, &mut dirty);
+    }
+    if canvas_images
+        .as_ref()
+        .is_some_and(|images| images.is_changed())
+    {
+        for entity in &invalidations.canvases {
+            dirty.mark(UiDirtyDomain::Paint, entity);
+        }
     }
     for entity in &base {
         dirty.mark(UiDirtyDomain::Paint, entity);
@@ -11454,28 +11672,698 @@ pub fn collect_widget_paint(world: &mut World) {
     collect_widget_paint_full(world, Some(input_stamp), None);
 }
 
+fn widget_paint_order(world: &World, layout_entities: &[Entity]) -> Vec<Entity> {
+    let layout_entities: HashSet<_> = layout_entities.iter().copied().collect();
+    let mut nodes: Vec<_> = world
+        .iter_entities()
+        .filter(|entity| {
+            entity.contains::<UiNode>()
+                || entity.contains::<UiParent>()
+                || entity.contains::<UiChildren>()
+                || entity.contains::<UiLayoutResult>()
+        })
+        .map(|entity| entity.id())
+        .collect();
+    nodes.sort_unstable_by_key(|entity| entity.index());
+    nodes.dedup();
+    let node_set: HashSet<_> = nodes.iter().copied().collect();
+
+    let mut children_by_parent: HashMap<Entity, Vec<Entity>> = HashMap::new();
+    let mut assigned_parent = HashSet::new();
+    for parent in &nodes {
+        let Some(children) = world.get::<UiChildren>(*parent) else {
+            continue;
+        };
+        for child in &children.0 {
+            if node_set.contains(child) && assigned_parent.insert(*child) {
+                children_by_parent.entry(*parent).or_default().push(*child);
+            }
+        }
+    }
+    for child in &nodes {
+        let Some(parent) = world.get::<UiParent>(*child).map(|parent| parent.0) else {
+            continue;
+        };
+        if node_set.contains(&parent) && assigned_parent.insert(*child) {
+            children_by_parent.entry(parent).or_default().push(*child);
+        }
+    }
+
+    let roots: Vec<_> = nodes
+        .iter()
+        .copied()
+        .filter(|entity| !assigned_parent.contains(entity))
+        .collect();
+    let mut ordered = Vec::with_capacity(layout_entities.len());
+    let mut visited = HashSet::with_capacity(nodes.len());
+    for start in roots.iter().chain(nodes.iter()) {
+        if visited.contains(start) {
+            continue;
+        }
+        let mut pending = vec![*start];
+        while let Some(entity) = pending.pop() {
+            if !visited.insert(entity) {
+                continue;
+            }
+            if layout_entities.contains(&entity) {
+                ordered.push(entity);
+            }
+            if let Some(children) = children_by_parent.get(&entity) {
+                pending.extend(children.iter().rev().copied());
+            }
+        }
+    }
+    ordered
+}
+
+fn widget_root_order(world: &World) -> BTreeMap<u32, Entity> {
+    let mut nodes: Vec<_> = world
+        .iter_entities()
+        .filter(|entity| {
+            entity.contains::<UiNode>()
+                || entity.contains::<UiParent>()
+                || entity.contains::<UiChildren>()
+                || entity.contains::<UiLayoutResult>()
+        })
+        .map(|entity| entity.id())
+        .collect();
+    nodes.sort_unstable_by_key(|entity| entity.index());
+    nodes.dedup();
+    let node_set: HashSet<_> = nodes.iter().copied().collect();
+    let mut assigned_parent = HashSet::new();
+    for parent in &nodes {
+        if let Some(children) = world.get::<UiChildren>(*parent) {
+            assigned_parent.extend(
+                children
+                    .0
+                    .iter()
+                    .copied()
+                    .filter(|child| node_set.contains(child)),
+            );
+        }
+    }
+    for child in &nodes {
+        if let Some(parent) = world.get::<UiParent>(*child).map(|parent| parent.0)
+            && node_set.contains(&parent)
+        {
+            assigned_parent.insert(*child);
+        }
+    }
+    nodes
+        .into_iter()
+        .filter(|entity| !assigned_parent.contains(entity))
+        .map(|entity| (entity.index_u32(), entity))
+        .collect()
+}
+
+fn widget_subtree_paint_order(world: &World, root: Entity) -> Vec<Entity> {
+    let mut ordered = Vec::new();
+    let mut visited = HashSet::new();
+    let mut pending = vec![root];
+    while let Some(entity) = pending.pop() {
+        if !visited.insert(entity) {
+            continue;
+        }
+        if world.get::<UiLayoutResult>(entity).is_some() {
+            ordered.push(entity);
+        }
+        if let Some(children) = world.get::<UiChildren>(entity) {
+            pending.extend(children.0.iter().rev().copied());
+        }
+    }
+    ordered
+}
+
+fn widget_children_snapshot(world: &World) -> HashMap<Entity, Vec<Entity>> {
+    let mut children: HashMap<_, _> = world
+        .iter_entities()
+        .filter_map(|entity| {
+            entity
+                .get::<UiChildren>()
+                .map(|children| (entity.id(), children.0.clone()))
+        })
+        .collect();
+    let mut assigned = HashSet::new();
+    for list in children.values() {
+        assigned.extend(list.iter().copied());
+    }
+    let mut fallback: HashMap<Entity, Vec<Entity>> = HashMap::new();
+    let mut parented: Vec<_> = world
+        .iter_entities()
+        .filter_map(|entity| {
+            entity
+                .get::<UiParent>()
+                .map(|parent| (entity.id(), parent.0))
+        })
+        .collect();
+    parented.sort_unstable_by_key(|(child, _)| child.index());
+    for (child, parent) in parented {
+        if !assigned.contains(&child) {
+            fallback.entry(parent).or_default().push(child);
+        }
+    }
+    for (parent, children_without_list) in fallback {
+        let list = children.entry(parent).or_default();
+        list.extend(children_without_list);
+    }
+    children
+}
+
+fn widget_parent_snapshot(world: &World) -> HashMap<Entity, Entity> {
+    world
+        .iter_entities()
+        .filter_map(|entity| {
+            entity
+                .get::<UiParent>()
+                .map(|parent| (entity.id(), parent.0))
+        })
+        .collect()
+}
+
+fn widget_subtree_rank_bounds(
+    world: &World,
+    root: Entity,
+    ranks: &HashMap<Entity, u64>,
+) -> Option<(u64, u64)> {
+    widget_subtree_paint_order(world, root)
+        .iter()
+        .filter_map(|entity| ranks.get(entity).copied())
+        .fold(None, |bounds, rank| {
+            Some(bounds.map_or((rank, rank), |(start, end): (u64, u64)| {
+                (start.min(rank), end.max(rank))
+            }))
+        })
+}
+
+fn assign_widget_rank_block(
+    subtree: &[Entity],
+    previous_ranks: &HashMap<Entity, u64>,
+    lower: u64,
+    upper: u64,
+    ranks: &mut HashMap<Entity, u64>,
+    order_keys: &mut BTreeMap<u64, Entity>,
+) -> HashSet<Entity> {
+    let mut left_selected = Vec::new();
+    let mut right_selected = Vec::new();
+    let mut left = order_keys
+        .range(..=lower)
+        .next_back()
+        .map(|(rank, entity)| (*rank, *entity));
+    let mut right = order_keys
+        .range(upper..)
+        .next()
+        .map(|(rank, entity)| (*rank, *entity));
+    let mut floor = left.map_or(0, |(rank, _)| rank);
+    let mut ceiling = right.map_or(u64::MAX, |(rank, _)| rank);
+
+    loop {
+        let needed = left_selected.len() + subtree.len() + right_selected.len();
+        let gap = (ceiling as u128)
+            .checked_sub(floor as u128)
+            .unwrap_or_else(|| {
+                panic!("invalid widget order interval: lower={floor}, upper={ceiling}")
+            });
+        if gap > needed as u128 {
+            break;
+        }
+        if let Some((rank, entity)) = left {
+            left_selected.push((rank, entity));
+            left = order_keys
+                .range(..rank)
+                .next_back()
+                .map(|(rank, entity)| (*rank, *entity));
+            floor = left.map_or(0, |(rank, _)| rank);
+        } else if let Some((rank, entity)) = right {
+            right_selected.push((rank, entity));
+            right = order_keys
+                .range((std::ops::Bound::Excluded(rank), std::ops::Bound::Unbounded))
+                .next()
+                .map(|(rank, entity)| (*rank, *entity));
+            ceiling = right.map_or(u64::MAX, |(rank, _)| rank);
+        } else {
+            unreachable!("u64 rank interval can always fit a finite widget set");
+        }
+    }
+
+    let mut relabel: Vec<_> = left_selected.iter().rev().copied().collect();
+    relabel.extend(subtree.iter().map(|entity| (0, *entity)));
+    relabel.extend(right_selected.iter().copied());
+    for (rank, entity) in left_selected.iter().chain(right_selected.iter()) {
+        order_keys.remove(rank);
+        ranks.remove(entity);
+    }
+    let step = ((ceiling as u128 - floor as u128) / (relabel.len() as u128 + 1)) as u64;
+    debug_assert!(step > 0);
+
+    let mut changed = HashSet::new();
+    for (index, (_, entity)) in relabel.iter().enumerate() {
+        let rank = floor.saturating_add(step.saturating_mul(index as u64 + 1));
+        debug_assert!(!order_keys.contains_key(&rank));
+        ranks.insert(*entity, rank);
+        order_keys.insert(rank, *entity);
+        if previous_ranks.get(entity) != Some(&rank) {
+            changed.insert(*entity);
+        }
+    }
+    changed
+}
+
+fn move_widget_paint_subtree(
+    world: &World,
+    root: Entity,
+    parent: Option<Entity>,
+    ranks: &mut HashMap<Entity, u64>,
+    order_keys: &mut BTreeMap<u64, Entity>,
+    children_snapshot: &HashMap<Entity, Vec<Entity>>,
+    roots: &mut BTreeMap<u32, Entity>,
+) -> HashSet<Entity> {
+    let subtree = widget_subtree_paint_order(world, root);
+    if subtree.is_empty() {
+        return HashSet::new();
+    }
+    let previous_ranks: HashMap<_, _> = subtree
+        .iter()
+        .filter_map(|entity| ranks.get(entity).map(|rank| (*entity, *rank)))
+        .collect();
+    for entity in &subtree {
+        if let Some(rank) = ranks.remove(entity) {
+            order_keys.remove(&rank);
+        }
+    }
+
+    if parent.is_some() {
+        if roots.get(&root.index_u32()) == Some(&root) {
+            roots.remove(&root.index_u32());
+        }
+    } else {
+        roots.insert(root.index_u32(), root);
+    }
+    let (previous_sibling, next_sibling) = if let Some(parent) = parent {
+        let fallback_siblings;
+        let siblings = if let Some(children) = world.get::<UiChildren>(parent) {
+            children.0.as_slice()
+        } else {
+            fallback_siblings = children_snapshot
+                .get(&parent)
+                .map(Vec::as_slice)
+                .unwrap_or_default();
+            fallback_siblings
+        };
+        let sibling_index = siblings.iter().position(|sibling| *sibling == root);
+        let previous = sibling_index.and_then(|index| {
+            siblings[..index]
+                .iter()
+                .rev()
+                .find_map(|sibling| widget_subtree_rank_bounds(world, *sibling, ranks))
+        });
+        let next = sibling_index.and_then(|index| {
+            siblings[index + 1..]
+                .iter()
+                .find_map(|sibling| widget_subtree_rank_bounds(world, *sibling, ranks))
+        });
+        (previous, next)
+    } else {
+        let previous = roots
+            .range(..root.index_u32())
+            .rev()
+            .find_map(|(_, sibling)| widget_subtree_rank_bounds(world, *sibling, ranks));
+        let next = roots
+            .range((
+                std::ops::Bound::Excluded(root.index_u32()),
+                std::ops::Bound::Unbounded,
+            ))
+            .find_map(|(_, sibling)| widget_subtree_rank_bounds(world, *sibling, ranks));
+        (previous, next)
+    };
+
+    let (lower, upper) = match (previous_sibling, next_sibling) {
+        (Some((_, end)), Some((start, _))) => (end, start),
+        (Some((_, end)), None) => {
+            let upper = order_keys
+                .range((std::ops::Bound::Excluded(end), std::ops::Bound::Unbounded))
+                .next()
+                .map(|(rank, _)| *rank)
+                .unwrap_or(u64::MAX);
+            (end, upper)
+        }
+        (None, Some((start, _))) => {
+            let lower =
+                if let Some(parent_rank) = parent.and_then(|parent| ranks.get(&parent).copied()) {
+                    parent_rank
+                } else if let Some(parent) = parent {
+                    let mut top = parent;
+                    while let Some(ancestor) = world.get::<UiParent>(top).map(|parent| parent.0) {
+                        top = ancestor;
+                    }
+                    roots
+                        .range(..top.index_u32())
+                        .rev()
+                        .find_map(|(_, root)| widget_subtree_rank_bounds(world, *root, ranks))
+                        .map_or(0, |(_, end)| end)
+                } else {
+                    0
+                };
+            (lower, start)
+        }
+        (None, None) => {
+            let parent_rank = parent.and_then(|parent| ranks.get(&parent).copied());
+            if let Some(parent_rank) = parent_rank {
+                let upper = order_keys
+                    .range((
+                        std::ops::Bound::Excluded(parent_rank),
+                        std::ops::Bound::Unbounded,
+                    ))
+                    .next()
+                    .map(|(rank, _)| *rank)
+                    .unwrap_or(u64::MAX);
+                (parent_rank, upper)
+            } else if let Some(parent) = parent {
+                let mut top = parent;
+                while let Some(ancestor) = world.get::<UiParent>(top).map(|parent| parent.0) {
+                    top = ancestor;
+                }
+                let previous_root = roots
+                    .range(..top.index_u32())
+                    .rev()
+                    .find_map(|(_, root)| widget_subtree_rank_bounds(world, *root, ranks));
+                let next_root = roots
+                    .range((
+                        std::ops::Bound::Excluded(top.index_u32()),
+                        std::ops::Bound::Unbounded,
+                    ))
+                    .find_map(|(_, root)| widget_subtree_rank_bounds(world, *root, ranks));
+                match (previous_root, next_root) {
+                    (Some((_, end)), Some((start, _))) => (end, start),
+                    (Some((_, end)), None) => {
+                        let upper = order_keys
+                            .range((std::ops::Bound::Excluded(end), std::ops::Bound::Unbounded))
+                            .next()
+                            .map(|(rank, _)| *rank)
+                            .unwrap_or(u64::MAX);
+                        (end, upper)
+                    }
+                    (None, Some((start, _))) => {
+                        let lower = order_keys
+                            .range(..start)
+                            .next_back()
+                            .map(|(rank, _)| *rank)
+                            .unwrap_or(0);
+                        (lower, start)
+                    }
+                    (None, None) => (0, u64::MAX),
+                }
+            } else {
+                (0, u64::MAX)
+            }
+        }
+    };
+    assert!(
+        lower <= upper,
+        "widget rank interval reversed for {root:?} under {parent:?}: {lower}..{upper}; ui_parent={:?}; ui_children={:?}; ranks={:?}",
+        world.get::<UiParent>(root),
+        parent
+            .and_then(|parent| world.get::<UiChildren>(parent))
+            .map(|children| &children.0),
+        parent
+            .and_then(|parent| world.get::<UiChildren>(parent))
+            .map(|children| children
+                .0
+                .iter()
+                .map(|sibling| (*sibling, widget_subtree_rank_bounds(world, *sibling, ranks)))
+                .collect::<Vec<_>>())
+    );
+    assign_widget_rank_block(&subtree, &previous_ranks, lower, upper, ranks, order_keys)
+}
+
+fn changed_sibling_roots(old: &[Entity], current: &[Entity]) -> HashSet<Entity> {
+    let current_set: HashSet<_> = current.iter().copied().collect();
+    let old_positions: HashMap<_, _> = old
+        .iter()
+        .enumerate()
+        .map(|(position, entity)| (*entity, position))
+        .collect();
+    let mut tails: Vec<usize> = Vec::new();
+    let mut tail_indices: Vec<usize> = Vec::new();
+    let mut previous = vec![None; current.len()];
+    for (index, entity) in current.iter().enumerate() {
+        let Some(position) = old_positions.get(entity).copied() else {
+            continue;
+        };
+        let insertion = tails.partition_point(|tail| *tail < position);
+        if insertion > 0 {
+            previous[index] = Some(tail_indices[insertion - 1]);
+        }
+        if insertion == tails.len() {
+            tails.push(position);
+            tail_indices.push(index);
+        } else {
+            tails[insertion] = position;
+            tail_indices[insertion] = index;
+        }
+    }
+    let mut retained = vec![false; current.len()];
+    let mut cursor = tail_indices.last().copied();
+    while let Some(index) = cursor {
+        retained[index] = true;
+        cursor = previous[index];
+    }
+    current
+        .iter()
+        .enumerate()
+        .filter_map(|(index, entity)| (!retained[index]).then_some(*entity))
+        .chain(
+            old.iter()
+                .filter(|entity| !current_set.contains(entity))
+                .copied(),
+        )
+        .collect()
+}
+
+fn current_widget_parent(
+    world: &World,
+    entity: Entity,
+    previous_parent: Option<Entity>,
+) -> Option<Entity> {
+    let parent = world.get::<UiParent>(entity).map(|parent| parent.0);
+    if let Some(parent) = parent
+        && world
+            .get::<UiChildren>(parent)
+            .is_some_and(|children| children.0.contains(&entity))
+    {
+        return Some(parent);
+    }
+    if let Some(previous_parent) = previous_parent
+        && world
+            .get::<UiChildren>(previous_parent)
+            .is_some_and(|children| children.0.contains(&entity))
+    {
+        return Some(previous_parent);
+    }
+    parent.filter(|parent| world.get_entity(*parent).is_ok())
+}
+
+fn current_widget_children(
+    world: &World,
+    parent: Entity,
+    previous: &[Entity],
+    parent_snapshot: &HashMap<Entity, Entity>,
+) -> Vec<Entity> {
+    let mut current = world
+        .get::<UiChildren>(parent)
+        .map(|children| children.0.clone())
+        .unwrap_or_default();
+    let mut fallback: Vec<_> = previous
+        .iter()
+        .copied()
+        .filter(|child| parent_snapshot.get(child) == Some(&parent) && !current.contains(child))
+        .collect();
+    fallback.sort_unstable_by_key(|child| child.index());
+    current.extend(fallback);
+    current
+}
+
+fn update_parent_child_snapshot(
+    world: &World,
+    parent: Entity,
+    child: Entity,
+    add: bool,
+    children_snapshot: &mut HashMap<Entity, Vec<Entity>>,
+) {
+    if let Some(children) = world.get::<UiChildren>(parent) {
+        children_snapshot.insert(parent, children.0.clone());
+        return;
+    }
+    let siblings = children_snapshot.entry(parent).or_default();
+    if add {
+        if !siblings.contains(&child) {
+            let insertion = siblings.partition_point(|sibling| sibling.index() < child.index());
+            siblings.insert(insertion, child);
+        }
+    } else {
+        siblings.retain(|sibling| *sibling != child);
+    }
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the local order update mutates separate caches without scanning peers"
+)]
+fn reconcile_widget_paint_order_local(
+    world: &World,
+    parent_changes: &HashSet<Entity>,
+    children_changes: &HashSet<Entity>,
+    missing_entities: &[Entity],
+    ranks: &mut HashMap<Entity, u64>,
+    order_keys: &mut BTreeMap<u64, Entity>,
+    children_snapshot: &mut HashMap<Entity, Vec<Entity>>,
+    roots: &mut BTreeMap<u32, Entity>,
+    parent_snapshot: &mut HashMap<Entity, Entity>,
+) -> HashSet<Entity> {
+    let mut changed = HashSet::new();
+    let moved_roots: HashSet<_> = parent_changes
+        .iter()
+        .copied()
+        .chain(missing_entities.iter().copied())
+        .collect();
+    let mut moved_roots_ordered: Vec<_> = moved_roots.iter().copied().collect();
+    moved_roots_ordered.sort_by_key(|root| {
+        let parent = current_widget_parent(world, *root, parent_snapshot.get(root).copied());
+        let sibling_position = parent
+            .and_then(|parent| children_snapshot.get(&parent))
+            .and_then(|children| children.iter().position(|sibling| sibling == root))
+            .unwrap_or(usize::MAX);
+        (
+            parent.map_or(root.index(), Entity::index),
+            sibling_position,
+            root.index(),
+        )
+    });
+    // Free the full moved set before assigning any one rank. This makes a
+    // multi-sibling permutation allocate into the final shared interval instead
+    // of treating another soon-to-move sibling's stale rank as an anchor.
+    for root in &moved_roots_ordered {
+        for entity in widget_subtree_paint_order(world, *root) {
+            if let Some(rank) = ranks.remove(&entity) {
+                order_keys.remove(&rank);
+            }
+        }
+    }
+    for root in &moved_roots_ordered {
+        let old_parent = parent_snapshot.get(root).copied();
+        let new_parent = current_widget_parent(world, *root, old_parent);
+        if old_parent != new_parent {
+            if let Some(parent) = old_parent {
+                update_parent_child_snapshot(world, parent, *root, false, children_snapshot);
+            }
+            if let Some(parent) = new_parent {
+                update_parent_child_snapshot(world, parent, *root, true, children_snapshot);
+                parent_snapshot.insert(*root, parent);
+            } else {
+                parent_snapshot.remove(root);
+            }
+        }
+        changed.extend(move_widget_paint_subtree(
+            world,
+            *root,
+            new_parent,
+            ranks,
+            order_keys,
+            children_snapshot,
+            roots,
+        ));
+    }
+
+    let mut ordered_parents: Vec<_> = children_changes.iter().copied().collect();
+    ordered_parents.sort_unstable_by_key(|parent| parent.index());
+    for parent in ordered_parents {
+        let old = children_snapshot.get(&parent).cloned().unwrap_or_default();
+        let current = current_widget_children(world, parent, &old, parent_snapshot);
+        let mut reordered_roots: Vec<_> =
+            changed_sibling_roots(&old, &current).into_iter().collect();
+        reordered_roots.sort_by_key(|root| {
+            current
+                .iter()
+                .position(|candidate| candidate == root)
+                .or_else(|| old.iter().position(|candidate| candidate == root))
+                .unwrap_or(usize::MAX)
+        });
+        for root in reordered_roots
+            .iter()
+            .filter(|root| !moved_roots.contains(root))
+        {
+            for entity in widget_subtree_paint_order(world, *root) {
+                if let Some(rank) = ranks.remove(&entity) {
+                    order_keys.remove(&rank);
+                }
+            }
+        }
+        for root in reordered_roots {
+            if !moved_roots.contains(&root) {
+                changed.extend(move_widget_paint_subtree(
+                    world,
+                    root,
+                    current_widget_parent(world, root, parent_snapshot.get(&root).copied()),
+                    ranks,
+                    order_keys,
+                    children_snapshot,
+                    roots,
+                ));
+            }
+        }
+        if current.is_empty() {
+            children_snapshot.remove(&parent);
+        } else {
+            children_snapshot.insert(parent, current);
+        }
+    }
+    changed
+}
+
+fn assign_even_paint_ranks(order: &[Entity]) -> HashMap<Entity, u64> {
+    let step = u64::MAX / (order.len() as u64 + 1);
+    order
+        .iter()
+        .enumerate()
+        .map(|(index, entity)| {
+            let rank = step.saturating_mul(index as u64 + 1);
+            (*entity, rank)
+        })
+        .collect()
+}
+
+/// Reconcile hierarchy order while retaining ranks for the longest sequence
+/// that kept its relative order. Reparent/reorder changes therefore republish
+/// only moved fragments plus local neighbors if their rank gap is exhausted.
 fn collect_widget_paint_full(
     world: &mut World,
     input_stamp: Option<u64>,
     batch: Option<UiDirtyBatch>,
 ) {
     let base_theme = world.resource::<Theme>().clone();
-    let (mut fragments, mut paint_ranks, mut painted_order) = {
+    let (
+        mut fragments,
+        mut paint_ranks,
+        mut paint_order_keys,
+        mut paint_children,
+        mut paint_roots,
+        mut paint_parents,
+        parent_changes,
+        children_changes,
+    ) = {
         let mut cache = world.resource_mut::<WidgetPaintCache>();
         (
             std::mem::take(&mut cache.fragments),
             std::mem::take(&mut cache.paint_ranks),
-            std::mem::take(&mut cache.painted_order),
+            std::mem::take(&mut cache.paint_order_keys),
+            std::mem::take(&mut cache.paint_children),
+            std::mem::take(&mut cache.paint_roots),
+            std::mem::take(&mut cache.paint_parents),
+            std::mem::take(&mut cache.pending_parent_changes),
+            std::mem::take(&mut cache.pending_children_changes),
         )
     };
-    let repaint_all = batch.as_ref().is_none_or(|batch| batch.all)
-        || paint_ranks.is_empty()
-        || batch.as_ref().is_some_and(|batch| {
-            batch.entities.iter().any(|entity| {
-                world.get::<UiLayoutResult>(*entity).is_some() && !paint_ranks.contains_key(entity)
-            })
-        });
-    let entities: Vec<_> = if repaint_all {
+    let repaint_all = batch.as_ref().is_none_or(|batch| batch.all) || paint_ranks.is_empty();
+    let mut entities: Vec<_> = if repaint_all {
         let mut query = world.query_filtered::<Entity, With<UiLayoutResult>>();
         query.iter(world).collect()
     } else {
@@ -11484,26 +12372,61 @@ fn collect_widget_paint_full(
             .map(|batch| batch.entities.iter().copied().collect())
             .unwrap_or_default()
     };
+    let mut removed_fragments = HashSet::new();
     if repaint_all {
-        fragments.clear();
-        paint_ranks.clear();
-        painted_order.clear();
-        paint_ranks.extend(
-            entities
-                .iter()
-                .enumerate()
-                .map(|(rank, entity)| (*entity, rank)),
-        );
+        removed_fragments = std::mem::take(&mut fragments);
+        let order = widget_paint_order(world, &entities);
+        paint_ranks = assign_even_paint_ranks(&order);
+        paint_order_keys = paint_ranks
+            .iter()
+            .map(|(entity, rank)| (*rank, *entity))
+            .collect();
+        paint_children = widget_children_snapshot(world);
+        paint_roots = widget_root_order(world);
+        paint_parents = widget_parent_snapshot(world);
+    } else {
+        let missing_entities: Vec<_> = batch
+            .as_ref()
+            .into_iter()
+            .flat_map(|batch| batch.entities.iter().copied())
+            .filter(|entity| {
+                world.get::<UiLayoutResult>(*entity).is_some() && !paint_ranks.contains_key(entity)
+            })
+            .collect();
+        if !parent_changes.is_empty()
+            || !children_changes.is_empty()
+            || !missing_entities.is_empty()
+        {
+            let changed_order = reconcile_widget_paint_order_local(
+                world,
+                &parent_changes,
+                &children_changes,
+                &missing_entities,
+                &mut paint_ranks,
+                &mut paint_order_keys,
+                &mut paint_children,
+                &mut paint_roots,
+                &mut paint_parents,
+            );
+            let mut included: HashSet<_> = entities.iter().copied().collect();
+            for entity in changed_order {
+                if fragments.contains(&entity) && included.insert(entity) {
+                    entities.push(entity);
+                }
+            }
+        }
     }
+    let mut changed_outputs = HashMap::new();
     let mut repainted_entities = 0;
 
     for &entity in &entities {
-        fragments.remove(&entity);
-        if let Some(rank) = paint_ranks.get(&entity) {
-            painted_order.remove(rank);
+        if fragments.remove(&entity) {
+            removed_fragments.insert(entity);
         }
         if world.get::<UiLayoutResult>(entity).is_none() {
-            paint_ranks.remove(&entity);
+            if let Some(rank) = paint_ranks.remove(&entity) {
+                paint_order_keys.remove(&rank);
+            }
             continue;
         }
         if !is_visible(world, entity) {
@@ -11566,19 +12489,26 @@ fn collect_widget_paint_full(
         let camera = world
             .get::<bevy_camera::Camera>(layout.window)
             .map(|_| layout.window);
+        let order = paint_ranks.get(&entity).copied().unwrap_or_default();
         let mut fragment_guard = PaintFragmentGuard {
-            fragments: &mut fragments,
+            fragment_entities: &mut fragments,
+            changed_outputs: &mut changed_outputs,
+            removed_fragments: &mut removed_fragments,
             entity,
-            fragment: WidgetPaintFragment {
-                camera,
+            fragment: Some(WidgetRenderFragment {
+                entity,
+                order,
+                target_camera: camera,
                 items: Vec::new(),
-            },
+            }),
         };
-        let camera_items = &mut fragment_guard.fragment.items;
+        let camera_items = &mut fragment_guard
+            .fragment
+            .as_mut()
+            .expect("paint fragment is initialized")
+            .items;
         repainted_entities += 1;
-        let enabled = world
-            .get::<bui_core::UiEnabled>(entity)
-            .is_none_or(|enabled| enabled.0);
+        let enabled = is_interactable(world, entity);
 
         if let Some(tooltip) = world.get::<Tooltip>(entity)
             && tooltip.visible
@@ -12703,40 +13633,25 @@ fn collect_widget_paint_full(
         }
     }
 
-    for entity in &entities {
-        if fragments.contains_key(entity)
-            && let Some(rank) = paint_ranks.get(entity)
-        {
-            painted_order.insert(*rank, *entity);
-        }
-    }
-    let mut draw_items: HashMap<Option<Entity>, Vec<DrawItem>> = HashMap::new();
-    for entity in painted_order.values() {
-        if let Some(fragment) = fragments.get(entity) {
-            draw_items
-                .entry(fragment.camera)
-                .or_default()
-                .extend(fragment.items.iter().cloned());
-        }
-    }
-    let previous_cameras = world.resource::<WidgetPaintCameras>().0.clone();
-    let current_cameras: HashSet<_> = draw_items.keys().filter_map(|camera| *camera).collect();
     let mut display_list = world.resource_mut::<DisplayList>();
-    display_list.replace_camera_items(None, draw_items.remove(&None).unwrap_or_default());
-    for camera in previous_cameras.union(&current_cameras).copied() {
-        display_list.replace_camera_items(
-            Some(camera),
-            draw_items.remove(&Some(camera)).unwrap_or_default(),
-        );
+    let mut published_fragments = 0;
+    for (_, fragment) in changed_outputs {
+        published_fragments += usize::from(display_list.upsert_widget_fragment(fragment));
     }
-    world.resource_mut::<WidgetPaintCameras>().0 = current_cameras;
+    for entity in removed_fragments {
+        published_fragments += usize::from(display_list.remove_widget_fragment(entity));
+    }
     let mut cache = world.resource_mut::<WidgetPaintCache>();
     cache.fragments = fragments;
     cache.paint_ranks = paint_ranks;
-    cache.painted_order = painted_order;
+    cache.paint_order_keys = paint_order_keys;
+    cache.paint_children = paint_children;
+    cache.paint_roots = paint_roots;
+    cache.paint_parents = paint_parents;
     cache.input_stamp = input_stamp;
     cache.rebuilt_frames = cache.rebuilt_frames.saturating_add(1);
     cache.repainted_entities = repainted_entities;
+    cache.published_fragments = published_fragments;
 }
 
 fn widget_paint_input_stamp(world: &World) -> u64 {
@@ -18118,19 +19033,51 @@ mod tests {
                 },
             ))
             .id();
-        app.world_mut().spawn((
-            UiNode,
-            Checkbox::new("second", false),
-            UiLayoutResult {
-                window: Entity::PLACEHOLDER,
-                rect: UiRect::new(0.0, 30.0, 120.0, 24.0),
-                clip: None,
-                z: 1,
-                content_size: [120.0, 24.0],
-                dpi_scale: 1.0,
-            },
-        ));
+        let second = app
+            .world_mut()
+            .spawn((
+                UiNode,
+                Checkbox::new("second", false),
+                UiLayoutResult {
+                    window: Entity::PLACEHOLDER,
+                    rect: UiRect::new(0.0, 30.0, 120.0, 24.0),
+                    clip: None,
+                    z: 1,
+                    content_size: [120.0, 24.0],
+                    dpi_scale: 1.0,
+                },
+            ))
+            .id();
         app.update();
+        let fragment_orders: HashMap<_, _> = app
+            .world()
+            .resource::<DisplayList>()
+            .widget_fragments()
+            .values()
+            .map(|fragment| (fragment.entity, fragment.order))
+            .collect();
+        let overlay = item(
+            ClipRect {
+                x: 0.0,
+                y: 0.0,
+                width: 20.0,
+                height: 20.0,
+            },
+            9,
+            Primitive::RoundedRect {
+                rect: ClipRect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 20.0,
+                    height: 20.0,
+                },
+                radius: 2.0,
+                color: Rgba(0.2, 0.3, 0.4, 1.0),
+            },
+        );
+        app.world_mut()
+            .resource_mut::<DisplayList>()
+            .replace_overlay_widget_items(vec![overlay.clone()]);
         assert_eq!(
             app.world()
                 .resource::<WidgetPaintCache>()
@@ -18138,12 +19085,560 @@ mod tests {
             2
         );
         app.world_mut().get_mut::<Checkbox>(first).unwrap().toggle();
+        app.world_mut().resource_mut::<WidgetPaintCache>().prepared = true;
+        app.world_mut()
+            .resource_mut::<UiDirty>()
+            .mark(UiDirtyDomain::Paint, first);
+        collect_widget_paint(app.world_mut());
+        let cache = app.world().resource::<WidgetPaintCache>();
+        assert_eq!(cache.repainted_entities, 1);
+        assert_eq!(
+            cache.published_fragments, 1,
+            "one dirty control publishes only its own changed fragment"
+        );
+        assert_eq!(
+            app.world()
+                .resource::<DisplayList>()
+                .widget_fragments()
+                .get(&first)
+                .map(|fragment| fragment.order),
+            fragment_orders.get(&first).copied()
+        );
+        assert_eq!(
+            app.world()
+                .resource::<DisplayList>()
+                .widget_fragments()
+                .get(&second)
+                .map(|fragment| fragment.order),
+            fragment_orders.get(&second).copied(),
+            "updating one entity keeps its peers at their existing paint ranks"
+        );
+        assert_eq!(
+            app.world().resource::<DisplayList>().overlay_widget_items(),
+            &[overlay],
+            "per-entity widget updates preserve the post-widget overlay layer"
+        );
+    }
+
+    #[test]
+    fn widget_fragment_camera_migration_and_removal_update_only_that_entity() {
+        let mut app = App::new();
+        app.add_plugins(WidgetPlugin);
+        let first_camera = app.world_mut().spawn(bevy_camera::Camera::default()).id();
+        let second_camera = app.world_mut().spawn_empty().id();
+        let migrating = app
+            .world_mut()
+            .spawn((
+                UiNode,
+                Checkbox::new("migrate", false),
+                UiLayoutResult {
+                    window: first_camera,
+                    rect: UiRect::new(0.0, 0.0, 120.0, 24.0),
+                    clip: None,
+                    z: 2,
+                    content_size: [120.0, 24.0],
+                    dpi_scale: 1.0,
+                },
+            ))
+            .id();
+        app.world_mut().spawn((
+            UiNode,
+            Checkbox::new("stays", false),
+            UiLayoutResult {
+                window: first_camera,
+                rect: UiRect::new(0.0, 30.0, 120.0, 24.0),
+                clip: None,
+                z: 1,
+                content_size: [120.0, 24.0],
+                dpi_scale: 1.0,
+            },
+        ));
+
+        app.update();
+        app.world_mut()
+            .get_mut::<UiLayoutResult>(migrating)
+            .unwrap()
+            .window = second_camera;
+        app.update();
+
+        let has_label = |items: &[DrawItem], label: &str| {
+            items.iter().any(
+                |item| matches!(&item.primitive, Primitive::Text { text, .. } if text == label),
+            )
+        };
+        let display_list = app.world().resource::<DisplayList>();
+        assert!(
+            display_list
+                .camera_items(first_camera)
+                .is_some_and(|items| has_label(items, "stays"))
+        );
+        assert!(has_label(display_list.widget_items(), "migrate"));
+        assert!(
+            display_list
+                .camera_items(second_camera)
+                .is_none_or(|items| items.is_empty())
+        );
+        assert_eq!(
+            app.world()
+                .resource::<WidgetPaintCache>()
+                .published_fragments,
+            1,
+            "moving to a window without a camera updates the same entity key"
+        );
+
+        app.world_mut()
+            .entity_mut(second_camera)
+            .insert(bevy_camera::Camera::default());
+        app.update();
+        let display_list = app.world().resource::<DisplayList>();
+        assert!(
+            display_list
+                .camera_items(second_camera)
+                .is_some_and(|items| has_label(items, "migrate"))
+        );
+        assert!(!has_label(display_list.widget_items(), "migrate"));
+        assert_eq!(
+            app.world()
+                .resource::<WidgetPaintCache>()
+                .published_fragments,
+            1,
+            "adding a camera retargets associated widget fragments"
+        );
+
+        app.world_mut()
+            .entity_mut(second_camera)
+            .remove::<bevy_camera::Camera>();
+        app.update();
+        let display_list = app.world().resource::<DisplayList>();
+        assert!(has_label(display_list.widget_items(), "migrate"));
+        assert!(
+            display_list
+                .camera_items(second_camera)
+                .is_none_or(|items| items.is_empty())
+        );
+        assert_eq!(
+            app.world()
+                .resource::<WidgetPaintCache>()
+                .published_fragments,
+            1,
+            "removing a camera retargets associated widget fragments to the screen"
+        );
+
+        app.world_mut().entity_mut(migrating).despawn();
+        app.update();
+        let display_list = app.world().resource::<DisplayList>();
+        assert!(
+            display_list
+                .camera_items(first_camera)
+                .is_some_and(|items| has_label(items, "stays"))
+        );
+        assert!(
+            !has_label(display_list.widget_items(), "migrate"),
+            "despawning a screen-migrated control removes its cached fragment"
+        );
+        assert_eq!(
+            app.world()
+                .resource::<WidgetPaintCache>()
+                .published_fragments,
+            1,
+            "despawning a control removes only its cached fragment"
+        );
+    }
+
+    #[test]
+    fn topology_edits_repaint_only_new_or_reordered_widget_fragments() {
+        let mut app = App::new();
+        app.add_plugins(WidgetPlugin);
+        let first_group = app.world_mut().spawn((UiNode, UiChildren::default())).id();
+        let second_group = app.world_mut().spawn((UiNode, UiChildren::default())).id();
+        let spawn_child = |world: &mut World, parent: Entity, label: &str, y: f32| {
+            world
+                .spawn((
+                    UiNode,
+                    UiParent(parent),
+                    Checkbox::new(label, false),
+                    UiLayoutResult {
+                        window: Entity::PLACEHOLDER,
+                        rect: UiRect::new(0.0, y, 120.0, 24.0),
+                        clip: None,
+                        z: 1,
+                        content_size: [120.0, 24.0],
+                        dpi_scale: 1.0,
+                    },
+                ))
+                .id()
+        };
+        let first = spawn_child(app.world_mut(), first_group, "first", 0.0);
+        let second = spawn_child(app.world_mut(), first_group, "second", 30.0);
+        let third = spawn_child(app.world_mut(), second_group, "third", 60.0);
+        let fourth = spawn_child(app.world_mut(), first_group, "fourth", 45.0);
+        app.world_mut()
+            .get_mut::<UiChildren>(first_group)
+            .unwrap()
+            .0 = vec![first, second, fourth];
+        app.world_mut()
+            .get_mut::<UiChildren>(second_group)
+            .unwrap()
+            .0 = vec![third];
+        for index in 0..10_000 {
+            app.world_mut().spawn((
+                UiNode,
+                Checkbox::new("peer", false),
+                UiLayoutResult {
+                    window: Entity::PLACEHOLDER,
+                    rect: UiRect::new(200.0, index as f32 * 24.0, 20.0, 20.0),
+                    clip: None,
+                    z: 1,
+                    content_size: [20.0, 20.0],
+                    dpi_scale: 1.0,
+                },
+            ));
+        }
+        app.update();
+
+        let added = spawn_child(app.world_mut(), first_group, "added", 90.0);
+        app.world_mut()
+            .get_mut::<UiChildren>(first_group)
+            .unwrap()
+            .0
+            .push(added);
+        app.update();
+        let cache = app.world().resource::<WidgetPaintCache>();
+        assert_eq!(
+            cache.repainted_entities, 1,
+            "mounting a widget paints only it"
+        );
+        assert_eq!(cache.published_fragments, 1);
+        let order = |world: &World, entity| {
+            world
+                .resource::<DisplayList>()
+                .widget_fragments()
+                .get(&entity)
+                .unwrap()
+                .order
+        };
+        assert!(order(app.world(), first) < order(app.world(), second));
+        assert!(order(app.world(), second) < order(app.world(), added));
+        assert!(order(app.world(), fourth) < order(app.world(), added));
+        assert!(
+            order(app.world(), added) < order(app.world(), third),
+            "added rank {} should precede second group rank {}",
+            order(app.world(), added),
+            order(app.world(), third)
+        );
+
+        app.world_mut()
+            .get_mut::<UiChildren>(first_group)
+            .unwrap()
+            .0 = vec![added, first, second];
+        app.update();
+        let cache = app.world().resource::<WidgetPaintCache>();
+        assert_eq!(
+            cache.repainted_entities, 1,
+            "sibling reorder repaints the moved rank"
+        );
+        assert_eq!(cache.published_fragments, 1);
+        assert!(order(app.world(), added) < order(app.world(), first));
+        assert!(order(app.world(), first) < order(app.world(), second));
+
+        app.world_mut()
+            .get_mut::<UiChildren>(first_group)
+            .unwrap()
+            .0 = vec![second, fourth, added, first];
+        app.update();
+        let cache = app.world().resource::<WidgetPaintCache>();
+        assert_eq!(
+            cache.repainted_entities, 2,
+            "a multi-sibling reorder republishes both moved fragments"
+        );
+        assert_eq!(cache.published_fragments, 2);
+        assert!(order(app.world(), second) < order(app.world(), fourth));
+        assert!(order(app.world(), fourth) < order(app.world(), added));
+        assert!(order(app.world(), added) < order(app.world(), first));
+
+        bui_core::set_parent(app.world_mut(), second, second_group).unwrap();
+        app.update();
+        let cache = app.world().resource::<WidgetPaintCache>();
+        assert_eq!(
+            cache.repainted_entities, 1,
+            "reparenting repaints the moved subtree only"
+        );
+        assert_eq!(cache.published_fragments, 1);
+        assert!(order(app.world(), fourth) < order(app.world(), added));
+        assert!(order(app.world(), added) < order(app.world(), first));
+        assert!(order(app.world(), first) < order(app.world(), third));
+        assert!(order(app.world(), third) < order(app.world(), second));
+        assert_eq!(
+            app.world()
+                .resource::<DisplayList>()
+                .widget_fragments()
+                .len(),
+            10_005,
+            "unaffected peers retain their fragments"
+        );
+    }
+
+    #[test]
+    fn local_paint_order_expands_exhausted_rank_gaps_without_collisions() {
+        let mut world = World::new();
+        let first = world.spawn_empty().id();
+        let last = world.spawn_empty().id();
+        let mut ranks = HashMap::from([(first, 100), (last, 101)]);
+        let mut order_keys = BTreeMap::from([(100, first), (101, last)]);
+        let mut inserted = Vec::new();
+        let mut saw_neighbor_rebalance = false;
+
+        for _ in 0..80 {
+            let entity = world.spawn_empty().id();
+            let lower = ranks[&first];
+            let upper = *order_keys
+                .range((std::ops::Bound::Excluded(lower), std::ops::Bound::Unbounded))
+                .next()
+                .expect("the last anchor remains after every insertion")
+                .0;
+            let changed = assign_widget_rank_block(
+                &[entity],
+                &HashMap::new(),
+                lower,
+                upper,
+                &mut ranks,
+                &mut order_keys,
+            );
+            saw_neighbor_rebalance |= changed.len() > 1;
+            inserted.push(entity);
+        }
+
+        let actual: Vec<_> = order_keys.values().copied().collect();
+        let expected: Vec<_> = std::iter::once(first)
+            .chain(inserted.into_iter().rev())
+            .chain(std::iter::once(last))
+            .collect();
+        assert_eq!(
+            actual, expected,
+            "neighbor expansion preserves requested order"
+        );
+        assert!(
+            saw_neighbor_rebalance,
+            "a saturated local gap rebalances neighbors"
+        );
+        assert_eq!(order_keys.len(), ranks.len());
+        for (rank, entity) in &order_keys {
+            assert_eq!(ranks.get(entity), Some(rank));
+        }
+    }
+
+    #[test]
+    fn ten_thousand_peers_only_repaint_for_inherited_state_and_active_menu_changes() {
+        let mut app = App::new();
+        app.add_plugins(WidgetPlugin);
+        app.world_mut().resource_mut::<Theme>().motion.menu_open =
+            std::time::Duration::from_secs(1);
+        let state_root = app
+            .world_mut()
+            .spawn((
+                UiNode,
+                UiEnabled(true),
+                UiVisible(true),
+                UiChildren::default(),
+            ))
+            .id();
+        let visible_child = app
+            .world_mut()
+            .spawn((
+                UiNode,
+                UiParent(state_root),
+                Checkbox::new("visible child", false),
+                UiLayoutResult {
+                    window: Entity::PLACEHOLDER,
+                    rect: UiRect::new(0.0, 0.0, 160.0, 24.0),
+                    clip: None,
+                    z: 1,
+                    content_size: [160.0, 24.0],
+                    dpi_scale: 1.0,
+                },
+            ))
+            .id();
+        let enabled_child = app
+            .world_mut()
+            .spawn((
+                UiNode,
+                UiParent(state_root),
+                Checkbox::new("enabled child", false),
+                UiLayoutResult {
+                    window: Entity::PLACEHOLDER,
+                    rect: UiRect::new(0.0, 30.0, 160.0, 24.0),
+                    clip: None,
+                    z: 1,
+                    content_size: [160.0, 24.0],
+                    dpi_scale: 1.0,
+                },
+            ))
+            .id();
+        app.world_mut()
+            .entity_mut(state_root)
+            .insert(UiChildren(vec![visible_child, enabled_child]));
+        for index in 0..10_000 {
+            app.world_mut().spawn((
+                UiNode,
+                Checkbox::new("", false),
+                UiLayoutResult {
+                    window: Entity::PLACEHOLDER,
+                    rect: UiRect::new(200.0, index as f32 * 24.0, 20.0, 20.0),
+                    clip: None,
+                    z: 1,
+                    content_size: [20.0, 20.0],
+                    dpi_scale: 1.0,
+                },
+            ));
+        }
+
+        app.update();
+        assert_eq!(
+            app.world().resource::<WidgetPaintCache>().fragments.len(),
+            10_002
+        );
+
+        app.world_mut().get_mut::<UiVisible>(state_root).unwrap().0 = false;
+        app.update();
+        let cache = app.world().resource::<WidgetPaintCache>();
+        assert_eq!(cache.repainted_entities, 0);
+        assert_eq!(
+            cache.published_fragments, 2,
+            "hiding a parent removes only its two child fragments"
+        );
+        assert!(
+            !app.world()
+                .resource::<DisplayList>()
+                .widget_fragments()
+                .contains_key(&visible_child)
+        );
+        assert!(
+            !app.world()
+                .resource::<DisplayList>()
+                .widget_fragments()
+                .contains_key(&enabled_child)
+        );
+
+        app.world_mut().get_mut::<UiVisible>(state_root).unwrap().0 = true;
         app.update();
         assert_eq!(
             app.world()
                 .resource::<WidgetPaintCache>()
                 .repainted_entities,
-            1
+            2
+        );
+        assert_eq!(
+            app.world()
+                .resource::<WidgetPaintCache>()
+                .published_fragments,
+            2,
+            "showing a parent republishes only its two child fragments"
+        );
+
+        app.world_mut().get_mut::<UiEnabled>(state_root).unwrap().0 = false;
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<WidgetPaintCache>()
+                .repainted_entities,
+            2
+        );
+        assert_eq!(
+            app.world()
+                .resource::<WidgetPaintCache>()
+                .published_fragments,
+            2,
+            "disabling a parent refreshes only its two child fragments"
+        );
+
+        app.world_mut().get_mut::<UiEnabled>(state_root).unwrap().0 = true;
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<WidgetPaintCache>()
+                .repainted_entities,
+            2
+        );
+        assert_eq!(
+            app.world()
+                .resource::<WidgetPaintCache>()
+                .published_fragments,
+            2
+        );
+
+        let menu = app
+            .world_mut()
+            .spawn((
+                UiNode,
+                MenuControl::new(
+                    "Actions",
+                    crate::MenuTree::new(vec![crate::MenuEntry::command("open", "Open")]),
+                    MenuDisplay::Dropdown,
+                ),
+                UiLayoutResult {
+                    window: Entity::PLACEHOLDER,
+                    rect: UiRect::new(20.0, 20.0, 120.0, 24.0),
+                    clip: None,
+                    z: 2,
+                    content_size: [120.0, 24.0],
+                    dpi_scale: 1.0,
+                },
+                UiChildren::default(),
+            ))
+            .id();
+        let menu_item = app
+            .world_mut()
+            .spawn((
+                UiNode,
+                UiParent(menu),
+                UiVisible(false),
+                MenuItemControl {
+                    owner: menu,
+                    id: "open".to_owned(),
+                    label: "Open".to_owned(),
+                    parent_path: Vec::new(),
+                    index: 0,
+                    enabled: true,
+                    separator: false,
+                    has_submenu: false,
+                    shortcut: None,
+                },
+                UiLayoutResult {
+                    window: Entity::PLACEHOLDER,
+                    rect: UiRect::new(0.0, 0.0, 1.0, 1.0),
+                    clip: None,
+                    z: 0,
+                    content_size: [1.0, 1.0],
+                    dpi_scale: 1.0,
+                },
+            ))
+            .id();
+        app.world_mut()
+            .get_mut::<UiChildren>(menu)
+            .unwrap()
+            .0
+            .push(menu_item);
+        app.world_mut()
+            .get_mut::<MenuControl>(menu)
+            .unwrap()
+            .items
+            .push(menu_item);
+        app.update();
+        app.world_mut()
+            .get_mut::<MenuControl>(menu)
+            .unwrap()
+            .open(None);
+        app.update();
+        app.update();
+
+        let cache = app.world().resource::<WidgetPaintCache>();
+        assert_eq!(
+            cache.repainted_entities, 2,
+            "a menu transition repaints only its owner and item subtree"
+        );
+        assert_eq!(
+            cache.published_fragments, 2,
+            "menu animation output is scoped to the active menu subtree"
         );
     }
 
@@ -18283,6 +19778,13 @@ mod tests {
         assert_ne!(
             dark_items, light_items,
             "theme changes invalidate widget paint"
+        );
+        assert_eq!(
+            app.world()
+                .resource::<WidgetPaintCache>()
+                .published_fragments,
+            3,
+            "a global theme change republishes each affected control fragment"
         );
         assert!(light_items.iter().any(|item| {
             matches!(item.primitive, Primitive::RoundedRect { color, .. } if color == light_theme.surface)

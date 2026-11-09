@@ -358,6 +358,7 @@ pub struct UiLayoutStats {
 struct UiLayoutCache {
     initialized: bool,
     root_configs: HashMap<Entity, UiLayoutRoot>,
+    viewports: HashMap<Entity, UiViewport>,
     root_members: HashMap<Entity, HashSet<Entity>>,
     entity_roots: HashMap<Entity, HashSet<Entity>>,
     input_snapshots: HashMap<Entity, LayoutInputs>,
@@ -376,6 +377,7 @@ struct UiLayoutCache {
 #[derive(Clone, Debug, Default, PartialEq)]
 struct LayoutInputs {
     is_node: bool,
+    root: Option<UiLayoutRoot>,
     layout: Option<UiLayoutNode>,
     intrinsic: Option<UiIntrinsicSize>,
     parent: Option<UiParent>,
@@ -384,6 +386,85 @@ struct LayoutInputs {
     scroll: Option<UiScroll>,
     flex_item: Option<UiFlexItem>,
 }
+
+#[derive(Clone)]
+struct LayoutInputChange {
+    entity: Entity,
+    previous: Option<LayoutInputs>,
+    current: Option<LayoutInputs>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum MeasureKind {
+    Node,
+    Content,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct MeasureKey {
+    available: [u32; 2],
+    kind: MeasureKind,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct MeasurementEntry {
+    key: MeasureKey,
+    size: [f32; 2],
+}
+
+const MAX_MEASUREMENT_ENTRIES: usize = 8;
+
+#[derive(Default)]
+struct MeasurementBucket {
+    entries: [Option<MeasurementEntry>; MAX_MEASUREMENT_ENTRIES],
+    next_replace: usize,
+}
+
+impl MeasurementBucket {
+    fn get(&self, key: MeasureKey) -> Option<[f32; 2]> {
+        self.entries
+            .iter()
+            .flatten()
+            .find(|entry| entry.key == key)
+            .map(|entry| entry.size)
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.entries.iter().flatten().count()
+    }
+
+    fn insert(&mut self, key: MeasureKey, size: [f32; 2]) {
+        if let Some(entry) = self
+            .entries
+            .iter_mut()
+            .flatten()
+            .find(|entry| entry.key == key)
+        {
+            entry.size = size;
+            return;
+        }
+        let entry = MeasurementEntry { key, size };
+        if let Some(slot) = self.entries.iter_mut().find(|slot| slot.is_none()) {
+            *slot = Some(entry);
+        } else {
+            self.entries[self.next_replace] = Some(entry);
+            self.next_replace = (self.next_replace + 1) % MAX_MEASUREMENT_ENTRIES;
+        }
+    }
+}
+
+type MeasurementMap = HashMap<Entity, MeasurementBucket>;
+
+fn measure_key(available: [f32; 2], kind: MeasureKind) -> MeasureKey {
+    MeasureKey {
+        available: [available[0].to_bits(), available[1].to_bits()],
+        kind,
+    }
+}
+
+#[derive(Resource, Default)]
+struct UiMeasurementCache(MeasurementMap);
 
 pub struct LayoutPlugin;
 
@@ -564,49 +645,172 @@ fn set_scroll_vertical_edge(world: &mut World, entity: Entity, end: bool) -> boo
     }
 }
 
-/// Recompute invalidated roots and copy their geometry to hit-test components.
-/// The calculation uses logical pixels throughout. A dirty input conservatively
-/// invalidates its entire owning root, ensuring descendant positions and clips
-/// remain coherent when ancestors, siblings, or wrapping inputs change.
+/// Recompute invalidated layout paths and propagate geometry changes to affected
+/// siblings and descendants. Measurements are memoized so unchanged branches
+/// can supply cached intrinsic sizes without walking their subtrees.
 pub fn compute_layout(world: &mut World) {
     ensure_layout_resources(world);
-    collect_layout_changes(world);
-
-    let roots = effective_roots(world);
-    let root_configs: HashMap<Entity, UiLayoutRoot> = roots.iter().copied().collect();
-    let root_entities: HashSet<Entity> = root_configs.keys().copied().collect();
+    let input_changes = collect_layout_changes(world);
     let batch = world.resource_mut::<UiDirty>().take(UiDirtyDomain::Layout);
-    let mut dirty_roots = HashSet::new();
     let entities = batch.entities;
     let invalidate_all = batch.all;
-    if invalidate_all {
-        dirty_roots.extend(root_configs.keys().copied());
-        dirty_roots.extend(
-            world
-                .resource::<UiLayoutCache>()
-                .root_configs
-                .keys()
-                .copied(),
-        );
+    let initialized = world.resource::<UiLayoutCache>().initialized;
+    let viewports_changed =
+        world.resource::<UiViewports>().0 != world.resource::<UiLayoutCache>().viewports;
+    let root_structure_changed = input_changes.iter().any(|change| {
+        let previous = change.previous.as_ref();
+        let current = change.current.as_ref();
+        previous.and_then(|inputs| inputs.root) != current.and_then(|inputs| inputs.root)
+            || previous.map(|inputs| inputs.is_node) != current.map(|inputs| inputs.is_node)
+    });
+    let rediscover_roots =
+        !initialized || invalidate_all || viewports_changed || root_structure_changed;
+    let previous_root_configs =
+        std::mem::take(&mut world.resource_mut::<UiLayoutCache>().root_configs);
+    let mut changed_root_configs = HashSet::new();
+    let root_configs: HashMap<Entity, UiLayoutRoot> = if rediscover_roots {
+        let current: HashMap<Entity, UiLayoutRoot> = effective_roots(world).into_iter().collect();
+        for (root, info) in &current {
+            if previous_root_configs.get(root) != Some(info) {
+                changed_root_configs.insert(*root);
+            }
+        }
+        for root in previous_root_configs.keys() {
+            if !current.contains_key(root) {
+                changed_root_configs.insert(*root);
+            }
+        }
+        current
+    } else {
+        previous_root_configs
+    };
+    let mut dirty_roots = HashSet::new();
+    let mut full_roots = HashSet::new();
+    let mut local_only_entities = HashSet::new();
+    let mut local_only_by_root: HashMap<Entity, Vec<Entity>> = HashMap::new();
+    if !invalidate_all && input_changes.len() == 1 && entities.len() == 1 {
+        let change = &input_changes[0];
+        let memberships = world
+            .resource::<UiLayoutCache>()
+            .entity_roots
+            .get(&change.entity);
+        if memberships.is_some_and(|roots| roots.len() == 1)
+            && is_independent_intrinsic_change(world, change)
+        {
+            let root = *memberships.unwrap().iter().next().unwrap();
+            local_only_entities.insert(change.entity);
+            local_only_by_root
+                .entry(root)
+                .or_default()
+                .push(change.entity);
+        }
     }
-    for entity in entities {
-        collect_entity_roots(world, entity, &root_entities, &mut dirty_roots);
+    if invalidate_all || !initialized {
+        dirty_roots.extend(root_configs.keys().copied());
+        full_roots.extend(dirty_roots.iter().copied());
+    }
+    dirty_roots.extend(changed_root_configs.iter().copied());
+    full_roots.extend(changed_root_configs.iter().copied());
+
+    for entity in &entities {
+        collect_entity_roots(world, *entity, &root_configs, &mut dirty_roots);
+    }
+    for change in &input_changes {
+        collect_entity_roots(world, change.entity, &root_configs, &mut dirty_roots);
+        for parent in [
+            change.previous.as_ref().and_then(|inputs| inputs.parent),
+            change.current.as_ref().and_then(|inputs| inputs.parent),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            collect_entity_roots(world, parent.0, &root_configs, &mut dirty_roots);
+        }
+        let structural = match (&change.previous, &change.current) {
+            (Some(previous), Some(current)) => {
+                previous.is_node != current.is_node
+                    || previous.parent != current.parent
+                    || previous.children != current.children
+            }
+            _ => true,
+        };
+        if structural {
+            collect_entity_roots(world, change.entity, &root_configs, &mut full_roots);
+            for parent in [
+                change.previous.as_ref().and_then(|inputs| inputs.parent),
+                change.current.as_ref().and_then(|inputs| inputs.parent),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                collect_entity_roots(world, parent.0, &root_configs, &mut full_roots);
+            }
+        }
     }
 
-    {
-        let cache = world.resource::<UiLayoutCache>();
-        for (root, info) in &root_configs {
-            if cache.root_configs.get(root) != Some(info) {
-                dirty_roots.insert(*root);
+    let mut measurements = std::mem::take(&mut world.resource_mut::<UiMeasurementCache>().0);
+    if invalidate_all {
+        measurements.clear();
+    } else {
+        let changed_entities: HashSet<Entity> =
+            input_changes.iter().map(|change| change.entity).collect();
+        for change in &input_changes {
+            if local_only_entities.contains(&change.entity) {
+                measurements.remove(&change.entity);
+            } else {
+                invalidate_measurement_path(
+                    world,
+                    change.entity,
+                    change
+                        .previous
+                        .as_ref()
+                        .and_then(|inputs| inputs.parent)
+                        .map(|parent| parent.0),
+                    &mut measurements,
+                );
             }
         }
-        for root in cache.root_configs.keys() {
-            if !root_configs.contains_key(root) {
-                dirty_roots.insert(*root);
+        for entity in &entities {
+            if !changed_entities.contains(entity) {
+                invalidate_measurement_path(world, *entity, None, &mut measurements);
             }
         }
-        if !cache.initialized {
-            dirty_roots.extend(root_configs.keys().copied());
+        for root in &full_roots {
+            let members = world
+                .resource::<UiLayoutCache>()
+                .root_members
+                .get(root)
+                .cloned()
+                .unwrap_or_default();
+            for entity in members {
+                measurements.remove(&entity);
+            }
+        }
+    }
+
+    let mut required_by_root: HashMap<Entity, HashSet<Entity>> = HashMap::new();
+    let incremental_roots: Vec<_> = dirty_roots
+        .iter()
+        .filter(|root| !full_roots.contains(root))
+        .copied()
+        .collect();
+    for root in incremental_roots {
+        let required = required_by_root.entry(root).or_default();
+        for entity in &entities {
+            if !local_only_entities.contains(entity) {
+                add_path_to_root(world, *entity, root, required);
+            }
+        }
+        for change in &input_changes {
+            if !local_only_entities.contains(&change.entity) {
+                add_path_to_root(world, change.entity, root, required);
+                if let Some(parent) = change.current.as_ref().and_then(|inputs| inputs.parent) {
+                    add_path_to_root(world, parent.0, root, required);
+                }
+            }
+        }
+        if required.is_empty() && !local_only_by_root.contains_key(&root) {
+            full_roots.insert(root);
         }
     }
 
@@ -614,13 +818,12 @@ pub fn compute_layout(world: &mut World) {
     let mut processed_nodes = 0;
     let mut stale_entities = HashSet::new();
     let mut clamped_scrolls = HashSet::new();
-    let roots_by_entity: HashMap<Entity, UiLayoutRoot> = root_configs;
     let mut ordered_dirty: Vec<Entity> = dirty_roots.into_iter().collect();
     ordered_dirty.sort_unstable();
 
     for root in ordered_dirty {
         processed_roots += 1;
-        let info = roots_by_entity.get(&root).copied();
+        let info = root_configs.get(&root).copied();
         let mut new_members = HashSet::new();
         let mut root_issues = Vec::new();
         if let Some(info) = info {
@@ -637,40 +840,89 @@ pub fn compute_layout(world: &mut World) {
                     issues: Vec::new(),
                     clamped_scrolls: HashSet::new(),
                 };
-                pass.layout_subtree(world, root, info.viewport, None);
+                let is_full = full_roots.contains(&root);
+                let required = required_by_root.get(&root);
+                if is_full || required.is_some_and(|required| !required.is_empty()) {
+                    pass.layout_subtree(
+                        world,
+                        root,
+                        AssignedRect::Raw(info.viewport),
+                        None,
+                        (!is_full).then_some(required).flatten(),
+                        &mut measurements,
+                    );
+                }
+                if !is_full && let Some(local_entities) = local_only_by_root.get(&root) {
+                    for entity in local_entities {
+                        if let Some(previous) = world.get::<UiLayoutResult>(*entity).copied() {
+                            let local_required = HashSet::from([*entity]);
+                            pass.layout_subtree(
+                                world,
+                                *entity,
+                                AssignedRect::Resolved(previous.rect),
+                                previous.clip,
+                                Some(&local_required),
+                                &mut measurements,
+                            );
+                        }
+                    }
+                }
                 processed_nodes += pass.visited.len();
-                new_members = pass.visited;
-                root_issues = pass.issues;
+                if is_full {
+                    new_members = pass.visited.clone();
+                    root_issues = pass.issues;
+                } else {
+                    let previous_issues = world
+                        .resource::<UiLayoutCache>()
+                        .root_issues
+                        .get(&root)
+                        .cloned()
+                        .unwrap_or_default();
+                    root_issues = previous_issues
+                        .into_iter()
+                        .filter(|(entity, _)| !pass.visited.contains(entity))
+                        .chain(pass.issues)
+                        .collect();
+                    // Membership is stable for non-structural invalidations.
+                }
                 clamped_scrolls.extend(pass.clamped_scrolls);
             }
         }
 
-        let old_members = world
-            .resource::<UiLayoutCache>()
-            .root_members
-            .get(&root)
-            .cloned()
-            .unwrap_or_default();
+        let old_members = if full_roots.contains(&root) {
+            world
+                .resource::<UiLayoutCache>()
+                .root_members
+                .get(&root)
+                .cloned()
+                .unwrap_or_default()
+        } else {
+            HashSet::new()
+        };
         {
             let mut cache = world.resource_mut::<UiLayoutCache>();
-            for entity in &old_members {
-                if let Some(roots) = cache.entity_roots.get_mut(entity) {
-                    roots.remove(&root);
-                    if roots.is_empty() {
-                        cache.entity_roots.remove(entity);
-                        stale_entities.insert(*entity);
+            if full_roots.contains(&root) {
+                for entity in &old_members {
+                    if let Some(roots) = cache.entity_roots.get_mut(entity) {
+                        roots.remove(&root);
+                        if roots.is_empty() {
+                            cache.entity_roots.remove(entity);
+                            stale_entities.insert(*entity);
+                        }
                     }
                 }
-            }
-            for entity in &new_members {
-                cache.entity_roots.entry(*entity).or_default().insert(root);
-            }
-            if info.is_some() {
-                cache.root_members.insert(root, new_members);
+                for entity in &new_members {
+                    cache.entity_roots.entry(*entity).or_default().insert(root);
+                }
+                if info.is_some() {
+                    cache.root_members.insert(root, new_members);
+                    cache.root_issues.insert(root, root_issues);
+                } else {
+                    cache.root_members.remove(&root);
+                    cache.root_issues.remove(&root);
+                }
+            } else if info.is_some() {
                 cache.root_issues.insert(root, root_issues);
-            } else {
-                cache.root_members.remove(&root);
-                cache.root_issues.remove(&root);
             }
         }
     }
@@ -714,11 +966,16 @@ pub fn compute_layout(world: &mut World) {
     if world.resource::<UiLayoutIssues>().0 != issues {
         world.resource_mut::<UiLayoutIssues>().0 = issues;
     }
+    let viewports_snapshot = rediscover_roots.then(|| world.resource::<UiViewports>().0.clone());
     {
         let mut cache = world.resource_mut::<UiLayoutCache>();
-        cache.root_configs = roots_by_entity;
+        cache.root_configs = root_configs;
+        if let Some(viewports) = viewports_snapshot {
+            cache.viewports = viewports;
+        }
         cache.initialized = true;
     }
+    world.resource_mut::<UiMeasurementCache>().0 = measurements;
     {
         let mut stats = world.resource_mut::<UiLayoutStats>();
         stats.roots_processed = processed_roots;
@@ -737,6 +994,7 @@ fn ensure_layout_resources(world: &mut World) {
     world.init_resource::<UiDirty>();
     world.init_resource::<UiLayoutStats>();
     world.init_resource::<UiLayoutCache>();
+    world.init_resource::<UiMeasurementCache>();
     world.init_resource::<UiViewports>();
 }
 
@@ -765,7 +1023,7 @@ fn effective_roots(world: &mut World) -> Vec<(Entity, UiLayoutRoot)> {
     roots
 }
 
-fn collect_layout_changes(world: &mut World) {
+fn collect_layout_changes(world: &mut World) -> Vec<LayoutInputChange> {
     let changed: Vec<Entity> = {
         let mut query = world.query_filtered::<Entity, Or<(
             Changed<UiNode>,
@@ -809,15 +1067,27 @@ fn collect_layout_changes(world: &mut World) {
         &mut cache.removed_flex_items,
     ));
     let mut dirty_entities = Vec::new();
+    let mut changes = Vec::new();
     for entity in changed.into_iter().chain(removed) {
         if world.get_entity(entity).is_ok() {
             let current = layout_inputs(world, entity);
-            if cache.input_snapshots.get(&entity) != Some(&current) {
-                cache.input_snapshots.insert(entity, current);
+            let previous = cache.input_snapshots.get(&entity).cloned();
+            if previous.as_ref() != Some(&current) {
+                cache.input_snapshots.insert(entity, current.clone());
                 dirty_entities.push(entity);
+                changes.push(LayoutInputChange {
+                    entity,
+                    previous,
+                    current: Some(current),
+                });
             }
-        } else if cache.input_snapshots.remove(&entity).is_some() {
+        } else if let Some(previous) = cache.input_snapshots.remove(&entity) {
             dirty_entities.push(entity);
+            changes.push(LayoutInputChange {
+                entity,
+                previous: Some(previous),
+                current: None,
+            });
         }
     }
     world.insert_resource(cache);
@@ -825,11 +1095,13 @@ fn collect_layout_changes(world: &mut World) {
     for entity in dirty_entities {
         dirty.mark(UiDirtyDomain::Layout, entity);
     }
+    changes
 }
 
 fn layout_inputs(world: &World, entity: Entity) -> LayoutInputs {
     LayoutInputs {
         is_node: world.get::<UiNode>(entity).is_some(),
+        root: world.get::<UiLayoutRoot>(entity).copied(),
         layout: world.get::<UiLayoutNode>(entity).copied(),
         intrinsic: world.get::<UiIntrinsicSize>(entity).copied(),
         parent: world.get::<UiParent>(entity).copied(),
@@ -859,7 +1131,7 @@ fn read_removed<C: Component>(
 fn collect_entity_roots(
     world: &World,
     entity: Entity,
-    current_roots: &HashSet<Entity>,
+    current_roots: &HashMap<Entity, UiLayoutRoot>,
     roots: &mut HashSet<Entity>,
 ) {
     let previous = world
@@ -875,10 +1147,116 @@ fn collect_entity_roots(
         if !visited.insert(current) {
             break;
         }
-        if current_roots.contains(&current) {
+        if current_roots.contains_key(&current) {
             roots.insert(current);
         }
         at = world.get::<UiParent>(current).map(|parent| parent.0);
+    }
+}
+
+fn add_path_to_root(world: &World, entity: Entity, root: Entity, required: &mut HashSet<Entity>) {
+    let mut at = Some(entity);
+    let mut visited = HashSet::new();
+    while let Some(current) = at {
+        if !visited.insert(current) {
+            break;
+        }
+        required.insert(current);
+        if current == root {
+            break;
+        }
+        at = world.get::<UiParent>(current).map(|parent| parent.0);
+    }
+}
+
+fn invalidate_measurement_path(
+    world: &World,
+    entity: Entity,
+    previous_parent: Option<Entity>,
+    measurements: &mut MeasurementMap,
+) {
+    let mut pending = vec![entity];
+    pending.extend(previous_parent);
+    let mut visited = HashSet::new();
+    while let Some(current) = pending.pop() {
+        if !visited.insert(current) {
+            continue;
+        }
+        measurements.remove(&current);
+        pending.extend(world.get::<UiParent>(current).map(|parent| parent.0));
+    }
+}
+
+fn is_independent_intrinsic_change(world: &World, change: &LayoutInputChange) -> bool {
+    let (Some(previous), Some(current)) = (&change.previous, &change.current) else {
+        return false;
+    };
+    if previous.intrinsic == current.intrinsic {
+        return false;
+    }
+    let mut previous_without_intrinsic = previous.clone();
+    previous_without_intrinsic.intrinsic = current.intrinsic;
+    if previous_without_intrinsic != *current {
+        return false;
+    }
+    let Some(parent) = current.parent.map(|parent| parent.0) else {
+        return false;
+    };
+    if world.get::<UiNode>(change.entity).is_none()
+        || world.get::<UiLayoutResult>(change.entity).is_none()
+    {
+        return false;
+    }
+    let child_style = world
+        .get::<UiLayoutNode>(change.entity)
+        .copied()
+        .unwrap_or_default()
+        .sanitized();
+    if child_style.mode != UiLayoutMode::Leaf
+        && world
+            .get::<UiChildren>(change.entity)
+            .is_some_and(|children| !children.0.is_empty())
+    {
+        return false;
+    }
+    let old_size = previous.intrinsic.map_or([0.0, 0.0], |size| size.0);
+    let new_size = current.intrinsic.map_or([0.0, 0.0], |size| size.0);
+    let changed = [old_size[0] != new_size[0], old_size[1] != new_size[1]];
+    if !changed.into_iter().any(|axis_changed| axis_changed) {
+        return false;
+    }
+    let parent_style = world
+        .get::<UiLayoutNode>(parent)
+        .copied()
+        .unwrap_or_default()
+        .sanitized();
+    let size_is_fixed = |axis: usize| {
+        matches!(
+            axis_length(child_style.size, axis),
+            UiLength::Px(_) | UiLength::Percent(_)
+        )
+    };
+    match parent_style.mode {
+        UiLayoutMode::Row => changed[0] && !changed[1] && size_is_fixed(0),
+        UiLayoutMode::Column => changed[1] && !changed[0] && size_is_fixed(1),
+        UiLayoutMode::Flex { direction, .. } => {
+            let main_axis = flex_axes(direction).0;
+            let cross_axis = flex_axes(direction).1;
+            let basis = world
+                .get::<UiFlexItem>(change.entity)
+                .and_then(|item| item.basis)
+                .unwrap_or_else(|| axis_length(child_style.size, main_axis));
+            changed[main_axis]
+                && !changed[cross_axis]
+                && matches!(
+                    basis,
+                    UiLength::Px(_) | UiLength::Percent(_) | UiLength::Fill(_)
+                )
+        }
+        UiLayoutMode::Overlay | UiLayoutMode::Grid { .. } | UiLayoutMode::ResponsiveGrid { .. } => {
+            (0..2).all(|axis| !changed[axis] || size_is_fixed(axis))
+        }
+        UiLayoutMode::Leaf | UiLayoutMode::Inline => false,
     }
 }
 
@@ -891,13 +1269,20 @@ struct LayoutPass {
     clamped_scrolls: HashSet<Entity>,
 }
 
+enum AssignedRect {
+    Raw(Rect),
+    Resolved(Rect),
+}
+
 impl LayoutPass {
     fn layout_subtree(
         &mut self,
         world: &mut World,
         entity: Entity,
-        assigned: Rect,
+        assigned: AssignedRect,
         inherited_clip: Option<Rect>,
+        required: Option<&HashSet<Entity>>,
+        measurements: &mut MeasurementMap,
     ) {
         if self.visiting.contains(&entity) {
             self.issues.push((entity, UiLayoutIssue::Cycle));
@@ -915,7 +1300,12 @@ impl LayoutPass {
             .copied()
             .unwrap_or_default()
             .sanitized();
-        let rect = apply_margins_and_constraints(assigned, style.margin, style);
+        let rect = match assigned {
+            AssignedRect::Raw(assigned) => {
+                apply_margins_and_constraints(assigned, style.margin, style)
+            }
+            AssignedRect::Resolved(rect) => rect,
+        };
         let scrollable = world.get::<UiScroll>(entity).is_some();
         let own_clip = if style.clip_contents || scrollable {
             Some(inherited_clip.map_or(rect, |parent| {
@@ -937,6 +1327,7 @@ impl LayoutPass {
             style,
             &children,
             [rect.width, rect.height],
+            measurements,
         );
         let scroll_offset = if let Some(mut scroll) = world.get_mut::<UiScroll>(entity) {
             if scroll.clamp_to(content_size, [rect.width, rect.height]) {
@@ -974,7 +1365,7 @@ impl LayoutPass {
                 style.padding.right,
                 style.padding.bottom,
             );
-            let child_rects = distribute_children(world, &children, style, inner);
+            let child_rects = distribute_children(world, &children, style, inner, measurements);
             for (child, child_rect) in children.into_iter().zip(child_rects) {
                 let child_rect = Rect::new(
                     child_rect.x - scroll_offset[0],
@@ -982,11 +1373,52 @@ impl LayoutPass {
                     child_rect.width,
                     child_rect.height,
                 );
-                self.layout_subtree(world, child, child_rect, own_clip);
+                if required.is_none_or(|required| required.contains(&child))
+                    || layout_context_changed(
+                        world,
+                        child,
+                        child_rect,
+                        own_clip,
+                        self.window,
+                        self.dpi_scale,
+                    )
+                {
+                    self.layout_subtree(
+                        world,
+                        child,
+                        AssignedRect::Raw(child_rect),
+                        own_clip,
+                        required,
+                        measurements,
+                    );
+                }
             }
         }
         self.visiting.pop();
     }
+}
+
+fn layout_context_changed(
+    world: &World,
+    entity: Entity,
+    assigned: Rect,
+    inherited_clip: Option<Rect>,
+    window: Entity,
+    dpi_scale: f32,
+) -> bool {
+    let Some(previous) = world.get::<UiLayoutResult>(entity) else {
+        return true;
+    };
+    let style = world
+        .get::<UiLayoutNode>(entity)
+        .copied()
+        .unwrap_or_default()
+        .sanitized();
+    let rect = apply_margins_and_constraints(assigned, style.margin, style);
+    previous.rect != rect
+        || previous.clip != inherited_clip
+        || previous.window != window
+        || previous.dpi_scale != dpi_scale
 }
 
 impl UiLayoutNode {
@@ -1012,6 +1444,31 @@ fn measure_content_with_available(
     style: UiLayoutNode,
     children: &[Entity],
     available: [f32; 2],
+    measurements: &mut MeasurementMap,
+) -> [f32; 2] {
+    let key = measure_key(available, MeasureKind::Content);
+    if let Some(size) = measurements.get(&entity).and_then(|bucket| bucket.get(key)) {
+        return size;
+    }
+    let size = measure_content_with_available_uncached(
+        world,
+        entity,
+        style,
+        children,
+        available,
+        measurements,
+    );
+    measurements.entry(entity).or_default().insert(key, size);
+    size
+}
+
+fn measure_content_with_available_uncached(
+    world: &World,
+    entity: Entity,
+    style: UiLayoutNode,
+    children: &[Entity],
+    available: [f32; 2],
+    measurements: &mut MeasurementMap,
 ) -> [f32; 2] {
     if let Some(size) = world.get::<UiIntrinsicSize>(entity)
         && (style.mode == UiLayoutMode::Leaf || children.is_empty())
@@ -1036,7 +1493,15 @@ fn measure_content_with_available(
     // every child a second time and allocated a vector that was never read.
     match style.mode {
         UiLayoutMode::Flex { direction, wrap } => {
-            return measure_flex_content(world, children, style, available, direction, wrap);
+            return measure_flex_content(
+                world,
+                children,
+                style,
+                available,
+                direction,
+                wrap,
+                measurements,
+            );
         }
         UiLayoutMode::ResponsiveGrid {
             min_cell_width,
@@ -1049,13 +1514,14 @@ fn measure_content_with_available(
                 available,
                 min_cell_width,
                 max_columns,
+                measurements,
             );
         }
         _ => {}
     }
     let sizes: Vec<[f32; 2]> = children
         .iter()
-        .map(|child| measured_node_with_available(world, *child, child_available))
+        .map(|child| measured_node_with_available(world, *child, child_available, measurements))
         .collect();
     let gap = style.gap * children.len().saturating_sub(1) as f32;
     match style.mode {
@@ -1068,9 +1534,15 @@ fn measure_content_with_available(
                 + style.padding.top
                 + style.padding.bottom,
         ],
-        UiLayoutMode::Flex { direction, wrap } => {
-            measure_flex_content(world, children, style, available, direction, wrap)
-        }
+        UiLayoutMode::Flex { direction, wrap } => measure_flex_content(
+            world,
+            children,
+            style,
+            available,
+            direction,
+            wrap,
+            measurements,
+        ),
         UiLayoutMode::Grid { columns } => {
             let columns = columns.max(1);
             let rows = children.len().div_ceil(columns);
@@ -1093,6 +1565,7 @@ fn measure_content_with_available(
             available,
             min_cell_width,
             max_columns,
+            measurements,
         ),
         UiLayoutMode::Overlay => [
             sizes.iter().map(|size| size[0]).fold(0.0, f32::max)
@@ -1115,7 +1588,27 @@ fn measure_content_with_available(
     }
 }
 
-fn measured_node_with_available(world: &World, entity: Entity, available: [f32; 2]) -> [f32; 2] {
+fn measured_node_with_available(
+    world: &World,
+    entity: Entity,
+    available: [f32; 2],
+    measurements: &mut MeasurementMap,
+) -> [f32; 2] {
+    let key = measure_key(available, MeasureKind::Node);
+    if let Some(size) = measurements.get(&entity).and_then(|bucket| bucket.get(key)) {
+        return size;
+    }
+    let size = measured_node_with_available_uncached(world, entity, available, measurements);
+    measurements.entry(entity).or_default().insert(key, size);
+    size
+}
+
+fn measured_node_with_available_uncached(
+    world: &World,
+    entity: Entity,
+    available: [f32; 2],
+    measurements: &mut MeasurementMap,
+) -> [f32; 2] {
     let style = world
         .get::<UiLayoutNode>(entity)
         .copied()
@@ -1128,9 +1621,9 @@ fn measured_node_with_available(world: &World, entity: Entity, available: [f32; 
         return constrain_size([width, height], style);
     }
     let mut size = if let Some(children) = world.get::<bui_core::UiChildren>(entity) {
-        measure_content_with_available(world, entity, style, &children.0, available)
+        measure_content_with_available(world, entity, style, &children.0, available, measurements)
     } else {
-        measure_content_with_available(world, entity, style, &[], available)
+        measure_content_with_available(world, entity, style, &[], available, measurements)
     };
     size[0] = resolve_measured_length(style.size.width, available[0], size[0]);
     size[1] = resolve_measured_length(style.size.height, available[1], size[1]);
@@ -1187,6 +1680,7 @@ fn measure_flex_content(
     available: [f32; 2],
     direction: UiFlexDirection,
     wrap: bool,
+    measurements: &mut MeasurementMap,
 ) -> [f32; 2] {
     let (main_axis, cross_axis) = flex_axes(direction);
     let inner_available = [
@@ -1202,7 +1696,7 @@ fn measure_flex_content(
             .copied()
             .unwrap_or_default()
             .sanitized();
-        let measured = measured_node_with_available(world, *child, inner_available);
+        let measured = measured_node_with_available(world, *child, inner_available, measurements);
         let margins = child_style.margin;
         let item = world.get::<UiFlexItem>(*child).copied();
         let main_length = item
@@ -1252,6 +1746,7 @@ fn measure_responsive_grid_content(
     available: [f32; 2],
     min_cell_width: u32,
     max_columns: usize,
+    measurements: &mut MeasurementMap,
 ) -> [f32; 2] {
     let max_columns = max_columns.max(1).min(children.len().max(1));
     let inner_width = if available[0].is_finite() {
@@ -1269,7 +1764,12 @@ fn measure_responsive_grid_content(
         let intrinsic_width = children
             .iter()
             .map(|child| {
-                measured_node_with_available(world, *child, [f32::INFINITY, available[1]])[0]
+                measured_node_with_available(
+                    world,
+                    *child,
+                    [f32::INFINITY, available[1]],
+                    measurements,
+                )[0]
             })
             .fold(0.0, f32::max);
         (min_cell_width.max(1) as f32).max(intrinsic_width)
@@ -1281,7 +1781,8 @@ fn measure_responsive_grid_content(
         } else {
             available[1]
         };
-        let measured = measured_node_with_available(world, *child, [cell_width, inner_height]);
+        let measured =
+            measured_node_with_available(world, *child, [cell_width, inner_height], measurements);
         let margin = world
             .get::<UiLayoutNode>(*child)
             .map_or(UiEdges::ZERO, |node| node.margin.sanitized());
@@ -1308,29 +1809,38 @@ fn distribute_children(
     children: &[Entity],
     style: UiLayoutNode,
     inner: Rect,
+    measurements: &mut MeasurementMap,
 ) -> Vec<Rect> {
     if children.is_empty() {
         return Vec::new();
     }
     match style.mode {
         UiLayoutMode::Row | UiLayoutMode::Column => {
-            distribute_linear(world, children, style, inner)
+            distribute_linear(world, children, style, inner, measurements)
         }
         UiLayoutMode::Flex { direction, wrap } => {
-            distribute_flex(world, children, style, inner, direction, wrap)
+            distribute_flex(world, children, style, inner, direction, wrap, measurements)
         }
         UiLayoutMode::Overlay => children
             .iter()
-            .map(|child| align_child(world, *child, style, inner))
+            .map(|child| align_child(world, *child, style, inner, measurements))
             .collect(),
         UiLayoutMode::Grid { columns } => {
-            distribute_grid(world, children, style, inner, columns.max(1))
+            distribute_grid(world, children, style, inner, columns.max(1), measurements)
         }
         UiLayoutMode::ResponsiveGrid {
             min_cell_width,
             max_columns,
-        } => distribute_responsive_grid(world, children, style, inner, min_cell_width, max_columns),
-        UiLayoutMode::Inline => distribute_inline(world, children, style, inner),
+        } => distribute_responsive_grid(
+            world,
+            children,
+            style,
+            inner,
+            min_cell_width,
+            max_columns,
+            measurements,
+        ),
+        UiLayoutMode::Inline => distribute_inline(world, children, style, inner, measurements),
         UiLayoutMode::Leaf => Vec::new(),
     }
 }
@@ -1356,6 +1866,7 @@ fn distribute_flex(
     inner: Rect,
     direction: UiFlexDirection,
     wrap: bool,
+    measurements: &mut MeasurementMap,
 ) -> Vec<Rect> {
     let (main_axis, cross_axis) = flex_axes(direction);
     let main_extent = axis_extent(inner, main_axis);
@@ -1369,7 +1880,7 @@ fn distribute_flex(
             .sanitized();
         let item = world.get::<UiFlexItem>(*entity).copied();
         let margins = child_style.margin;
-        let measured = measured_node_with_available(world, *entity, available);
+        let measured = measured_node_with_available(world, *entity, available, measurements);
         let main_length = item
             .and_then(|value| value.basis)
             .unwrap_or(axis_length(child_style.size, main_axis));
@@ -1585,6 +2096,7 @@ fn distribute_responsive_grid(
     inner: Rect,
     min_cell_width: u32,
     max_columns: usize,
+    measurements: &mut MeasurementMap,
 ) -> Vec<Rect> {
     let columns =
         responsive_grid_columns_with_gap(inner.width, min_cell_width, max_columns, style.gap)
@@ -1594,7 +2106,8 @@ fn distribute_responsive_grid(
         (inner.width - style.gap * columns.saturating_sub(1) as f32).max(0.0) / columns as f32;
     let mut row_heights = vec![0.0_f32; rows];
     for (index, child) in children.iter().enumerate() {
-        let measured = measured_node_with_available(world, *child, [cell_width, inner.height]);
+        let measured =
+            measured_node_with_available(world, *child, [cell_width, inner.height], measurements);
         let margin = world
             .get::<UiLayoutNode>(*child)
             .map_or(UiEdges::ZERO, |node| node.margin.sanitized());
@@ -1616,7 +2129,7 @@ fn distribute_responsive_grid(
             cell_width,
             row_heights[row],
         );
-        result.push(align_child(world, *child, style, cell));
+        result.push(align_child(world, *child, style, cell, measurements));
         if col + 1 == columns || index + 1 == children.len() {
             row_y += row_heights[row] + style.gap + extra_gap;
         }
@@ -1666,6 +2179,7 @@ fn distribute_linear(
     children: &[Entity],
     style: UiLayoutNode,
     inner: Rect,
+    measurements: &mut MeasurementMap,
 ) -> Vec<Rect> {
     let horizontal = style.mode == UiLayoutMode::Row;
     let main_extent = if horizontal {
@@ -1692,7 +2206,8 @@ fn distribute_linear(
         } else {
             child_style.size.height
         };
-        let measured = measured_node_with_available(world, *child, [inner.width, inner.height]);
+        let measured =
+            measured_node_with_available(world, *child, [inner.width, inner.height], measurements);
         let basis = if horizontal { measured[0] } else { measured[1] };
         let (value, weight) = resolve_length(length, main_extent, basis);
         main_sizes.push(value);
@@ -1734,7 +2249,8 @@ fn distribute_linear(
             .copied()
             .unwrap_or_default()
             .sanitized();
-        let measured = measured_node_with_available(world, *child, [inner.width, inner.height]);
+        let measured =
+            measured_node_with_available(world, *child, [inner.width, inner.height], measurements);
         let main = main_sizes[index];
         let cross_length = if horizontal {
             child_style.size.height
@@ -1771,6 +2287,7 @@ fn distribute_grid(
     style: UiLayoutNode,
     inner: Rect,
     columns: usize,
+    measurements: &mut MeasurementMap,
 ) -> Vec<Rect> {
     let rows = children.len().div_ceil(columns);
     let col_gap = style.gap;
@@ -1791,7 +2308,7 @@ fn distribute_grid(
                 cell_w,
                 row_height,
             );
-            align_child(world, *child, style, cell)
+            align_child(world, *child, style, cell, measurements)
         })
         .collect()
 }
@@ -1801,13 +2318,15 @@ fn distribute_inline(
     children: &[Entity],
     style: UiLayoutNode,
     inner: Rect,
+    measurements: &mut MeasurementMap,
 ) -> Vec<Rect> {
     let mut output = Vec::with_capacity(children.len());
     let mut x = inner.x;
     let mut y = inner.y;
     let mut line_height: f32 = 0.0;
     for child in children {
-        let size = measured_node_with_available(world, *child, [inner.width, inner.height]);
+        let size =
+            measured_node_with_available(world, *child, [inner.width, inner.height], measurements);
         let margin = world
             .get::<UiLayoutNode>(*child)
             .map_or(UiEdges::ZERO, |node| node.margin.sanitized());
@@ -1830,13 +2349,20 @@ fn distribute_inline(
     output
 }
 
-fn align_child(world: &World, entity: Entity, parent: UiLayoutNode, slot: Rect) -> Rect {
+fn align_child(
+    world: &World,
+    entity: Entity,
+    parent: UiLayoutNode,
+    slot: Rect,
+    measurements: &mut MeasurementMap,
+) -> Rect {
     let style = world
         .get::<UiLayoutNode>(entity)
         .copied()
         .unwrap_or_default()
         .sanitized();
-    let measured = measured_node_with_available(world, entity, [slot.width, slot.height]);
+    let measured =
+        measured_node_with_available(world, entity, [slot.width, slot.height], measurements);
     let width = resolve_length(style.size.width, slot.width, measured[0]).0;
     let height = resolve_length(style.size.height, slot.height, measured[1]).0;
     let align_x = match parent.align_items {
@@ -3563,5 +4089,393 @@ mod tests {
         assert_eq!(resized.rect, Rect::new(3.0, 4.0, 90.0, 55.0));
         assert_eq!(resized.dpi_scale, 2.0);
         assert_eq!(app.world().resource::<UiLayoutStats>().nodes_processed, 1);
+    }
+
+    #[test]
+    fn intrinsic_change_recomputes_only_its_node_when_parent_allocation_is_independent() {
+        let mut app = App::new();
+        app.add_plugins((CorePlugin, LayoutPlugin));
+        let window = app.world_mut().spawn_empty().id();
+        let root = app
+            .world_mut()
+            .spawn((
+                UiNode,
+                UiLayoutRoot::new(window, Rect::new(0.0, 0.0, 300.0, 120.0), 1.0),
+                UiLayoutNode {
+                    mode: UiLayoutMode::Overlay,
+                    align_items: UiAlign::Start,
+                    ..UiLayoutNode::default()
+                },
+            ))
+            .id();
+        let branch = app
+            .world_mut()
+            .spawn((
+                UiNode,
+                UiLayoutNode {
+                    mode: UiLayoutMode::Overlay,
+                    size: UiSize {
+                        width: UiLength::Px(80.0),
+                        height: UiLength::Px(60.0),
+                    },
+                    align_items: UiAlign::Start,
+                    ..UiLayoutNode::default()
+                },
+            ))
+            .id();
+        let sibling_branch = app
+            .world_mut()
+            .spawn((
+                UiNode,
+                UiLayoutNode {
+                    mode: UiLayoutMode::Overlay,
+                    size: UiSize {
+                        width: UiLength::Px(50.0),
+                        height: UiLength::Px(50.0),
+                    },
+                    ..UiLayoutNode::default()
+                },
+            ))
+            .id();
+        let dirty_leaf = app
+            .world_mut()
+            .spawn((
+                UiNode,
+                UiIntrinsicSize([2.0, 3.0]),
+                UiLayoutNode::leaf(UiLength::Px(20.0), UiLength::Px(10.0)),
+            ))
+            .id();
+        let sibling_leaf = app
+            .world_mut()
+            .spawn((
+                UiNode,
+                UiIntrinsicSize([4.0, 5.0]),
+                UiLayoutNode::leaf(UiLength::Px(15.0), UiLength::Px(12.0)),
+            ))
+            .id();
+        set_parent(app.world_mut(), branch, root).unwrap();
+        set_parent(app.world_mut(), sibling_branch, root).unwrap();
+        set_parent(app.world_mut(), dirty_leaf, branch).unwrap();
+        set_parent(app.world_mut(), sibling_leaf, sibling_branch).unwrap();
+
+        app.update();
+        let sibling_before = *app.world().get::<UiLayoutResult>(sibling_leaf).unwrap();
+        let sibling_hit_box_before = *app.world().get::<UiHitBox>(sibling_leaf).unwrap();
+        let dirty_rect_before = app.world().get::<UiLayoutResult>(dirty_leaf).unwrap().rect;
+        let dirty_hit_box_before = *app.world().get::<UiHitBox>(dirty_leaf).unwrap();
+        app.world_mut()
+            .entity_mut(dirty_leaf)
+            .insert(UiIntrinsicSize([9.0, 7.0]));
+        app.update();
+
+        let dirty = app.world().get::<UiLayoutResult>(dirty_leaf).unwrap();
+        assert_eq!(dirty.content_size, [9.0, 7.0]);
+        assert_eq!(dirty.rect, dirty_rect_before);
+        assert_eq!(
+            *app.world().get::<UiHitBox>(dirty_leaf).unwrap(),
+            dirty_hit_box_before
+        );
+        assert_eq!(
+            *app.world().get::<UiLayoutResult>(sibling_leaf).unwrap(),
+            sibling_before
+        );
+        assert_eq!(
+            *app.world().get::<UiHitBox>(sibling_leaf).unwrap(),
+            sibling_hit_box_before
+        );
+        let work = app.world().resource::<UiLayoutStats>();
+        assert_eq!(work.roots_processed, 1);
+        assert_eq!(
+            work.nodes_processed, 1,
+            "only the changed leaf should be visited"
+        );
+    }
+
+    #[test]
+    fn flex_intrinsic_change_reflows_and_visits_only_geometry_affected_siblings() {
+        let mut app = App::new();
+        app.add_plugins((CorePlugin, LayoutPlugin));
+        let window = app.world_mut().spawn_empty().id();
+        let root = app
+            .world_mut()
+            .spawn((
+                UiNode,
+                UiLayoutRoot::new(window, Rect::new(0.0, 0.0, 200.0, 60.0), 1.0),
+                UiLayoutNode::flex(UiFlexDirection::Row, false, 0.0),
+            ))
+            .id();
+        let children: Vec<_> = (0..3)
+            .map(|_| {
+                app.world_mut()
+                    .spawn((
+                        UiNode,
+                        UiIntrinsicSize([40.0, 20.0]),
+                        UiLayoutNode::leaf(UiLength::Auto, UiLength::Auto),
+                        UiFlexItem {
+                            grow: 0.0,
+                            shrink: 0.0,
+                            ..UiFlexItem::default()
+                        },
+                    ))
+                    .id()
+            })
+            .collect();
+        for child in &children {
+            set_parent(app.world_mut(), *child, root).unwrap();
+        }
+        app.update();
+        assert_eq!(
+            app.world()
+                .get::<UiLayoutResult>(children[2])
+                .unwrap()
+                .rect
+                .x,
+            80.0
+        );
+
+        app.world_mut()
+            .entity_mut(children[0])
+            .insert(UiIntrinsicSize([60.0, 20.0]));
+        app.update();
+
+        assert_eq!(
+            app.world()
+                .get::<UiLayoutResult>(children[1])
+                .unwrap()
+                .rect
+                .x,
+            60.0
+        );
+        assert_eq!(
+            app.world()
+                .get::<UiLayoutResult>(children[2])
+                .unwrap()
+                .rect
+                .x,
+            100.0
+        );
+        let work = app.world().resource::<UiLayoutStats>();
+        assert_eq!(work.roots_processed, 1);
+        assert_eq!(
+            work.nodes_processed, 4,
+            "the dirty item and two shifted siblings should be visited with the root"
+        );
+    }
+
+    #[test]
+    fn responsive_grid_intrinsic_change_updates_row_height_and_following_rows() {
+        let mut app = App::new();
+        app.add_plugins((CorePlugin, LayoutPlugin));
+        let window = app.world_mut().spawn_empty().id();
+        let root = app
+            .world_mut()
+            .spawn((
+                UiNode,
+                UiLayoutRoot::new(window, Rect::new(0.0, 0.0, 200.0, 100.0), 1.0),
+                UiLayoutNode::responsive_grid(80, 2, 0.0),
+            ))
+            .id();
+        let children: Vec<_> = (0..4)
+            .map(|_| {
+                app.world_mut()
+                    .spawn((
+                        UiNode,
+                        UiIntrinsicSize([80.0, 10.0]),
+                        UiLayoutNode::leaf(UiLength::Auto, UiLength::Auto),
+                    ))
+                    .id()
+            })
+            .collect();
+        for child in &children {
+            set_parent(app.world_mut(), *child, root).unwrap();
+        }
+        app.update();
+        assert_eq!(
+            app.world()
+                .get::<UiLayoutResult>(children[2])
+                .unwrap()
+                .rect
+                .y,
+            10.0
+        );
+
+        app.world_mut()
+            .entity_mut(children[0])
+            .insert(UiIntrinsicSize([80.0, 40.0]));
+        app.update();
+
+        assert_eq!(
+            app.world()
+                .get::<UiLayoutResult>(children[0])
+                .unwrap()
+                .rect
+                .height,
+            40.0
+        );
+        assert_eq!(
+            app.world()
+                .get::<UiLayoutResult>(children[1])
+                .unwrap()
+                .rect
+                .height,
+            40.0
+        );
+        assert_eq!(
+            app.world()
+                .get::<UiLayoutResult>(children[2])
+                .unwrap()
+                .rect
+                .y,
+            40.0
+        );
+        assert_eq!(
+            app.world()
+                .get::<UiLayoutResult>(children[3])
+                .unwrap()
+                .rect
+                .y,
+            40.0
+        );
+        let work = app.world().resource::<UiLayoutStats>();
+        assert_eq!(work.roots_processed, 1);
+        assert_eq!(
+            work.nodes_processed, 5,
+            "all cells whose row geometry changed should be visited"
+        );
+    }
+
+    #[test]
+    fn ten_thousand_fixed_basis_flex_siblings_recompute_only_the_changed_leaf() {
+        const NODE_COUNT: usize = 10_000;
+        let mut app = App::new();
+        app.add_plugins((CorePlugin, LayoutPlugin));
+        let window = app.world_mut().spawn_empty().id();
+        let root = app
+            .world_mut()
+            .spawn((
+                UiNode,
+                UiLayoutRoot::new(window, Rect::new(0.0, 0.0, 1280.0, 720.0), 1.0),
+                UiLayoutNode::flex(UiFlexDirection::Row, true, 3.0),
+            ))
+            .id();
+        let mut first = None;
+        for _ in 0..NODE_COUNT {
+            let child = app
+                .world_mut()
+                .spawn((
+                    UiNode,
+                    UiIntrinsicSize([44.0, 22.0]),
+                    UiLayoutNode::leaf(UiLength::Auto, UiLength::Auto),
+                    UiFlexItem {
+                        basis: Some(UiLength::Px(44.0)),
+                        grow: 0.25,
+                        ..UiFlexItem::default()
+                    },
+                ))
+                .id();
+            set_parent(app.world_mut(), child, root).unwrap();
+            first.get_or_insert(child);
+        }
+        let first = first.unwrap();
+        app.update();
+        let result_before = *app.world().get::<UiLayoutResult>(first).unwrap();
+        let sibling = app.world().get::<UiChildren>(root).unwrap().0[1];
+        let sibling_before = *app.world().get::<UiLayoutResult>(sibling).unwrap();
+
+        app.world_mut()
+            .entity_mut(first)
+            .insert(UiIntrinsicSize([45.0, 22.0]));
+        app.update();
+
+        assert_eq!(
+            app.world().get::<UiLayoutResult>(first).unwrap().rect,
+            result_before.rect
+        );
+        assert_eq!(
+            *app.world().get::<UiLayoutResult>(sibling).unwrap(),
+            sibling_before
+        );
+        let work = app.world().resource::<UiLayoutStats>();
+        assert_eq!(work.roots_processed, 1);
+        assert_eq!(work.nodes_processed, 1);
+    }
+
+    #[test]
+    fn measurement_cache_stays_bounded_when_ancestor_width_changes_repeatedly() {
+        let mut app = App::new();
+        app.add_plugins((CorePlugin, LayoutPlugin));
+        let window = app.world_mut().spawn_empty().id();
+        let root = app
+            .world_mut()
+            .spawn((
+                UiNode,
+                UiLayoutRoot::new(window, Rect::new(0.0, 0.0, 400.0, 200.0), 1.0),
+                UiLayoutNode {
+                    mode: UiLayoutMode::Overlay,
+                    align_items: UiAlign::Start,
+                    ..UiLayoutNode::default()
+                },
+            ))
+            .id();
+        let parent = app
+            .world_mut()
+            .spawn((
+                UiNode,
+                UiLayoutNode {
+                    mode: UiLayoutMode::Overlay,
+                    size: UiSize {
+                        width: UiLength::Px(100.0),
+                        height: UiLength::Px(80.0),
+                    },
+                    align_items: UiAlign::Start,
+                    ..UiLayoutNode::default()
+                },
+            ))
+            .id();
+        let leaf = app
+            .world_mut()
+            .spawn((
+                UiNode,
+                UiIntrinsicSize([20.0, 10.0]),
+                UiLayoutNode::leaf(UiLength::Percent(0.5), UiLength::Px(10.0)),
+            ))
+            .id();
+        set_parent(app.world_mut(), parent, root).unwrap();
+        set_parent(app.world_mut(), leaf, parent).unwrap();
+        app.update();
+
+        for frame in 0..32 {
+            let width = 80.0 + frame as f32 * 3.5;
+            app.world_mut()
+                .get_mut::<UiLayoutNode>(parent)
+                .unwrap()
+                .size
+                .width = UiLength::Px(width);
+            app.update();
+
+            assert_eq!(
+                app.world().get::<UiLayoutResult>(leaf).unwrap().rect.width,
+                width * 0.5
+            );
+            let cache = app.world().resource::<UiMeasurementCache>();
+            let leaf_measurements = cache
+                .0
+                .get(&leaf)
+                .expect("leaf should have cached measurements")
+                .len();
+            assert!(
+                leaf_measurements <= MAX_MEASUREMENT_ENTRIES,
+                "leaf cache grew to {leaf_measurements} entries"
+            );
+        }
+
+        let leaf_measurements = app
+            .world()
+            .resource::<UiMeasurementCache>()
+            .0
+            .get(&leaf)
+            .unwrap()
+            .len();
+        assert_eq!(leaf_measurements, MAX_MEASUREMENT_ENTRIES);
     }
 }

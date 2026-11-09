@@ -14,12 +14,15 @@ use std::{
 
 use bevy_app::{App, Update};
 use bevy_asset::Assets;
-use bevy_ecs::prelude::{Entity, Resource, World};
+use bevy_ecs::change_detection::DetectChanges;
+use bevy_ecs::prelude::{
+    Changed, Entity, Or, Query, RemovedComponents, Res, ResMut, Resource, With, World,
+};
 use bevy_ecs::schedule::IntoScheduleConfigs;
 use bevy_image::Image;
 use bevy_tasks::{AsyncComputeTaskPool, Task, futures_lite::future::block_on, poll_once};
 use bevy_time::Time;
-use bui_core::{UiNode, UiParent, UiSystems, UiVisible};
+use bui_core::{UiDirty, UiDirtyDomain, UiNode, UiParent, UiSystems, UiVisible};
 use bui_layout::{Rect, UiLayoutResult};
 use bui_media::{
     RgbaFrame, decode_gif_thumbnail, decode_image_thumbnail, decode_ivf_vp8_thumbnail,
@@ -73,6 +76,8 @@ pub struct FileBrowserPreviewCache {
     cached_bytes: usize,
     overlay_cameras: HashSet<Entity>,
     completed_decodes: usize,
+    prepared: bool,
+    sync_passes: u64,
 }
 
 impl FileBrowserPreviewCache {
@@ -102,6 +107,11 @@ impl FileBrowserPreviewCache {
         self.completed_decodes
     }
 
+    /// Number of preview synchronization passes that inspected visible browser items.
+    pub const fn sync_passes(&self) -> u64 {
+        self.sync_passes
+    }
+
     /// Returns an error recorded for an item, if its latest visible load failed.
     pub fn failure(&self, path: &std::path::Path) -> Option<&str> {
         self.entries.get(path).and_then(|entry| match &entry.state {
@@ -113,12 +123,98 @@ impl FileBrowserPreviewCache {
 
 /// Install the thumbnail cache after the file browser has mounted its visible virtual items.
 pub fn install(app: &mut App) {
-    app.init_resource::<FileBrowserPreviewCache>().add_systems(
-        Update,
-        sync_file_browser_previews
-            .in_set(UiSystems::Widgets)
-            .after(crate::actions::collect_widget_paint),
-    );
+    app.init_resource::<FileBrowserPreviewCache>()
+        .init_resource::<UiDirty>()
+        .add_systems(
+            Update,
+            (collect_preview_changes, sync_file_browser_previews)
+                .chain()
+                .in_set(UiSystems::Widgets)
+                .after(crate::actions::collect_widget_paint),
+        );
+    app.world_mut()
+        .resource_mut::<UiDirty>()
+        .mark_all(UiDirtyDomain::Preview);
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Independent Bevy change streams feed one preview cache"
+)]
+#[expect(
+    clippy::type_complexity,
+    reason = "Preview updates track independent Bevy change filters"
+)]
+fn collect_preview_changes(
+    browsers: Query<Entity, Changed<FileBrowser>>,
+    items: Query<Entity, Changed<FileBrowserItem>>,
+    views: Query<Entity, Changed<FileBrowserViewState>>,
+    layouts: Query<
+        Entity,
+        (
+            Changed<UiLayoutResult>,
+            Or<(With<FileBrowser>, With<FileBrowserItem>)>,
+        ),
+    >,
+    visibility: Query<Entity, Or<(Changed<UiVisible>, Changed<UiParent>, Changed<UiNode>)>>,
+    preview_entities: Query<Entity, Or<(With<FileBrowser>, With<FileBrowserItem>)>>,
+    parents: Query<&UiParent>,
+    mut removed_items: RemovedComponents<FileBrowserItem>,
+    mut removed_browsers: RemovedComponents<FileBrowser>,
+    mut removed_layouts: RemovedComponents<UiLayoutResult>,
+    mut removed_visibility: RemovedComponents<UiVisible>,
+    mut removed_parents: RemovedComponents<UiParent>,
+    mut removed_nodes: RemovedComponents<UiNode>,
+    theme: Option<Res<Theme>>,
+    mut cache: ResMut<FileBrowserPreviewCache>,
+    mut dirty: ResMut<UiDirty>,
+) {
+    cache.prepared = true;
+    let removed_items_any = removed_items.read().count() > 0;
+    let removed_browsers_any = removed_browsers.read().count() > 0;
+    let removed_layouts_any = removed_layouts.read().count() > 0;
+    let removed_visibility_any = removed_visibility.read().count() > 0;
+    let removed_parents_any = removed_parents.read().count() > 0;
+    let removed_nodes_any = removed_nodes.read().count() > 0;
+    let removed = removed_items_any
+        || removed_browsers_any
+        || removed_layouts_any
+        || removed_visibility_any
+        || removed_parents_any
+        || removed_nodes_any;
+    let visibility_affects_previews = if visibility.is_empty() {
+        false
+    } else {
+        let mut related = HashSet::new();
+        for entity in &preview_entities {
+            let mut current = Some(entity);
+            while let Some(at) = current {
+                if !related.insert(at) {
+                    break;
+                }
+                current = parents.get(at).ok().map(|parent| parent.0);
+            }
+        }
+        visibility.iter().any(|entity| related.contains(&entity))
+    };
+    if cache.entries.is_empty()
+        && cache.overlay_cameras.is_empty()
+        && browsers.is_empty()
+        && items.is_empty()
+        && views.is_empty()
+    {
+        return;
+    }
+    if !browsers.is_empty()
+        || !items.is_empty()
+        || !views.is_empty()
+        || !layouts.is_empty()
+        || visibility_affects_previews
+        || removed
+        || theme.as_ref().is_some_and(|theme| theme.is_changed())
+    {
+        dirty.mark_all(UiDirtyDomain::Preview);
+    }
 }
 
 #[derive(Clone)]
@@ -128,6 +224,7 @@ struct VisiblePreview {
     path: PathBuf,
     kind: PreviewKind,
     layout: UiLayoutResult,
+    clip: Rect,
 }
 
 /// Start, cancel, poll, evict, and paint thumbnails for currently visible grid items.
@@ -141,6 +238,27 @@ pub fn sync_file_browser_previews(world: &mut World) {
     let now = world
         .get_resource::<Time>()
         .map_or(Duration::ZERO, |time| time.elapsed());
+    let prepared = std::mem::take(&mut world.resource_mut::<FileBrowserPreviewCache>().prepared);
+    let dirty = world
+        .get_resource_mut::<UiDirty>()
+        .map(|mut dirty| dirty.take(UiDirtyDomain::Preview));
+    let needs_sync = {
+        let cache = world.resource::<FileBrowserPreviewCache>();
+        !prepared
+            || dirty.as_ref().is_some_and(|dirty| !dirty.is_empty())
+            || cache.entries.values().any(|entry| {
+                matches!(entry.state, PreviewState::Loading { .. })
+                    || (entry.visible_owners.is_empty()
+                        && now.saturating_sub(entry.last_used) >= PREVIEW_CACHE_IDLE_TIME)
+            })
+    };
+    if !needs_sync {
+        return;
+    }
+    {
+        let mut cache = world.resource_mut::<FileBrowserPreviewCache>();
+        cache.sync_passes = cache.sync_passes.saturating_add(1);
+    }
     let visible_items = collect_visible_items(world);
 
     let mut evicted_ids = Vec::new();
@@ -148,6 +266,9 @@ pub fn sync_file_browser_previews(world: &mut World) {
     {
         let mut cache = world.resource_mut::<FileBrowserPreviewCache>();
         for entry in cache.entries.values_mut() {
+            if !entry.visible_owners.is_empty() {
+                entry.last_used = now;
+            }
             entry.visible_owners.clear();
         }
         for item in &visible_items {
@@ -271,6 +392,11 @@ fn collect_visible_items(world: &mut World) -> Vec<VisiblePreview> {
                 path: item.path.clone(),
                 kind: item.preview,
                 layout: *layout,
+                clip: layout.rect,
+            })
+            .and_then(|mut preview| {
+                preview.clip = file_browser_preview_clip(world, &preview)?;
+                Some(preview)
             })
         })
         .collect()
@@ -510,10 +636,7 @@ fn publish_visible_overlays(world: &mut World, visible_items: &[VisiblePreview])
             (item.layout.rect.width - 16.0).max(0.0),
             (item.layout.rect.height - 28.0).max(0.0),
         );
-        let clip = file_browser_preview_clip(world, item);
-        let Some(clip) = clip else {
-            continue;
-        };
+        let clip = item.clip;
         if clip.is_empty() || bounds.intersection(clip).is_none() {
             continue;
         }
@@ -664,6 +787,7 @@ mod tests {
         time::{SystemTime, UNIX_EPOCH},
     };
 
+    use bevy_app::App;
     use bevy_asset::Assets;
     use bevy_ecs::prelude::World;
     use bevy_tasks::{AsyncComputeTaskPool, TaskPoolBuilder};
@@ -677,6 +801,68 @@ mod tests {
         world.insert_resource(ImageRegistry::default());
         world.insert_resource(DisplayList::default());
         world
+    }
+
+    #[test]
+    fn settled_preview_pass_skips_work_until_browser_input_changes() {
+        let mut app = App::new();
+        app.insert_resource(Assets::<Image>::default());
+        app.insert_resource(ImageRegistry::default());
+        app.insert_resource(DisplayList::default());
+        install(&mut app);
+
+        app.update();
+        let first = app
+            .world()
+            .resource::<FileBrowserPreviewCache>()
+            .sync_passes();
+        assert_eq!(first, 1);
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<FileBrowserPreviewCache>()
+                .sync_passes(),
+            first
+        );
+
+        app.world_mut()
+            .resource_mut::<FileBrowserPreviewCache>()
+            .entries
+            .insert(
+                PathBuf::from("cached-preview.png"),
+                PreviewEntry {
+                    state: PreviewState::Failed("fixture".to_owned()),
+                    visible_owners: HashSet::new(),
+                    last_used: Duration::ZERO,
+                },
+            );
+        app.world_mut().spawn((UiNode, UiVisible(true)));
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<FileBrowserPreviewCache>()
+                .sync_passes(),
+            first,
+            "an unrelated visibility change does not rescan browser previews"
+        );
+
+        app.world_mut().spawn(FileBrowserItem {
+            owner: Entity::PLACEHOLDER,
+            path: PathBuf::from("/unused-preview.png"),
+            name: "unused-preview.png".to_owned(),
+            index: 0,
+            directory: false,
+            size: 0,
+            selected: false,
+            preview: PreviewKind::Image,
+        });
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<FileBrowserPreviewCache>()
+                .sync_passes(),
+            first + 1
+        );
     }
 
     #[test]
@@ -731,6 +917,15 @@ mod tests {
         assert_eq!(world.resource::<FileBrowserPreviewCache>().ready_count(), 0);
         assert!(world.get_entity(item).is_ok());
 
+        world.get_mut::<UiVisible>(owner).unwrap().0 = true;
+        world.get_mut::<UiLayoutResult>(item).unwrap().rect.y = 500.0;
+        sync_file_browser_previews(&mut world);
+        assert_eq!(
+            world.resource::<FileBrowserPreviewCache>().loading_count(),
+            0,
+            "a mounted item outside its inherited clip must not own a decode"
+        );
+
         fs::remove_dir_all(temp).unwrap();
     }
 
@@ -762,6 +957,54 @@ mod tests {
         assert_eq!(
             world.resource::<FileBrowserPreviewCache>().loading_count(),
             0
+        );
+    }
+
+    #[test]
+    fn preview_expiry_starts_when_the_last_visible_owner_disappears() {
+        let mut world = preview_world();
+        let mut time = Time::<()>::default();
+        time.advance_by(Duration::from_secs(10));
+        world.insert_resource(time);
+        let path = PathBuf::from("cached-preview.png");
+        world
+            .resource_mut::<FileBrowserPreviewCache>()
+            .entries
+            .insert(
+                path.clone(),
+                PreviewEntry {
+                    state: PreviewState::Failed("fixture".to_owned()),
+                    visible_owners: HashSet::from([Entity::from_bits(1)]),
+                    last_used: Duration::ZERO,
+                },
+            );
+
+        sync_file_browser_previews(&mut world);
+        assert!(
+            world
+                .resource::<FileBrowserPreviewCache>()
+                .entries
+                .contains_key(&path)
+        );
+        world
+            .resource_mut::<Time>()
+            .advance_by(Duration::from_secs(4));
+        sync_file_browser_previews(&mut world);
+        assert!(
+            world
+                .resource::<FileBrowserPreviewCache>()
+                .entries
+                .contains_key(&path)
+        );
+        world
+            .resource_mut::<Time>()
+            .advance_by(Duration::from_secs(2));
+        sync_file_browser_previews(&mut world);
+        assert!(
+            !world
+                .resource::<FileBrowserPreviewCache>()
+                .entries
+                .contains_key(&path)
         );
     }
 

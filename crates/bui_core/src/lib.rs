@@ -531,12 +531,17 @@ impl Plugin for CorePlugin {
                 $(app.add_observer(mark_hit_test_component_removed::<$component>);)+
             };
         }
-        register_hit_test_removals!(UiNode, UiHitBox, UiEnabled, UiVisible, UiParent, UiChildren);
+        register_hit_test_removals!(UiNode, UiEnabled, UiVisible, UiParent, UiChildren);
+        app.add_observer(mark_hit_box_removed);
     }
 }
 
 fn mark_hit_test_component_removed<T: Component>(_on: On<Remove<T>>, mut dirty: ResMut<UiDirty>) {
     dirty.mark_all(UiDirtyDomain::HitTest);
+}
+
+fn mark_hit_box_removed(on: On<Remove<UiHitBox>>, mut dirty: ResMut<UiDirty>) {
+    dirty.mark(UiDirtyDomain::HitTest, on.entity);
 }
 
 #[cfg(test)]

@@ -259,13 +259,7 @@ pub fn bench(c: &mut Criterion) {
             |b, _| {
                 b.iter(|| {
                     idle.app.update();
-                    black_box(
-                        idle.app
-                            .world()
-                            .resource::<DisplayList>()
-                            .widget_items()
-                            .len(),
-                    );
+                    black_box(idle.app.world().resource::<DisplayList>().item_count());
                 });
             },
         );
@@ -277,14 +271,7 @@ pub fn bench(c: &mut Criterion) {
                 b.iter(|| {
                     change(&mut changed, count);
                     changed.app.update();
-                    black_box(
-                        changed
-                            .app
-                            .world()
-                            .resource::<DisplayList>()
-                            .widget_items()
-                            .len(),
-                    );
+                    black_box(changed.app.world().resource::<DisplayList>().item_count());
                 });
             },
         );

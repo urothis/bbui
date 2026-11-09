@@ -1,5 +1,8 @@
 use bevy::{app::App, asset::Handle, image::Image, prelude::MinimalPlugins};
-use bui_render::{BuiRenderPlugin, ClipRect, DisplayList, DrawItem, ImageRegistry, Primitive};
+use bui_render::{
+    BuiRenderPlugin, ClipRect, DisplayList, DrawItem, ImageRegistry, Primitive, RenderSyncStats,
+    WidgetRenderFragment,
+};
 use bui_style::Rgba;
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput};
 use std::hint::black_box;
@@ -121,4 +124,50 @@ pub fn bench(c: &mut Criterion) {
         });
     }
     group.finish();
+
+    let mut keyed = c.benchmark_group("render/keyed_fragment_sync");
+    const FRAGMENTS: usize = 10_000;
+    keyed.throughput(Throughput::Elements(FRAGMENTS as u64));
+    let mut app = app(false);
+    let entities: Vec<_> = (0..FRAGMENTS)
+        .map(|_| app.world_mut().spawn_empty().id())
+        .collect();
+    let base = items(1, false, false).remove(0);
+    let changed = items(1, false, true).remove(0);
+    {
+        let mut list = app.world_mut().resource_mut::<DisplayList>();
+        for (order, entity) in entities.iter().copied().enumerate() {
+            list.upsert_widget_fragment(WidgetRenderFragment {
+                entity,
+                order: order as u64,
+                target_camera: None,
+                items: vec![base.clone()],
+            });
+        }
+    }
+    app.update();
+    keyed.bench_function("idle/10000", |b| {
+        b.iter(|| {
+            app.update();
+            black_box(app.world().resource::<RenderSyncStats>().scanned_draw_keys);
+        });
+    });
+    let target = entities[FRAGMENTS / 2];
+    let mut phase = false;
+    keyed.bench_function("change_one/10000", |b| {
+        b.iter(|| {
+            phase = !phase;
+            app.world_mut()
+                .resource_mut::<DisplayList>()
+                .upsert_widget_fragment(WidgetRenderFragment {
+                    entity: target,
+                    order: (FRAGMENTS / 2) as u64,
+                    target_camera: None,
+                    items: vec![if phase { changed.clone() } else { base.clone() }],
+                });
+            app.update();
+            black_box(app.world().resource::<RenderSyncStats>().scanned_draw_keys);
+        });
+    });
+    keyed.finish();
 }

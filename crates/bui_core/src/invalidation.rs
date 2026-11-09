@@ -16,6 +16,7 @@ pub enum UiDirtyDomain {
     Render,
     HitTest,
     Accessibility,
+    Preview,
 }
 
 #[derive(Debug, Default)]
@@ -56,6 +57,7 @@ pub struct UiDirty {
     render: DirtySet,
     hit_test: DirtySet,
     accessibility: DirtySet,
+    preview: DirtySet,
 }
 
 impl UiDirty {
@@ -70,6 +72,7 @@ impl UiDirty {
             UiDirtyDomain::Render => &mut self.render,
             UiDirtyDomain::HitTest => &mut self.hit_test,
             UiDirtyDomain::Accessibility => &mut self.accessibility,
+            UiDirtyDomain::Preview => &mut self.preview,
         }
     }
 
@@ -100,6 +103,7 @@ impl UiDirty {
             UiDirtyDomain::Render => self.render.generation,
             UiDirtyDomain::HitTest => self.hit_test.generation,
             UiDirtyDomain::Accessibility => self.accessibility.generation,
+            UiDirtyDomain::Preview => self.preview.generation,
         }
     }
 
@@ -123,8 +127,10 @@ mod tests {
         let entity = Entity::from_bits(1);
         dirty.mark(UiDirtyDomain::Style, entity);
         dirty.mark(UiDirtyDomain::Paint, entity);
+        dirty.mark(UiDirtyDomain::Preview, entity);
         assert_eq!(dirty.take(UiDirtyDomain::Style).entities.len(), 1);
         assert_eq!(dirty.take(UiDirtyDomain::Paint).entities.len(), 1);
+        assert_eq!(dirty.take(UiDirtyDomain::Preview).entities.len(), 1);
         assert!(dirty.take(UiDirtyDomain::Style).is_empty());
     }
 

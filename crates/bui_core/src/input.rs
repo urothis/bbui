@@ -4,13 +4,12 @@ use std::collections::{HashMap, VecDeque};
 
 use bevy_ecs::prelude::*;
 
-type HitTestChanged<'w, 's> = Query<
+type HitTestStructuralChanged<'w, 's> = Query<
     'w,
     's,
     Entity,
     Or<(
         Changed<UiNode>,
-        Changed<UiHitBox>,
         Changed<UiEnabled>,
         Changed<UiVisible>,
         Changed<UiParent>,
@@ -36,12 +35,27 @@ pub(crate) struct UiHoverValidation {
 }
 
 pub(crate) fn collect_hit_test_changes(
-    changed: HitTestChanged,
+    changed: HitTestStructuralChanged,
+    changed_hitboxes: Query<Entity, Changed<UiHitBox>>,
+    children: Query<&UiChildren>,
     mut validation: ResMut<UiHoverValidation>,
     mut dirty: ResMut<UiDirty>,
 ) {
-    if changed.iter().next().is_some() {
-        dirty.mark_all(UiDirtyDomain::HitTest);
+    for entity in &changed {
+        let mut pending = vec![entity];
+        let mut visited = std::collections::HashSet::new();
+        while let Some(at) = pending.pop() {
+            if !visited.insert(at) {
+                continue;
+            }
+            dirty.mark(UiDirtyDomain::HitTest, at);
+            if let Ok(descendants) = children.get(at) {
+                pending.extend(descendants.0.iter().copied());
+            }
+        }
+    }
+    for entity in &changed_hitboxes {
+        dirty.mark(UiDirtyDomain::HitTest, entity);
     }
     validation.prepared = true;
 }
@@ -995,10 +1009,10 @@ fn hit_test(world: &mut World, window: Entity, position: [f32; 2]) -> Option<Ent
 }
 
 fn validate_states(world: &mut World) {
-    let hit_generation = world
+    let hit_changes = world
         .resource_mut::<crate::UiDirty>()
-        .take(crate::UiDirtyDomain::HitTest)
-        .generation;
+        .take(crate::UiDirtyDomain::HitTest);
+    let hit_generation = hit_changes.generation;
     let mut windows: Vec<Entity> = world
         .resource::<UiFocus>()
         .windows
@@ -1028,12 +1042,20 @@ fn validate_states(world: &mut World) {
         let hover_invalid =
             hovered.is_some_and(|entity| !is_interactable_in_window(world, entity, window));
         let needs_hover_refresh = pointer_position.is_some_and(|position| {
+            let affected = hit_changes.all
+                || hit_changes.entities.iter().any(|&entity| {
+                    hovered == Some(entity)
+                        || world.get::<UiHitBox>(entity).is_some_and(|bounds| {
+                            bounds.window.is_none_or(|owner| owner == window)
+                                && bounds.contains(position)
+                        })
+                });
             world
                 .resource::<UiHoverValidation>()
                 .windows
                 .get(&window)
                 .is_none_or(|&(previous, generation)| {
-                    previous != position || generation != hit_generation
+                    previous != position || (generation != hit_generation && affected)
                 })
         });
         let refreshed_hover = match pointer_position {
@@ -1197,11 +1219,49 @@ mod tests {
         app.update();
         assert_eq!(app.world().resource::<UiHoverValidation>().hit_tests, first);
 
+        let other = app
+            .world_mut()
+            .spawn((
+                UiNode,
+                UiHitBox {
+                    window: Some(window),
+                    rect: UiRect::new(200.0, 200.0, 20.0, 20.0),
+                    clip: None,
+                    z_index: 1,
+                },
+            ))
+            .id();
+        app.update();
+        let after_insert = app.world().resource::<UiHoverValidation>().hit_tests;
+        app.world_mut().get_mut::<UiHitBox>(other).unwrap().rect =
+            UiRect::new(250.0, 250.0, 20.0, 20.0);
+        app.update();
+        assert_eq!(
+            app.world().resource::<UiHoverValidation>().hit_tests,
+            after_insert
+        );
+
+        app.world_mut().entity_mut(other).insert(UiVisible(false));
+        app.update();
+        let after_hide = app.world().resource::<UiHoverValidation>().hit_tests;
+        assert_eq!(after_hide, after_insert);
+        app.world_mut().get_mut::<UiVisible>(other).unwrap().0 = true;
+        app.update();
+        assert_eq!(
+            app.world().resource::<UiHoverValidation>().hit_tests,
+            after_hide
+        );
+
         app.world_mut().get_mut::<UiHitBox>(target).unwrap().rect =
             UiRect::new(200.0, 200.0, 100.0, 100.0);
         app.update();
         assert!(app.world().resource::<UiHoverValidation>().hit_tests > first);
         assert_eq!(app.world().resource::<UiFocus>().hovered, None);
+
+        app.world_mut().get_mut::<UiHitBox>(other).unwrap().rect =
+            UiRect::new(10.0, 10.0, 20.0, 20.0);
+        app.update();
+        assert_eq!(app.world().resource::<UiFocus>().hovered, Some(other));
     }
 
     #[test]

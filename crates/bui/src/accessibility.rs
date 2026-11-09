@@ -33,6 +33,7 @@ pub struct BuiFocusMirror(Option<Entity>);
 #[derive(Resource, Default)]
 pub(crate) struct AccessibilitySyncCache {
     prepared: bool,
+    selected_socket: Option<Entity>,
 }
 
 pub(crate) fn collect_accessibility_resource_changes(
@@ -41,7 +42,11 @@ pub(crate) fn collect_accessibility_resource_changes(
     mut dirty: ResMut<UiDirty>,
 ) {
     if selection.is_changed() {
-        dirty.mark_all(UiDirtyDomain::Accessibility);
+        let current = selection.0.as_ref().map(|(entity, _)| *entity);
+        for entity in [cache.selected_socket, current].into_iter().flatten() {
+            dirty.mark(UiDirtyDomain::Accessibility, entity);
+        }
+        cache.selected_socket = current;
     }
     cache.prepared = true;
 }

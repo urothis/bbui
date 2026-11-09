@@ -17,9 +17,9 @@ to one path with `cargo bench -p bui --bench performance --locked -- 'widgets/fu
 | `bui_core`, `bui_layout` | Transaction undo/redo; idle and one-change layout at 1k/10k nodes |
 | `bui_style`, `bui_widgets` | 1k/10k checkboxes; virtual list/table; 1k-node graph pan; active style animation |
 | `bui_text` | Bundled-font shaping; expression evaluation; text edit/undo/redo |
-| `bui_render` | First, idle, and one-change synchronization for rectangles and image grids |
+| `bui_render` | First, idle, and one-change synchronization for rectangles and image grids; idle and one-fragment changes in a 10k-fragment scene |
 | `bui_media` | Full PNG/SVG and PNG/GIF/VP8/H.264 poster decoding |
-| `bui` | Public plugin headless CPU updates with 200/1k mounted controls and text fields |
+| `bui` | Public plugin headless CPU updates with 200/1k/10k mounted checkboxes and 200/1k text fields |
 
 Scene construction and fixture encoding are outside timed loops; each changed case includes the
 edit and its `App::update`. Throughput is input elements or compressed bytes,
@@ -55,8 +55,8 @@ After the shared `UiDirty` invalidation contract (same machine and Criterion con
 | 1k checkbox public plugin update, idle | 1.31 ms | 0.748 ms | 1.8× faster |
 | 1k checkbox public plugin update, one toggle | 2.72 ms | 2.22 ms | 1.2× faster |
 | 1k-node graph pan, 3,984 links | 4.12 ms | 3.17 ms | 1.3× faster |
-| 10k-node layout update, idle | 25.9 µs | 40.4 µs | 1.6× slower |
-| 10k-node layout update, one intrinsic change | 3.31 ms | 3.30 ms | Similar |
+| 10k-node layout update, idle | 25.9 µs | 40.8 µs | 1.6× slower |
+| 10k-node layout update, one intrinsic change | 3.31 ms | 0.854 ms | 3.9× faster |
 
 The new text-field benchmark was measured before and after text invalidation on the same machine:
 
@@ -65,14 +65,41 @@ The new text-field benchmark was measured before and after text invalidation on 
 | 200 text fields, idle / one edit | 678 / 877 µs | 210 / 329 µs | 3.2× / 2.7× faster |
 | 1k text fields, idle / one edit | 4.02 / 4.67 ms | 0.968 / 1.39 ms | 4.2× / 3.4× faster |
 
-The paint collector now repaints only dirty controls and assembles their cached visible
-fragments in stable order. Changed layout paths still recompute their affected root, and
-render synchronization still checks and sorts the visible draw list when it changes.
+The paint collector now publishes only changed entity-keyed fragments. Layout follows
+dirty dependencies and recomputes an affected root only when structure or shared geometry
+requires it. Render synchronization updates changed keyed fragments and entity-attached
+paint nodes; legacy full-list replacement and global resource changes still require a
+complete sort and reconciliation.
 The collector itself polls Bevy change ticks, which accounts for part of the layout idle
 increase. The render synchronization benchmark changed from 12.73 ms to
 11.21 ms on its 10k-item first pass and from 1.18 ms to 0.888 ms for one changed item;
 its 4.6 µs idle path stayed effectively the same. These are CPU measurements, not GPU frame
 times.
+
+## End-to-end incremental measurements
+
+After keyed widget fragments, scoped layout dependencies, and renderer indexes, the same local
+aarch64 machine produced these release-mode Criterion means on 2026-11-09 (30 samples per case):
+
+| Workload | Idle | One change |
+| --- | ---: | ---: |
+| Layout, 10k nodes / one intrinsic size | 43.01 µs | 0.865 ms |
+| Public plugin, 1k checkboxes / one toggle | 55.98 µs | 62.26 µs |
+| Public plugin, 10k checkboxes / one toggle | 326.76 µs | 335.80 µs |
+| Public plugin, 1k text fields / one edit | 65.79 µs | 199.00 µs |
+| Widget update, 10k checkboxes / one toggle | 253.94 µs | 254.35 µs |
+| Widget update, 1k-node graph / pan | 25.80 µs | 3.118 ms |
+| Keyed render sync, 10k fragments / one fragment | 4.901 µs | 6.054 µs |
+| Legacy full-list render sync, 10k rectangles / one item | 4.777 µs | 1.078 ms |
+
+First synchronization of the legacy 10k-rectangle list averaged 8.001 ms. A changed 10k-row
+virtual list averaged 0.518 ms, and an eight-column table averaged 0.709 ms. Graph pan is the
+largest changed widget workload here because the graph itself moves; the keyed renderer updates
+its changed fragment without scanning unrelated fragments. Legacy full-list replacement still
+reconciles the supplied list. The benchmark observation was changed from materializing a flattened
+`DisplayList` view to reading its O(1) `item_count()`, so older public-plugin and widget timing
+percentages are not a like-for-like framework speedup comparison. The table above is the current
+comparison point for future changes.
 
 The numbers below were collected by earlier single-run harnesses on 2026-11-08. Use them as
 historical context, not as statistical baselines for the new Criterion suite.

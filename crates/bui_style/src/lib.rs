@@ -1490,8 +1490,8 @@ impl Plugin for StylePlugin {
     }
 }
 
-fn mark_style_component_removed<T: Component>(_on: On<Remove<T>>, mut dirty: ResMut<UiDirty>) {
-    dirty.mark_all(UiDirtyDomain::Style);
+fn mark_style_component_removed<T: Component>(on: On<Remove<T>>, mut dirty: ResMut<UiDirty>) {
+    dirty.mark(UiDirtyDomain::Style, on.entity);
 }
 
 #[derive(Resource, Debug, Default)]

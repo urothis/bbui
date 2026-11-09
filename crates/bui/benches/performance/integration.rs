@@ -77,13 +77,13 @@ fn text_scene(controls: usize) -> Scene {
 
 pub fn bench(c: &mut Criterion) {
     let mut group = c.benchmark_group("bui_plugin/headless_cpu_update");
-    for controls in [200, 1_000] {
+    for controls in [200, 1_000, 10_000] {
         group.throughput(Throughput::Elements(controls as u64));
         let mut idle = scene(controls);
         group.bench_with_input(BenchmarkId::new("idle", controls), &controls, |b, _| {
             b.iter(|| {
                 idle.app.update();
-                black_box(idle.app.world().resource::<DisplayList>().items().len());
+                black_box(idle.app.world().resource::<DisplayList>().item_count());
             });
         });
         let mut dirty = scene(controls);
@@ -99,7 +99,7 @@ pub fn bench(c: &mut Criterion) {
                         .expect("checkbox is mounted")
                         .toggle();
                     dirty.app.update();
-                    black_box(dirty.app.world().resource::<DisplayList>().items().len());
+                    black_box(dirty.app.world().resource::<DisplayList>().item_count());
                 });
             },
         );
@@ -113,7 +113,7 @@ pub fn bench(c: &mut Criterion) {
         text_group.bench_with_input(BenchmarkId::new("idle", controls), &controls, |b, _| {
             b.iter(|| {
                 idle.app.update();
-                black_box(idle.app.world().resource::<DisplayList>().items().len());
+                black_box(idle.app.world().resource::<DisplayList>().item_count());
             });
         });
         let mut changed = text_scene(controls);
@@ -127,7 +127,7 @@ pub fn bench(c: &mut Criterion) {
                     .entity_mut(changed.changed_control)
                     .insert(TextBuffer::new(if phase { "bravo" } else { "alpha" }));
                 changed.app.update();
-                black_box(changed.app.world().resource::<DisplayList>().items().len());
+                black_box(changed.app.world().resource::<DisplayList>().item_count());
             });
         });
     }
