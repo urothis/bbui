@@ -645,6 +645,44 @@ pub(super) fn gpu_ui_nodes_are_created_and_unchanged_entities_persist() {
 }
 
 #[test]
+pub(super) fn rounded_border_spawns_a_transparent_rounded_ui_node() {
+    let mut app = App::new();
+    app.add_plugins(BuiRenderPlugin);
+    let mut border = rect_item(3, 10.0);
+    border.primitive = Primitive::RoundedBorder {
+        rect: ClipRect {
+            x: 10.0,
+            y: 4.0,
+            width: 30.0,
+            height: 18.0,
+        },
+        radius: 4.0,
+        width: 1.0,
+        color: Rgba(0.1, 0.2, 0.3, 1.0),
+    };
+    app.world_mut().resource_mut::<DisplayList>().push(border);
+    app.update();
+
+    let mut query = app
+        .world_mut()
+        .query_filtered::<Entity, With<RenderedItem>>();
+    let entity = query.single(app.world()).unwrap();
+    let node = app.world().get::<Node>(entity).unwrap();
+    assert_eq!(node.border.left, Val::Px(1.0));
+    assert_eq!(node.border_radius, BorderRadius::all(Val::Px(4.0)));
+    assert!(app.world().get::<BorderColor>(entity).is_some());
+    assert_eq!(
+        app.world()
+            .get::<BackgroundColor>(entity)
+            .unwrap()
+            .0
+            .to_srgba()
+            .alpha,
+        0.0
+    );
+}
+
+#[test]
 pub(super) fn changed_items_reuse_clip_groups_and_retire_unused_groups() {
     let mut app = App::new();
     app.add_plugins(BuiRenderPlugin);

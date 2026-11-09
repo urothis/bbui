@@ -47,7 +47,7 @@ pub(super) fn paint_misc_controls(paint: &mut PaintEntityContext<'_>) -> bool {
             z,
             Primitive::RoundedRect {
                 rect: ClipRect::from(rect),
-                radius: 2.0,
+                radius: theme.corner_radius,
                 color,
             },
         ));
@@ -143,25 +143,14 @@ pub(super) fn paint_misc_controls(paint: &mut PaintEntityContext<'_>) -> bool {
                     color: theme.surface,
                 },
             ));
-            let right = popup.x + popup.width;
-            let bottom = popup.y + popup.height;
-            for (from, to) in [
-                ([popup.x, popup.y], [right, popup.y]),
-                ([right, popup.y], [right, bottom]),
-                ([right, bottom], [popup.x, bottom]),
-                ([popup.x, bottom], [popup.x, popup.y]),
-            ] {
-                camera_items.push(item(
-                    popup_clip,
-                    popup_z.saturating_add(3),
-                    Primitive::Line {
-                        from,
-                        to,
-                        width: 1.0,
-                        color: theme.color(ThemeColorToken::MenuBorder),
-                    },
-                ));
-            }
+            push_rounded_outline(
+                popup,
+                theme.corner_radius,
+                base_theme.color(ThemeColorToken::MenuBorder),
+                popup_clip,
+                popup_z.saturating_add(3),
+                camera_items,
+            );
         }
         if compact || icon_only {
             let text_y = rect.y + (rect.height - theme.font_size * theme.line_height) * 0.5;

@@ -25,6 +25,13 @@ pub enum Primitive {
         radius: f32,
         color: Rgba,
     },
+    /// A transparent rounded outline, including curved corners.
+    RoundedBorder {
+        rect: ClipRect,
+        radius: f32,
+        width: f32,
+        color: Rgba,
+    },
     /// A GPU-rendered filled ellipse with the supplied bounds and sRGB color.
     Ellipse {
         rect: ClipRect,
@@ -132,6 +139,17 @@ impl UiPaint {
             Primitive::RoundedRect { radius, color, .. } => Primitive::RoundedRect {
                 rect,
                 radius: *radius,
+                color: *color,
+            },
+            Primitive::RoundedBorder {
+                radius,
+                width,
+                color,
+                ..
+            } => Primitive::RoundedBorder {
+                rect,
+                radius: *radius,
+                width: *width,
                 color: *color,
             },
             Primitive::Ellipse { color, .. } => Primitive::Ellipse {

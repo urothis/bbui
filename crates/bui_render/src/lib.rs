@@ -20,14 +20,14 @@ use bevy::{
     },
     math::Rot2,
     prelude::{
-        App, BackgroundColor, BorderRadius, Color, Commands, Component, Entity, GlobalZIndex,
-        Image, ImageNode, Node, Overflow, Plugin, PositionType, Res, ResMut, Resource, Text,
-        Update, Val, ZIndex,
+        App, BackgroundColor, BorderColor, BorderRadius, Color, Commands, Component, Entity,
+        GlobalZIndex, Image, ImageNode, Node, Overflow, Plugin, PositionType, Res, ResMut,
+        Resource, Text, Update, Val, ZIndex,
     },
     text::{
         Justify, LetterSpacing, LineBreak, LineHeight, TextBounds, TextColor, TextFont, TextLayout,
     },
-    ui::{BoxShadow, UiTargetCamera, UiTransform},
+    ui::{BoxShadow, UiRect, UiTargetCamera, UiTransform},
 };
 
 use bevy::{

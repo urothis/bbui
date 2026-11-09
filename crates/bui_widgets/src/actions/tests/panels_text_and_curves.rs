@@ -537,15 +537,18 @@ pub(super) fn menu_and_node_graph_painters_consume_semantic_theme_tokens() {
             menu,
         ));
         collect_widget_paint(app.world_mut());
-        assert!(app
-                .world()
+        assert!(
+            app.world()
                 .resource::<DisplayList>()
                 .widget_items()
                 .iter()
                 .any(|item| matches!(
                     item.primitive,
-                    Primitive::Line { color, .. } if color == theme.color(ThemeColorToken::MenuBorder)
-                )));
+                    Primitive::RoundedBorder { color, radius, .. }
+                        if color == theme.color(ThemeColorToken::MenuBorder)
+                            && radius == theme.corner_radius
+                ))
+        );
     }
 }
 

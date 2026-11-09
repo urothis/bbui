@@ -4,6 +4,26 @@ pub(in crate::actions) fn item(clip: ClipRect, z: i32, primitive: Primitive) -> 
     DrawItem { clip, z, primitive }
 }
 
+pub(in crate::actions) fn push_rounded_outline(
+    rect: Rect,
+    radius: f32,
+    color: Rgba,
+    clip: ClipRect,
+    z: i32,
+    output: &mut Vec<DrawItem>,
+) {
+    output.push(item(
+        clip,
+        z,
+        Primitive::RoundedBorder {
+            rect: ClipRect::from(rect),
+            radius,
+            width: 1.0,
+            color,
+        },
+    ));
+}
+
 pub(in crate::actions) fn popup_viewport_clip(
     world: &World,
     window: Entity,

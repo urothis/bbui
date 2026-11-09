@@ -14,7 +14,9 @@ example together; open an individual image below to inspect it at full resolutio
 | Text and other | [Text area](examples/text_area.png) · [Text history](examples/text_history.png) · [Accessibility live](examples/accessibility_live.png) · [Icon assets](examples/icon_assets.png) · [Render basics](examples/render_basics.png) |
 
 Interaction captures show [Object Actions open](examples/menus_object_actions.png), the
-[selected Transform pie](examples/menus_transform_pie.png), and all five secondary properties
+[selected Transform pie](examples/menus_transform_pie.png), the properties editor
+[Render menu](examples/properties_editor_render_menu.png) and
+[Mode dropdown](examples/properties_editor_mode_dropdown.png), and all five secondary properties
 pages: [Modifiers](examples/properties_editor_modifiers.png),
 [Material](examples/properties_editor_material.png),
 [Outliner](examples/properties_editor_outliner.png),
@@ -36,6 +38,12 @@ for page in '80 modifiers' '109 material' '138 outliner' '167 preferences' '196 
   DISPLAY=:99 python3 scripts/capture_examples.py --click "13,$y" --output "/tmp/bui-$name" properties_editor
   cp "/tmp/bui-$name/properties_editor.png" "docs/visuals/examples/properties_editor_$name.png"
 done
+DISPLAY=:99 python3 scripts/capture_examples.py --click 280,140 --output /tmp/bui-object-actions menus
+cp /tmp/bui-object-actions/menus.png docs/visuals/examples/menus_object_actions.png
+DISPLAY=:99 python3 scripts/capture_examples.py --click 112,12 --output /tmp/bui-render-menu properties_editor
+cp /tmp/bui-render-menu/properties_editor.png docs/visuals/examples/properties_editor_render_menu.png
+DISPLAY=:99 python3 scripts/capture_examples.py --click 350,291 --output /tmp/bui-mode-dropdown properties_editor
+cp /tmp/bui-mode-dropdown/properties_editor.png docs/visuals/examples/properties_editor_mode_dropdown.png
 python3 scripts/make_example_gallery.py
 ```
 

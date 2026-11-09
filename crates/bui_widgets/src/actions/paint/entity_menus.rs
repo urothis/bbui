@@ -327,26 +327,15 @@ pub(super) fn paint_buttons_and_menus(paint: &mut PaintEntityContext<'_>) -> boo
                         color: theme.surface,
                     },
                 ));
-                let border = theme.color(ThemeColorToken::MenuBorder);
-                let right = popup.x + popup.width;
-                let bottom = popup.y + popup.height;
-                for (from, to) in [
-                    ([popup.x, popup.y], [right, popup.y]),
-                    ([right, popup.y], [right, bottom]),
-                    ([right, bottom], [popup.x, bottom]),
-                    ([popup.x, bottom], [popup.x, popup.y]),
-                ] {
-                    camera_items.push(item(
-                        popup_clip,
-                        popup_z.saturating_add(1),
-                        Primitive::Line {
-                            from,
-                            to,
-                            width: 1.0,
-                            color: border,
-                        },
-                    ));
-                }
+                let border = base_theme.color(ThemeColorToken::MenuBorder);
+                push_rounded_outline(
+                    popup,
+                    theme.corner_radius,
+                    border,
+                    popup_clip,
+                    popup_z.saturating_add(1),
+                    camera_items,
+                );
             }
         }
         camera_items.push(item(
