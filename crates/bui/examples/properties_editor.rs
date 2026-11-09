@@ -7,8 +7,8 @@ use bevy::prelude::*;
 use bevy::window::{PrimaryWindow, WindowResolution};
 use bui::prelude::*;
 use bui::widgets::{
-    Dropdown, IconButton, Label, MenuEntry, Panel, Progress, WidgetEvent, WidgetEventQueue,
-    WidgetNode,
+    Dropdown, IconButton, Label, MenuEntry, Panel, PanelGroup, Progress, WidgetEvent,
+    WidgetEventQueue, WidgetNode,
 };
 use bui_layout::{Rect, UiEdges};
 use bui_render::{ClipRect, Primitive, UiPaint};
@@ -507,6 +507,10 @@ fn setup(world: &mut World) {
     for page in pages.iter().skip(1) {
         world.entity_mut(*page).insert(UiVisible(false));
     }
+    world.entity_mut(pages[0]).insert(
+        PanelGroup::with_panels(["transform", "visibility", "viewport"])
+            .with_reordering("properties-object-panels"),
+    );
     world.entity_mut(mirror_modifier).insert(UiVisible(false));
     world.insert_resource(PropertyControls {
         transform,

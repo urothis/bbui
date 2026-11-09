@@ -311,6 +311,31 @@ pub(super) fn paint_misc_controls(paint: &mut PaintEntityContext<'_>) -> bool {
                 ),
             ));
         }
+        let reorderable = !sub_panel
+            && world
+                .get::<UiParent>(entity)
+                .and_then(|parent| world.get::<PanelGroup>(parent.0))
+                .is_some_and(|group| group.reorderable);
+        if reorderable {
+            let dot_color = theme.text_muted.mix(theme.surface, 0.45);
+            for row in 0..3 {
+                for column in 0..4 {
+                    camera_items.push(item(
+                        clip,
+                        z.saturating_add(2),
+                        Primitive::Ellipse {
+                            rect: ClipRect {
+                                x: rect.x + rect.width - 20.0 + column as f32 * 3.0,
+                                y: rect.y + header_height * 0.5 - 3.5 + row as f32 * 3.0,
+                                width: 1.5,
+                                height: 1.5,
+                            },
+                            color: dot_color,
+                        },
+                    ));
+                }
+            }
+        }
         return true;
     }
     if let Some(progress) = world.get::<Progress>(entity) {
