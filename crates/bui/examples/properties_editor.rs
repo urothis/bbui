@@ -511,6 +511,38 @@ fn setup(world: &mut World) {
         PanelGroup::with_panels(["transform", "visibility", "viewport"])
             .with_reordering("properties-object-panels"),
     );
+    let secondary_groups: [(&str, &[&str], &str); 3] = [
+        (
+            PAGE_KEYS[1],
+            &["modifier-subdivision", "modifier-ramp", "modifier-curves"],
+            "properties-modifier-panels",
+        ),
+        (
+            PAGE_KEYS[2],
+            &["material-preview", "material-surface"],
+            "properties-material-panels",
+        ),
+        (
+            PAGE_KEYS[4],
+            &[
+                "prefs-input",
+                "prefs-paths",
+                "prefs-addons",
+                "prefs-interface",
+            ],
+            "properties-preferences-panels",
+        ),
+    ];
+    for (page_key, panel_keys, persistence_key) in secondary_groups {
+        let content_key = format!("{page_key}-content");
+        let Some(&content) = keyed.get(&content_key) else {
+            eprintln!("properties editor panel group {content_key} is incomplete");
+            return;
+        };
+        world.entity_mut(content).insert(
+            PanelGroup::with_panels(panel_keys.iter().copied()).with_reordering(persistence_key),
+        );
+    }
     world.entity_mut(mirror_modifier).insert(UiVisible(false));
     world.insert_resource(PropertyControls {
         transform,

@@ -9,7 +9,9 @@ use bui::widgets::{
 fn auxiliary_page(key: &str, title: &str, content: WidgetNode) -> WidgetNode {
     WidgetNode::column([
         WidgetNode::label(format!("{title} Properties")).with_height(UiLength::Px(21.0)),
-        content.with_width(UiLength::Fill(1.0)),
+        content
+            .with_key(format!("{key}-content"))
+            .with_width(UiLength::Fill(1.0)),
     ])
     .with_key(key)
     .with_gap(3.0)
@@ -47,8 +49,27 @@ pub(super) fn modifier_page() -> WidgetNode {
                     check("Optimal Display", true),
                 ],
             )
+            .with_key("modifier-subdivision")
             .with_width(UiLength::Fill(1.0)),
             WidgetNode::panel(
+                "Color Ramp",
+                true,
+                [WidgetNode::color_ramp("", ramp)
+                    .with_width(UiLength::Fill(1.0))
+                    .with_height(UiLength::Px(125.0))],
+            )
+            .with_key("modifier-ramp")
+            .with_width(UiLength::Fill(1.0)),
+            WidgetNode::panel(
+                "RGB Curves",
+                true,
+                [WidgetNode::curve_editor_default("")
+                    .with_width(UiLength::Fill(1.0))
+                    .with_height(UiLength::Px(150.0))],
+            )
+            .with_key("modifier-curves")
+            .with_width(UiLength::Fill(1.0)),
+            WidgetNode::column([WidgetNode::panel(
                 "Mirror",
                 true,
                 [
@@ -59,22 +80,7 @@ pub(super) fn modifier_page() -> WidgetNode {
                 ],
             )
             .with_key("mirror-modifier")
-            .with_width(UiLength::Fill(1.0)),
-            WidgetNode::panel(
-                "Color Ramp",
-                true,
-                [WidgetNode::color_ramp("", ramp)
-                    .with_width(UiLength::Fill(1.0))
-                    .with_height(UiLength::Px(125.0))],
-            )
-            .with_width(UiLength::Fill(1.0)),
-            WidgetNode::panel(
-                "RGB Curves",
-                true,
-                [WidgetNode::curve_editor_default("")
-                    .with_width(UiLength::Fill(1.0))
-                    .with_height(UiLength::Px(150.0))],
-            )
+            .with_width(UiLength::Fill(1.0))])
             .with_width(UiLength::Fill(1.0)),
         ])
         .with_gap(4.0)
@@ -118,6 +124,7 @@ pub(super) fn material_page() -> WidgetNode {
                     .with_width(UiLength::Fill(1.0))
                     .with_height(UiLength::Px(155.0))],
             )
+            .with_key("material-preview")
             .with_width(UiLength::Fill(1.0)),
             WidgetNode::panel(
                 "Surface",
@@ -139,6 +146,7 @@ pub(super) fn material_page() -> WidgetNode {
                     property_value("IOR", WidgetNode::number("", 1.45, 1.0, 4.0, 0.01)),
                 ],
             )
+            .with_key("material-surface")
             .with_width(UiLength::Fill(1.0)),
         ])
         .with_gap(4.0)
@@ -210,6 +218,7 @@ pub(super) fn outliner_page() -> WidgetNode {
                     .with_width(UiLength::Fill(1.0))
                     .with_height(UiLength::Px(160.0))],
             )
+            .with_key("outliner-list")
             .with_width(UiLength::Fill(1.0)),
         ])
         .with_gap(4.0)
@@ -235,6 +244,7 @@ pub(super) fn preferences_page() -> WidgetNode {
                     ),
                 ],
             )
+            .with_key("prefs-input")
             .with_width(UiLength::Fill(1.0)),
             WidgetNode::panel(
                 "File Paths",
@@ -245,6 +255,7 @@ pub(super) fn preferences_page() -> WidgetNode {
                     property_value("Temp", WidgetNode::text_field("", "//tmp/")),
                 ],
             )
+            .with_key("prefs-paths")
             .with_width(UiLength::Fill(1.0)),
             WidgetNode::panel(
                 "Add-ons",
@@ -256,6 +267,7 @@ pub(super) fn preferences_page() -> WidgetNode {
                     check("Add-on 03", true),
                 ],
             )
+            .with_key("prefs-addons")
             .with_width(UiLength::Fill(1.0)),
             WidgetNode::panel(
                 "Interface",
@@ -270,6 +282,7 @@ pub(super) fn preferences_page() -> WidgetNode {
                     ),
                 ],
             )
+            .with_key("prefs-interface")
             .with_width(UiLength::Fill(1.0)),
         ])
         .with_gap(4.0)
