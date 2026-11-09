@@ -459,7 +459,10 @@ pub(super) fn theme_font_metrics_drive_text_nodes_and_invalidate_changed_text() 
     let default_font = app.world().get::<TextFont>(first_entity).unwrap();
     assert!(matches!(
         default_font.font,
-        bevy::text::FontSource::Family(ref family) if family == UI_DEFAULT_FONT_FAMILY
+        bevy::text::FontSource::List(ref faces)
+            if matches!(faces.as_slice(),
+                [bevy::text::FontSource::Family(primary), bevy::text::FontSource::Family(_)]
+                if primary == UI_DEFAULT_FONT_FAMILY)
     ));
 
     {

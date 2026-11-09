@@ -199,7 +199,9 @@ fn missing_font_falls_back_recovers_and_releases_when_offscreen() {
         .expect("ready font must expose its Bevy asset handle");
     let font_id = retained.id();
     let resolved = resolve_text_font(app.world(), entity, fallback.clone());
-    assert!(matches!(resolved.font, FontSource::Handle(ref handle) if handle.id() == font_id));
+    assert!(matches!(resolved.font, FontSource::List(ref faces)
+        if matches!(faces.as_slice(), [FontSource::Handle(handle), FontSource::Family(_)]
+            if handle.id() == font_id)));
     assert_eq!(resolved.font_size, fallback.font_size);
     let shaped = app.world().get::<UiTextLayout>(entity).unwrap();
     assert!(shaped.layout().is_some());

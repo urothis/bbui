@@ -8,21 +8,27 @@ use bui_layout::{UiLayoutResult, UiLayoutRoot, UiViewports};
 
 /// Family name used for BUI's bundled proportional default UI face.
 pub const UI_DEFAULT_FONT_FAMILY: &str = "BUI UI Sans";
+/// Bundled fallback for disclosure arrows and other UI symbols absent from Inter.
+pub const UI_SYMBOL_FONT_FAMILY: &str = "BUI UI Symbols";
 
 const UI_DEFAULT_FONT_DATA: &[u8] = include_bytes!("../../../assets/fonts/Inter[opsz,wght].ttf");
+const UI_SYMBOL_FONT_DATA: &[u8] = include_bytes!("../../../assets/fonts/DejaVuSans.ttf");
 
-/// Build a theme-sized `TextFont` using BUI's bundled Inter face.
+/// Build a theme-sized `TextFont` with bundled Inter and symbol fallback faces.
 ///
 /// This only chooses the font family and size. Callers can still provide a custom `TextFont`,
 /// while [`resolve_text_font`] lets a ready [`UiFontAsset`] override the family for a subtree.
 pub fn ui_default_text_font(font_size: f32) -> TextFont {
     TextFont {
-        font: FontSource::Family(UI_DEFAULT_FONT_FAMILY.into()),
+        font: FontSource::list([
+            FontSource::Family(UI_DEFAULT_FONT_FAMILY.into()),
+            FontSource::Family(UI_SYMBOL_FONT_FAMILY.into()),
+        ]),
         ..TextFont::from_font_size(font_size)
     }
 }
 
-/// Register BUI's embedded Inter face in Bevy's shared font database.
+/// Register BUI's embedded text and symbol faces in Bevy's shared font database.
 ///
 /// The operation is idempotent, so both `TextPlugin` and `BuiRenderPlugin` can call it. It runs
 /// synchronously during plugin setup, before intrinsic measurement or display-list rendering,
@@ -30,19 +36,20 @@ pub fn ui_default_text_font(font_size: f32) -> TextFont {
 pub fn register_default_ui_font(world: &mut World) {
     world.init_resource::<FontCx>();
     let mut font_cx = world.resource_mut::<FontCx>();
-    if font_cx
-        .collection
-        .family_id(UI_DEFAULT_FONT_FAMILY)
-        .is_none()
-    {
-        let font = Font::from_bytes(UI_DEFAULT_FONT_DATA.to_vec());
-        font_cx.collection.register_fonts(
-            font.data,
-            Some(parley::fontique::FontInfoOverride {
-                family_name: Some(UI_DEFAULT_FONT_FAMILY),
-                ..Default::default()
-            }),
-        );
+    for (family, data) in [
+        (UI_DEFAULT_FONT_FAMILY, UI_DEFAULT_FONT_DATA),
+        (UI_SYMBOL_FONT_FAMILY, UI_SYMBOL_FONT_DATA),
+    ] {
+        if font_cx.collection.family_id(family).is_none() {
+            let font = Font::from_bytes(data.to_vec());
+            font_cx.collection.register_fonts(
+                font.data,
+                Some(parley::fontique::FontInfoOverride {
+                    family_name: Some(family),
+                    ..Default::default()
+                }),
+            );
+        }
     }
 }
 
@@ -125,7 +132,10 @@ pub fn resolve_text_font(world: &World, entity: Entity, fallback: TextFont) -> T
             .and_then(UiFontAsset::ready_handle)
         {
             return TextFont {
-                font: FontSource::Handle(handle),
+                font: FontSource::list([
+                    FontSource::Handle(handle),
+                    FontSource::Family(UI_SYMBOL_FONT_FAMILY.into()),
+                ]),
                 ..fallback
             };
         }

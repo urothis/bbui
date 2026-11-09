@@ -62,6 +62,17 @@ pub(super) fn paint_buttons_and_menus(paint: &mut PaintEntityContext<'_>) -> boo
             header_play || icon_role.is_some_and(|role| role.starts_with("flat-icon-"));
         let side_tab = icon_role.is_some_and(|role| role.starts_with("side-tab"));
         let side_tab_active = side_tab && icon_role.is_some_and(|role| role.ends_with("-active"));
+        let side_tab_hovered = side_tab
+            && world
+                .get_resource::<UiFocus>()
+                .and_then(|focus| focus.state(layout.window))
+                .is_some_and(|state| state.hovered == Some(entity));
+        let tab_inner: f32 = if base_theme.kind == bui_style::ThemeKind::Light {
+            179.0 / 255.0
+        } else {
+            29.0 / 255.0
+        };
+        let tab_hover = (tab_inner + 15.0 / 255.0).min(1.0);
         let icon_color = match icon_role {
             Some("flat-icon-orange" | "side-tab-orange" | "side-tab-orange-active") => {
                 Rgba(0.91, 0.52, 0.23, 1.0)
@@ -74,7 +85,16 @@ pub(super) fn paint_buttons_and_menus(paint: &mut PaintEntityContext<'_>) -> boo
             clip,
             z,
             Primitive::RoundedRect {
-                rect: ClipRect::from(rect),
+                rect: ClipRect::from(if side_tab {
+                    Rect {
+                        x: rect.x + 1.0,
+                        width: (rect.width - 1.0).max(0.0),
+                        height: (rect.height - 1.0).max(0.0),
+                        ..rect
+                    }
+                } else {
+                    rect
+                }),
                 radius: if properties_rail || !side_tab_active {
                     1.0
                 } else {
@@ -83,7 +103,11 @@ pub(super) fn paint_buttons_and_menus(paint: &mut PaintEntityContext<'_>) -> boo
                 color: if enabled {
                     if side_tab_active {
                         base_theme.background
-                    } else if side_tab || header_play {
+                    } else if side_tab_hovered {
+                        Rgba(tab_hover, tab_hover, tab_hover, 1.0)
+                    } else if side_tab {
+                        Rgba(tab_inner, tab_inner, tab_inner, 1.0)
+                    } else if header_play {
                         base_theme.background.mix(Rgba(0.0, 0.0, 0.0, 1.0), 0.5)
                     } else if properties_rail {
                         theme.background

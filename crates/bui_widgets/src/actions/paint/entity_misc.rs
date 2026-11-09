@@ -17,13 +17,18 @@ pub(super) fn paint_misc_controls(paint: &mut PaintEntityContext<'_>) -> bool {
             "properties-menu-bar" | "properties-tab-rail"
         )
     }) {
+        let rail_color = if base_theme.kind == bui_style::ThemeKind::Light {
+            Rgba(179.0 / 255.0, 179.0 / 255.0, 179.0 / 255.0, 1.0)
+        } else {
+            base_theme.background.mix(Rgba(0.0, 0.0, 0.0, 1.0), 0.5)
+        };
         camera_items.push(item(
             clip,
             z,
             Primitive::RoundedRect {
                 rect: ClipRect::from(rect),
                 radius: 0.0,
-                color: base_theme.background.mix(Rgba(0.0, 0.0, 0.0, 1.0), 0.5),
+                color: rail_color,
             },
         ));
         return true;
@@ -224,6 +229,10 @@ pub(super) fn paint_misc_controls(paint: &mut PaintEntityContext<'_>) -> bool {
         return true;
     }
     if let Some(panel) = world.get::<Panel>(entity) {
+        let panel_hovered = world
+            .get_resource::<UiFocus>()
+            .and_then(|focus| focus.state(layout.window))
+            .is_some_and(|state| state.hovered == Some(entity));
         let object_panel = world
             .get::<UiRole>(entity)
             .is_some_and(|role| role.0 == "object-panel");
@@ -244,7 +253,11 @@ pub(super) fn paint_misc_controls(paint: &mut PaintEntityContext<'_>) -> bool {
                 color: if sub_panel {
                     base_theme.surface.mix(base_theme.background, 0.615)
                 } else {
-                    theme.surface
+                    if panel_hovered {
+                        base_theme.surface
+                    } else {
+                        theme.surface
+                    }
                 },
             },
         ));

@@ -19,8 +19,9 @@ pub mod text_buffer;
 pub mod ui_layout;
 
 pub use font_assets::{
-    UI_DEFAULT_FONT_FAMILY, UiFontAsset, UiFontAssetState, UiFontAssetStatus,
-    register_default_ui_font, resolve_text_font, sync_ui_font_assets, ui_default_text_font,
+    UI_DEFAULT_FONT_FAMILY, UI_SYMBOL_FONT_FAMILY, UiFontAsset, UiFontAssetState,
+    UiFontAssetStatus, register_default_ui_font, resolve_text_font, sync_ui_font_assets,
+    ui_default_text_font,
 };
 pub use formatting::format_float;
 pub use layout::{
