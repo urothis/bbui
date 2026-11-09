@@ -14,6 +14,13 @@ This repository is an in-progress, original Rust implementation of Blender-style
 - `bui_widgets`: controls, editors, interactions, and declarative trees.
 - `bui_macros`: `bui!` Rust UI declaration macro.
 
+Implementation is organized by responsibility within each crate. For example,
+`bui_widgets/src/actions/` contains event handling, widget interactions, view synchronization,
+and `paint/` renderers; `bui_render/src/` separates draw data from incremental and full GPU
+synchronization; `bui_media/src/` keeps each decoder in its own module. Large unit-test suites
+live beside their parent modules in `tests/` folders. Add behavior to the owning module and
+keep its tests with that module.
+
 ## Development
 
 Use Rust 1.99 or newer. Dependencies are pinned through `Cargo.lock`, including Bevy 0.20.1.
