@@ -1039,3 +1039,102 @@ pub(super) fn node_graph_moves_and_direct_edits_repaint_only_changed_node_and_li
         "a model node reorder is reflected in stable virtual fragment rank"
     );
 }
+
+#[test]
+pub(super) fn graph_transform_node_move_and_resize_refresh_nodes_and_links() {
+    let mut app = App::new();
+    app.add_plugins(WidgetPlugin);
+    let window = app.world_mut().spawn_empty().id();
+    let mut graph = NodeGraph::default();
+    let source = graph.add_node(
+        "Source",
+        [40.0, 40.0],
+        vec![NodeSocket::output("out", crate::SocketType::Float)],
+    );
+    let sink = graph.add_node(
+        "Sink",
+        [300.0, 40.0],
+        vec![NodeSocket::input("in", crate::SocketType::Float)],
+    );
+    let link = graph.create_link(source, 0, sink, 0).unwrap();
+    let owner = WidgetTree::new(WidgetNode::node_graph("Graph", graph))
+        .spawn(app.world_mut(), None)
+        .unwrap();
+    let rect = UiRect::new(20.0, 30.0, 800.0, 500.0);
+    app.world_mut().entity_mut(owner).insert(UiLayoutResult {
+        window,
+        rect,
+        clip: Some(rect),
+        z: 8,
+        content_size: [rect.width, rect.height],
+        dpi_scale: 1.0,
+    });
+    app.update();
+
+    assert!(move_node_graph_node(
+        app.world_mut(),
+        owner,
+        source,
+        [70.0, 65.0],
+    ));
+    {
+        let mut graph = app.world_mut().get_mut::<NodeGraph>(owner).unwrap();
+        graph.pan = [60.0, 25.0];
+        graph.zoom = 1.2;
+    }
+    app.update();
+
+    let graph = app.world().get::<NodeGraph>(owner).unwrap();
+    let sink_node = graph.nodes.iter().find(|node| node.id == sink).unwrap();
+    let expected = node_graph_node_rect(
+        graph,
+        rect,
+        sink_node,
+        &app.world().resource::<Theme>().spacing.node_graph,
+    );
+    let entity =
+        app.world().resource::<WidgetNodeGraphItems>().items[&owner][&NodeGraphItemKey::Node(sink)];
+    assert_eq!(
+        app.world().get::<UiLayoutResult>(entity).unwrap().rect,
+        expected
+    );
+
+    assert!(move_node_graph_node(
+        app.world_mut(),
+        owner,
+        source,
+        [90.0, 75.0],
+    ));
+    let resized = UiRect::new(42.0, 58.0, 620.0, 430.0);
+    app.world_mut().entity_mut(owner).insert(UiLayoutResult {
+        window,
+        rect: resized,
+        clip: Some(resized),
+        z: 8,
+        content_size: [resized.width, resized.height],
+        dpi_scale: 1.0,
+    });
+    app.update();
+    let graph = app.world().get::<NodeGraph>(owner).unwrap();
+    let spacing = &app.world().resource::<Theme>().spacing.node_graph;
+    for node in &graph.nodes {
+        let entity = app.world().resource::<WidgetNodeGraphItems>().items[&owner]
+            [&NodeGraphItemKey::Node(node.id)];
+        assert_eq!(
+            app.world().get::<UiLayoutResult>(entity).unwrap().rect,
+            node_graph_node_rect(graph, resized, node, spacing),
+        );
+    }
+    let link_entity =
+        app.world().resource::<WidgetNodeGraphItems>().items[&owner][&NodeGraphItemKey::Link(link)];
+    let link_fragment = &app.world().resource::<DisplayList>().widget_fragments()[&link_entity];
+    let actual_points = link_fragment.items.iter().find_map(|item| {
+        if let bui_render::Primitive::Bezier { points, .. } = item.primitive {
+            Some(points)
+        } else {
+            None
+        }
+    });
+    let expected_points = node_graph_link_points(graph, resized, graph.links[0], spacing);
+    assert_eq!(actual_points, expected_points);
+}

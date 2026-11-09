@@ -35,6 +35,9 @@ pub fn sync_node_graph_views(world: &mut World) {
         let moved_nodes = deltas.remove(&owner).filter(|nodes| !nodes.is_empty());
         let force_signature_diff = forced_signature_diffs.remove(&owner);
         let previous_stamp = stamps.get(&owner).copied();
+        let transform = world
+            .get::<NodeGraph>(owner)
+            .map(node_graph_transform_signature);
         let partial_update = moved_nodes.as_ref().filter(|_| {
             !force_signature_diff && {
                 previous.contains_key(&owner)
@@ -49,7 +52,7 @@ pub fn sync_node_graph_views(world: &mut World) {
                     && cache.incident_links.contains_key(&owner)
                     && cache.node_signatures.contains_key(&owner)
                     && cache.link_signatures.contains_key(&owner)
-                    && cache.transforms.contains_key(&owner)
+                    && cache.transforms.get(&owner) == transform.as_ref()
             }
         });
         let Some(layout) = layout else {
@@ -619,6 +622,13 @@ pub(super) fn node_graph_link_signature(
     }
 }
 
+pub(super) fn node_graph_transform_signature(graph: &NodeGraph) -> NodeGraphTransformSignature {
+    NodeGraphTransformSignature {
+        pan: graph.pan.map(f32::to_bits),
+        zoom: graph.zoom.to_bits(),
+    }
+}
+
 pub(super) fn node_graph_signature_snapshot(graph: &NodeGraph) -> NodeGraphSignatureSnapshot {
     let node_indices: HashMap<_, _> = graph
         .nodes
@@ -674,10 +684,7 @@ pub(super) fn node_graph_signature_snapshot(graph: &NodeGraph) -> NodeGraphSigna
         link_signatures,
         link_order,
         incident_links,
-        transform: NodeGraphTransformSignature {
-            pan: graph.pan.map(f32::to_bits),
-            zoom: graph.zoom.to_bits(),
-        },
+        transform: node_graph_transform_signature(graph),
     }
 }
 

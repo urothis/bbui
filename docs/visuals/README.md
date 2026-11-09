@@ -22,6 +22,8 @@ pages: [Modifiers](examples/properties_editor_modifiers.png),
 [Outliner](examples/properties_editor_outliner.png),
 [Preferences](examples/properties_editor_preferences.png), and
 [Geometry Nodes](examples/properties_editor_nodes.png).
+The [wide Geometry Nodes view](examples/properties_editor_nodes_wide.png) shows links remaining
+attached after resizing the properties editor to 1148×690 and dragging two nodes apart.
 
 Render is a command menu; Object Mode is a choice field, so its current value stays highlighted.
 Their open popups use the same surface, shadow, corner radius, and border.
@@ -54,6 +56,8 @@ The capture script requires `xwininfo` and `xwd`; it checks that every named exa
 renders, and writes PNGs to `docs/visuals/examples/`. The GPU stress benchmark has no visible
 window and is excluded. `scripts/x11_input.py` can raise/focus a window and send pointer actions
 when reviewing interactive states.
+To reproduce the wide graph review, resize the properties editor to 1148×690, open Geometry
+Nodes, then drag Group Output and Set Position to separate locations before capturing the window.
 
 The four-node NodeGraph GPU readback scene has additional reviewed
 [Dark](node_graph_example_dark.png) and [Light](node_graph_example_light.png) captures at
