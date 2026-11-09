@@ -171,9 +171,6 @@ pub(super) fn spawn_node(
     if matches!(&node.spec, WidgetSpec::Tooltip { .. }) {
         entity.insert(UiRole::new("tooltip-host"));
     }
-    if let Some(role) = &node.role {
-        entity.insert(UiRole::new(role.clone()));
-    }
     if let Some(style) = &node.style {
         entity.insert(style.clone());
     }
@@ -213,6 +210,11 @@ pub(super) fn spawn_node(
         set_parent(world, id, parent).map_err(WidgetTreeError::Hierarchy)?;
     }
     insert_control(world, id, &node.spec)?;
+    // An explicit role describes the caller's chosen presentation. Control defaults must not
+    // replace it when the node is mounted.
+    if let Some(role) = &node.role {
+        world.entity_mut(id).insert(UiRole::new(role.clone()));
+    }
     if let WidgetSpec::Menu { tree, .. } = &node.spec {
         spawn_menu_items(world, id, tree);
     }

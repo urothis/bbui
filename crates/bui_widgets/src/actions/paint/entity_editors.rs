@@ -52,6 +52,30 @@ pub(super) fn paint_editor_widgets(paint: &mut PaintEntityContext<'_>) -> bool {
         checkbox.enabled &= enabled;
         if world
             .get::<UiRole>(entity)
+            .is_some_and(|role| role.0 == "property-decorator")
+        {
+            let size = if checkbox.is_checked() { 6.0 } else { 3.0 };
+            camera_items.push(item(
+                clip,
+                z,
+                Primitive::Ellipse {
+                    rect: ClipRect {
+                        x: rect.x + (rect.width - size) * 0.5,
+                        y: rect.y + (rect.height - size) * 0.5,
+                        width: size,
+                        height: size,
+                    },
+                    color: if checkbox.is_checked() {
+                        theme.accent
+                    } else {
+                        theme.text_muted
+                    },
+                },
+            ));
+            return true;
+        }
+        if world
+            .get::<UiRole>(entity)
             .is_some_and(|role| role.0 == "filled-checkbox")
         {
             let size = rect.height.min(13.0);

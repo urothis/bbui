@@ -7,12 +7,18 @@ use bevy::prelude::*;
 use bevy::window::{PrimaryWindow, WindowResolution};
 use bui::prelude::*;
 use bui::widgets::{
-    Dropdown, IconButton, Label, MenuEntry, Panel, WidgetEvent, WidgetEventQueue, WidgetNode,
+    Dropdown, IconButton, Label, MenuEntry, Panel, Progress, WidgetEvent, WidgetEventQueue,
+    WidgetNode,
 };
 use bui_layout::{Rect, UiEdges};
 use bui_render::{ClipRect, Primitive, UiPaint};
 use bui_style::Rgba;
 use bui_widgets::actions::WidgetValue;
+
+#[path = "properties_editor/pages.rs"]
+mod pages;
+
+use pages::{material_page, modifier_page, nodes_page, outliner_page, preferences_page};
 
 const WIDTH: f32 = 520.0;
 const HEIGHT: f32 = 690.0;
@@ -24,6 +30,49 @@ struct PropertyControls {
     display: Entity,
     status: Entity,
     object_name: Entity,
+    progress: Entity,
+    progress_label: Entity,
+    mirror_modifier: Entity,
+    pages: [Entity; 6],
+    tabs: [Entity; 6],
+}
+
+const PAGE_KEYS: [&str; 6] = [
+    "page-object",
+    "page-modifiers",
+    "page-material",
+    "page-outliner",
+    "page-preferences",
+    "page-nodes",
+];
+const TAB_KEYS: [&str; 6] = [
+    "tab-object",
+    "tab-modifiers",
+    "tab-material",
+    "tab-outliner",
+    "tab-preferences",
+    "tab-nodes",
+];
+const TAB_NAMES: [&str; 6] = [
+    "Object",
+    "Modifiers",
+    "Material",
+    "Outliner",
+    "Preferences",
+    "Geometry Nodes",
+];
+
+fn tab_role(index: usize, active: bool) -> &'static str {
+    match (index, active) {
+        (0, true) => "side-tab-orange-active",
+        (0, false) => "side-tab-orange",
+        (1, true) | (5, true) => "side-tab-blue-active",
+        (1, false) | (5, false) => "side-tab-blue",
+        (2, true) => "side-tab-red-active",
+        (2, false) => "side-tab-red",
+        (_, true) => "side-tab-active",
+        _ => "side-tab",
+    }
 }
 
 fn axis(label: &str, value: f64, suffix: &str) -> WidgetNode {
@@ -45,18 +94,29 @@ fn check(label: &str, checked: bool) -> WidgetNode {
         .with_height(UiLength::Px(20.0))
 }
 
-fn toolbar_button(icon: &str, description: &str, key: &str) -> WidgetNode {
-    let role = match key {
-        "rail-transform" => "flat-icon-orange",
-        "rail-visibility" => "flat-icon-blue",
-        "rail-display" => "flat-icon-red",
-        _ => "flat-icon-button",
-    };
-    WidgetNode::icon_button(icon, description)
-        .with_key(key)
-        .with_role(role)
-        .with_width(UiLength::Px(26.0))
-        .with_height(UiLength::Px(27.0))
+fn toolbar_button(index: usize, icon: &str) -> WidgetNode {
+    WidgetNode::icon_button(icon, TAB_NAMES[index])
+        .with_key(TAB_KEYS[index])
+        .with_role(tab_role(index, index == 0))
+        .with_width(UiLength::Px(28.0))
+        .with_height(UiLength::Px(28.0))
+}
+
+fn activate_page(world: &mut World, controls: PropertyControls, selected: usize) {
+    for (index, (page, tab)) in controls.pages.into_iter().zip(controls.tabs).enumerate() {
+        let active = index == selected;
+        if let Some(mut visible) = world.get_mut::<UiVisible>(page)
+            && visible.0 != active
+        {
+            visible.0 = active;
+        }
+        if let Some(mut role) = world.get_mut::<UiRole>(tab) {
+            let expected = tab_role(index, active);
+            if role.0 != expected {
+                role.0 = expected.into();
+            }
+        }
+    }
 }
 
 fn setup(world: &mut World) {
@@ -73,7 +133,7 @@ fn setup(world: &mut World) {
         theme.spacing.control.slider_height = 20.0;
         theme.spacing.control.slider_track_height = 20.0;
         theme.spacing.panel.content_padding = 7.0;
-        theme.spacing.property_row.label_width = 185.0;
+        theme.spacing.property_row.label_width = 181.0;
         theme.spacing.property_row.gap = 7.0;
     }
     let Ok(window) = world
@@ -117,7 +177,8 @@ fn setup(world: &mut World) {
             ],
         )
         .with_role("flat-menu")
-        .with_width(UiLength::Px(43.0)),
+        .with_width(UiLength::Px(43.0))
+        .with_height(UiLength::Px(20.0)),
         WidgetNode::menu(
             "Edit",
             [
@@ -126,7 +187,8 @@ fn setup(world: &mut World) {
             ],
         )
         .with_role("flat-menu")
-        .with_width(UiLength::Px(43.0)),
+        .with_width(UiLength::Px(43.0))
+        .with_height(UiLength::Px(20.0)),
         WidgetNode::menu(
             "Render",
             [
@@ -135,12 +197,20 @@ fn setup(world: &mut World) {
             ],
         )
         .with_role("flat-menu")
-        .with_width(UiLength::Px(60.0)),
+        .with_width(UiLength::Px(60.0))
+        .with_height(UiLength::Px(20.0)),
         WidgetNode::menu("Help", [MenuEntry::command("about", "About BUI")])
             .with_role("flat-menu")
-            .with_width(UiLength::Px(45.0)),
-        WidgetNode::label("").with_width(UiLength::Fill(1.0)),
-        WidgetNode::label("▶").with_width(UiLength::Px(25.0)),
+            .with_width(UiLength::Px(45.0))
+            .with_height(UiLength::Px(20.0)),
+        WidgetNode::label("")
+            .with_width(UiLength::Fill(1.0))
+            .with_height(UiLength::Px(20.0)),
+        WidgetNode::icon_button("", "Advance render preview")
+            .with_key("header-play")
+            .with_role("header-play-icon")
+            .with_width(UiLength::Px(25.0))
+            .with_height(UiLength::Px(20.0)),
         WidgetNode::menu(
             "⌕",
             [
@@ -150,8 +220,11 @@ fn setup(world: &mut World) {
             ],
         )
         .with_role("flat-menu")
-        .with_width(UiLength::Px(25.0)),
+        .with_width(UiLength::Px(25.0))
+        .with_height(UiLength::Px(20.0)),
     ])
+    .with_gap(0.0)
+    .with_padding(UiEdges::all(4.0))
     .with_width(UiLength::Fill(1.0))
     .with_height(UiLength::Px(28.0));
 
@@ -159,22 +232,25 @@ fn setup(world: &mut World) {
         "Transform",
         true,
         [
+            WidgetNode::label("").with_height(UiLength::Px(2.0)),
             WidgetNode::label("Location").with_height(UiLength::Px(17.0)),
+            WidgetNode::label("").with_height(UiLength::Px(3.0)),
             axis("X", 0.0, "m"),
             axis("Y", 1.25, "m"),
             axis("Z", 0.0, "m"),
             WidgetNode::label("Rotation").with_height(UiLength::Px(17.0)),
+            WidgetNode::label("").with_height(UiLength::Px(3.0)),
             axis("X", 0.0, "°"),
             axis("Y", 0.0, "°"),
             axis("Z", 90.0, "°"),
-            WidgetNode::property_row(
+            WidgetNode::property_row_with_decorator(
                 "Scale",
                 WidgetNode::slider_range("", 1.0, 0.0, 4.0, 0.01)
                     .with_role("filled-slider")
                     .with_height(UiLength::Px(20.0)),
             )
             .with_height(UiLength::Px(20.0)),
-            WidgetNode::property_row(
+            WidgetNode::property_row_with_decorator(
                 "Mode",
                 WidgetNode::dropdown("", ["Object Mode", "Edit Mode", "Sculpt Mode"], Some(0))
                     .with_role("compact-dropdown")
@@ -192,53 +268,80 @@ fn setup(world: &mut World) {
         "Visibility",
         true,
         [
-            WidgetNode::row([
-                WidgetNode::checkbox("▸", true)
-                    .with_role("segmented-toggle")
-                    .with_width(UiLength::Fill(1.0)),
-                WidgetNode::checkbox("◉", true)
-                    .with_role("segmented-toggle")
-                    .with_width(UiLength::Fill(1.0)),
-                WidgetNode::checkbox("▣", true)
-                    .with_role("segmented-toggle")
-                    .with_width(UiLength::Fill(1.0)),
+            WidgetNode::column([
+                WidgetNode::label("").with_height(UiLength::Px(5.0)),
+                WidgetNode::row([
+                    WidgetNode::checkbox("▸", true)
+                        .with_role("segmented-toggle")
+                        .with_width(UiLength::Fill(1.0)),
+                    WidgetNode::checkbox("◉", true)
+                        .with_role("segmented-toggle")
+                        .with_width(UiLength::Fill(1.0)),
+                    WidgetNode::checkbox("▣", true)
+                        .with_role("segmented-toggle")
+                        .with_width(UiLength::Fill(1.0)),
+                ])
+                .with_role("visibility-toggle-strip")
+                .with_gap(1.0)
+                .with_height(UiLength::Px(20.0)),
+                WidgetNode::row([check("Camera", true), check("Diffuse", true)])
+                    .with_gap(4.0)
+                    .with_height(UiLength::Px(20.0)),
+                WidgetNode::row([check("Glossy", true), check("Transmission", true)])
+                    .with_gap(4.0)
+                    .with_height(UiLength::Px(20.0)),
+                WidgetNode::row([check("Volume Scatter", false), check("Shadow", true)])
+                    .with_gap(4.0)
+                    .with_height(UiLength::Px(20.0)),
             ])
-            .with_role("visibility-toggle-strip")
-            .with_gap(1.0)
-            .with_height(UiLength::Px(20.0)),
-            WidgetNode::row([check("Camera", true), check("Diffuse", true)])
-                .with_gap(4.0)
-                .with_height(UiLength::Px(20.0)),
-            WidgetNode::row([check("Glossy", true), check("Transmission", true)])
-                .with_gap(4.0)
-                .with_height(UiLength::Px(20.0)),
-            WidgetNode::row([check("Volume Scatter", false), check("Shadow", true)])
-                .with_gap(4.0)
-                .with_height(UiLength::Px(20.0)),
+            .with_gap(2.0)
+            .with_padding(UiEdges::horizontal_vertical(8.0, 0.0))
+            .with_width(UiLength::Fill(1.0)),
             WidgetNode::panel(
                 "Mask",
                 true,
                 [check("Shadow Catcher", false), check("Holdout", false)],
             )
             .with_role("sub-panel")
+            .with_padding(UiEdges {
+                left: 8.0,
+                top: 28.0,
+                right: 8.0,
+                bottom: 8.0,
+            })
             .with_gap(0.0)
             .with_width(UiLength::Fill(1.0)),
             WidgetNode::panel(
                 "Motion Blur",
                 true,
-                [WidgetNode::property_row(
+                [WidgetNode::property_row_with_decorator(
                     "Steps",
-                    WidgetNode::number("", 1.0, 1.0, 64.0, 1.0).with_height(UiLength::Px(20.0)),
+                    WidgetNode::number("", 1.0, 1.0, 64.0, 1.0)
+                        .with_role("centered-number")
+                        .with_height(UiLength::Px(20.0)),
                 )
                 .with_height(UiLength::Px(20.0))],
             )
             .with_role("sub-panel")
+            .with_padding(UiEdges {
+                left: 8.0,
+                top: 28.0,
+                right: 8.0,
+                bottom: 8.0,
+            })
             .with_gap(0.0)
             .with_width(UiLength::Fill(1.0)),
+            WidgetNode::label("").with_height(UiLength::Px(5.0)),
         ],
     )
     .with_key("visibility")
     .with_gap(2.0)
+    .with_padding(UiEdges {
+        left: 0.0,
+        top: 28.0,
+        right: 0.0,
+        bottom: 8.0,
+    })
     .with_width(UiLength::Fill(1.0));
 
     let inspector = WidgetNode::column([
@@ -272,18 +375,40 @@ fn setup(world: &mut World) {
         .with_key("viewport")
         .with_width(UiLength::Fill(1.0)),
     ])
-    .with_gap(3.0)
+    .with_key(PAGE_KEYS[0])
+    .with_gap(1.0)
     .with_width(UiLength::Fill(1.0));
+
+    let modifiers = modifier_page();
+    let material = material_page();
+    let outliner = outliner_page();
+    let preferences = preferences_page();
+    let nodes = nodes_page();
 
     let content = WidgetNode::row([
         WidgetNode::column([
-            toolbar_button("▣", "Show Transform", "rail-transform"),
-            toolbar_button("⚒", "Show Visibility", "rail-visibility"),
-            toolbar_button("◕", "Show Viewport Display", "rail-display"),
-            toolbar_button("☷", "Show All Panels", "rail-all"),
+            toolbar_button(0, "▣"),
+            toolbar_button(1, "⚒"),
+            toolbar_button(2, "◕"),
+            toolbar_button(3, "☷"),
+            toolbar_button(4, "⚙"),
+            toolbar_button(5, "✣"),
         ])
+        .with_gap(1.0)
+        .with_padding(UiEdges {
+            left: 0.0,
+            top: 1.0,
+            right: 0.0,
+            bottom: 0.0,
+        })
         .with_width(UiLength::Px(29.0)),
-        WidgetNode::scroll([inspector])
+        WidgetNode::scroll([inspector, modifiers, material, outliner, preferences, nodes])
+            .with_padding(UiEdges {
+                left: 0.0,
+                top: 0.0,
+                right: 8.0,
+                bottom: 0.0,
+            })
             .with_width(UiLength::Fill(1.0))
             .with_height(UiLength::Fill(1.0)),
     ])
@@ -294,21 +419,33 @@ fn setup(world: &mut World) {
         WidgetNode::column([
             menu,
             content,
-            WidgetNode::overlay([
-                WidgetNode::progress(0.25)
-                    .with_width(UiLength::Fill(1.0))
-                    .with_height(UiLength::Px(24.0)),
-                WidgetNode::row([
-                    WidgetNode::label("").with_width(UiLength::Px(213.0)),
-                    WidgetNode::label("Rendering 25%").with_width(UiLength::Px(160.0)),
+            WidgetNode::column([
+                WidgetNode::overlay([
+                    WidgetNode::progress(0.25)
+                        .with_key("render-progress")
+                        .with_width(UiLength::Fill(1.0))
+                        .with_height(UiLength::Px(18.0)),
+                    WidgetNode::label("Rendering 25%")
+                        .with_key("render-progress-label")
+                        .with_role("centered-label")
+                        .with_width(UiLength::Fill(1.0))
+                        .with_height(UiLength::Px(18.0)),
                 ])
-                .with_height(UiLength::Px(24.0)),
+                .with_width(UiLength::Fill(1.0))
+                .with_height(UiLength::Px(18.0)),
+                WidgetNode::row([
+                    WidgetNode::label("i").with_width(UiLength::Px(16.0)),
+                    WidgetNode::label("Drag numeric values · click tabs to switch pages")
+                        .with_key("property-status")
+                        .with_width(UiLength::Fill(1.0)),
+                ])
+                .with_gap(4.0)
+                .with_height(UiLength::Px(20.0)),
             ])
+            .with_gap(4.0)
+            .with_padding(UiEdges::all(8.0))
             .with_width(UiLength::Fill(1.0))
-            .with_height(UiLength::Px(24.0)),
-            WidgetNode::label("Drag numeric values · click tabs to switch sections")
-                .with_key("property-status")
-                .with_height(UiLength::Px(22.0)),
+            .with_height(UiLength::Px(72.0)),
         ])
         .with_width(UiLength::Fill(1.0))
         .with_height(UiLength::Fill(1.0)),
@@ -322,22 +459,66 @@ fn setup(world: &mut World) {
         .iter(world)
         .map(|(entity, key)| (key.0.clone(), entity))
         .collect::<std::collections::HashMap<_, _>>();
-    let (Some(&transform), Some(&visibility), Some(&display), Some(&status), Some(&object_name)) = (
+    let (
+        Some(&transform),
+        Some(&visibility),
+        Some(&display),
+        Some(&status),
+        Some(&object_name),
+        Some(&progress),
+        Some(&progress_label),
+        Some(&mirror_modifier),
+    ) = (
         keyed.get("transform"),
         keyed.get("visibility"),
         keyed.get("viewport"),
         keyed.get("property-status"),
         keyed.get("object-name"),
-    ) else {
+        keyed.get("render-progress"),
+        keyed.get("render-progress-label"),
+        keyed.get("mirror-modifier"),
+    )
+    else {
         eprintln!("properties editor controls are incomplete");
         return;
     };
+    let Some(page_entities) = PAGE_KEYS
+        .iter()
+        .map(|key| keyed.get(*key).copied())
+        .collect::<Option<Vec<_>>>()
+    else {
+        eprintln!("properties editor pages are incomplete");
+        return;
+    };
+    let Ok(pages): Result<[Entity; 6], _> = page_entities.try_into() else {
+        return;
+    };
+    let Some(tab_entities) = TAB_KEYS
+        .iter()
+        .map(|key| keyed.get(*key).copied())
+        .collect::<Option<Vec<_>>>()
+    else {
+        eprintln!("properties editor tabs are incomplete");
+        return;
+    };
+    let Ok(tabs): Result<[Entity; 6], _> = tab_entities.try_into() else {
+        return;
+    };
+    for page in pages.iter().skip(1) {
+        world.entity_mut(*page).insert(UiVisible(false));
+    }
+    world.entity_mut(mirror_modifier).insert(UiVisible(false));
     world.insert_resource(PropertyControls {
         transform,
         visibility,
         display,
         status,
         object_name,
+        progress,
+        progress_label,
+        mirror_modifier,
+        pages,
+        tabs,
     });
 }
 
@@ -349,17 +530,46 @@ fn handle_events(world: &mut World) {
     for event in events {
         if let WidgetEvent::Activated { target } = &event {
             let section = world.get::<UiKey>(*target).map(|key| key.0.clone());
-            let active = match section.as_deref() {
-                Some("rail-transform") => Some(("Transform", [true, true, false])),
-                Some("rail-visibility") => Some(("Visibility", [true, true, false])),
-                Some("rail-display") => Some(("Viewport Display", [true, true, true])),
-                Some("rail-all") => Some(("All sections", [true, true, true])),
-                _ => None,
-            };
+            if let Some(index) = TAB_KEYS
+                .iter()
+                .position(|key| Some(*key) == section.as_deref())
+            {
+                activate_page(world, controls, index);
+                if let Some(mut status) = world.get_mut::<Label>(controls.status) {
+                    status.text = format!(
+                        "{} · drag values · click tabs to switch pages",
+                        TAB_NAMES[index]
+                    );
+                }
+            }
             if section.as_deref() == Some("object-fake")
                 && let Some(mut button) = world.get_mut::<IconButton>(*target)
             {
                 button.icon = if button.icon == "◇" { "◆" } else { "◇" }.into();
+            }
+            if section.as_deref() == Some("header-play") {
+                let next = if let Some(mut progress) = world.get_mut::<Progress>(controls.progress)
+                {
+                    let next = if progress.value >= 1.0 {
+                        0.25
+                    } else {
+                        (progress.value + 0.25).min(1.0)
+                    };
+                    progress.set(next);
+                    Some(next)
+                } else {
+                    None
+                };
+                if let Some(next) = next
+                    && let Some(mut label) = world.get_mut::<Label>(controls.progress_label)
+                {
+                    label.text = format!("Rendering {}%", (next * 100.0).round() as u32);
+                }
+            }
+            if section.as_deref() == Some("add-modifier")
+                && let Some(mut visible) = world.get_mut::<UiVisible>(controls.mirror_modifier)
+            {
+                visible.0 = !visible.0;
             }
             if section.as_deref() == Some("object-duplicate") {
                 let name = world
@@ -375,19 +585,6 @@ fn handle_events(world: &mut World) {
             {
                 buffer.select_all();
                 buffer.insert_text("");
-            }
-            if let Some((name, expanded)) = active {
-                for (panel, open) in [controls.transform, controls.visibility, controls.display]
-                    .into_iter()
-                    .zip(expanded)
-                {
-                    if let Some(mut panel) = world.get_mut::<Panel>(panel) {
-                        panel.set_expanded(open);
-                    }
-                }
-                if let Some(mut status) = world.get_mut::<Label>(controls.status) {
-                    status.text = format!("{name} · drag values · click tabs to switch sections");
-                }
             }
         }
         if let WidgetEvent::ValueChanged {
@@ -414,6 +611,7 @@ fn handle_events(world: &mut World) {
                 _ => None,
             };
             if let Some(expanded) = expanded {
+                activate_page(world, controls, 0);
                 for (panel, open) in [controls.transform, controls.visibility, controls.display]
                     .into_iter()
                     .zip(expanded)

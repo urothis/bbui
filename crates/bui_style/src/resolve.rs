@@ -190,6 +190,11 @@ pub(super) fn role_style_values(
         "menu-bar" => {
             values.insert(Gap, UiStyleValue::Scalar(theme.spacing.menu.section_gap));
         }
+        "flat-menu" | "flat-icon-button" | "flat-icon-orange" | "flat-icon-blue"
+        | "flat-icon-red" | "header-play-icon" => {
+            values.insert(Background, UiStyleValue::Color(theme.background));
+            values.insert(CornerRadius, UiStyleValue::Scalar(0.0));
+        }
         "box" => {
             values.insert(Background, UiStyleValue::Color(theme.surface));
             values.insert(BorderColor, UiStyleValue::Color(theme.border));

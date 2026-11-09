@@ -54,6 +54,55 @@ pub(in crate::actions) fn styled_text_primitive_for_entity(
     primitive
 }
 
+pub(in crate::actions) fn measured_text_width(
+    world: &mut World,
+    entity: Entity,
+    text: &str,
+    theme: &Theme,
+) -> f32 {
+    let font = resolve_text_font(world, entity, ui_default_text_font(theme.font_size));
+    let signature = format!("{font:?};size={:08x};{text}", theme.font_size.to_bits());
+    if let Some((cached_signature, width)) = world
+        .get_resource::<WidgetPaintCache>()
+        .and_then(|cache| cache.text_measurements.get(&entity))
+        && *cached_signature == signature
+    {
+        return *width;
+    }
+    let available = world.contains_resource::<TextPipeline>()
+        && world.contains_resource::<Assets<Font>>()
+        && world.contains_resource::<FontCx>()
+        && world.contains_resource::<LayoutCx>();
+    let width = if available {
+        world.resource_scope(|world, mut pipeline: Mut<TextPipeline>| {
+            world.resource_scope(|world, fonts: Mut<Assets<Font>>| {
+                world.resource_scope(|world, mut font_cx: Mut<FontCx>| {
+                    world.resource_scope(|_, mut layout_cx: Mut<LayoutCx>| {
+                        TextLayout::shape_with_bevy(
+                            text,
+                            f32::INFINITY,
+                            &font,
+                            &mut pipeline,
+                            &fonts,
+                            &mut font_cx,
+                            &mut layout_cx,
+                        )
+                        .ok()
+                        .map(|layout| layout.bounds().width.max(0.0))
+                    })
+                })
+            })
+        })
+    } else {
+        None
+    }
+    .unwrap_or_else(|| text.chars().count() as f32 * theme.font_size * 0.55);
+    if let Some(mut cache) = world.get_resource_mut::<WidgetPaintCache>() {
+        cache.text_measurements.insert(entity, (signature, width));
+    }
+    width
+}
+
 pub(in crate::actions) fn is_visible(world: &World, entity: Entity) -> bool {
     let mut current = Some(entity);
     let mut remaining_entities = world.entities().len();

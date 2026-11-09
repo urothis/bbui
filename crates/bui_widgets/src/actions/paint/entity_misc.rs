@@ -8,6 +8,7 @@ pub(super) fn paint_misc_controls(paint: &mut PaintEntityContext<'_>) -> bool {
     let clip = paint.clip;
     let z = paint.z;
     let theme = paint.theme;
+    let base_theme = paint.base_theme;
     let camera_items = &mut *paint.output;
 
     if let Some(option) = world.get::<DropdownOptionControl>(entity) {
@@ -54,14 +55,16 @@ pub(super) fn paint_misc_controls(paint: &mut PaintEntityContext<'_>) -> bool {
     }
     if let Some(dropdown) = world.get::<Dropdown>(entity) {
         let dropdown_role = world.get::<UiRole>(entity).map(|role| role.0.as_str());
+        let compact = dropdown_role == Some("compact-dropdown");
+        let icon_only = dropdown_role == Some("icon-dropdown");
         camera_items.push(item(
             clip,
             z,
             Primitive::RoundedRect {
                 rect: ClipRect::from(rect),
                 radius: theme.corner_radius,
-                color: if dropdown_role == Some("compact-dropdown") {
-                    theme.background.mix(theme.surface, 0.35)
+                color: if compact || icon_only {
+                    base_theme.background.mix(base_theme.surface, 0.35)
                 } else {
                     theme.surface
                 },
@@ -75,6 +78,21 @@ pub(super) fn paint_misc_controls(paint: &mut PaintEntityContext<'_>) -> bool {
             .and_then(|index| dropdown.options.get(index))
             .cloned()
             .unwrap_or_default();
+        if compact || icon_only {
+            push_rect_outline_with_width(
+                Rect {
+                    x: rect.x + 0.5,
+                    y: rect.y + 0.5,
+                    width: (rect.width - 1.0).max(0.0),
+                    height: (rect.height - 1.0).max(0.0),
+                },
+                base_theme.surface.mix(base_theme.text, 0.25),
+                clip,
+                z.saturating_add(1),
+                1.0,
+                camera_items,
+            );
+        }
         if dropdown.open
             && let Some(popup_state) = world.get::<DropdownPopupState>(entity)
             && !popup_state.popup.bounds.is_empty()
@@ -122,37 +140,69 @@ pub(super) fn paint_misc_controls(paint: &mut PaintEntityContext<'_>) -> bool {
                 ));
             }
         }
-        camera_items.push(item(
-            clip,
-            z.saturating_add(1),
-            styled_text_primitive_for_entity(
-                world,
-                entity,
-                clip,
-                TextPlacement {
-                    origin: [
-                        rect.x + theme.spacing.control.padding_x,
-                        rect.y + theme.spacing.control.padding_y,
-                    ],
-                    text: if dropdown_role == Some("icon-dropdown") {
-                        "▣ ▾".into()
-                    } else if dropdown_role == Some("compact-dropdown") {
-                        format!("▣  {choice}  ▾")
-                    } else if label.is_empty() {
-                        choice
+        if compact || icon_only {
+            let text_y = rect.y + (rect.height - theme.font_size * theme.line_height) * 0.5;
+            for (x, text, color) in [
+                (
+                    rect.x + 5.0,
+                    "▣".to_owned(),
+                    if icon_only {
+                        Rgba(0.91, 0.52, 0.23, 1.0)
                     } else {
-                        format!("{label}: {choice} ▾")
+                        theme.text
                     },
-                },
-                if dropdown_role == Some("icon-dropdown") {
-                    Rgba(0.91, 0.52, 0.23, 1.0)
-                } else {
-                    theme.text
-                },
-                theme,
-                false,
-            ),
-        ));
+                ),
+                (
+                    rect.x + 21.0,
+                    if compact { choice } else { String::new() },
+                    theme.text,
+                ),
+                (rect.x + rect.width - 14.0, "⌄".to_owned(), theme.text),
+            ] {
+                if !text.is_empty() {
+                    camera_items.push(item(
+                        clip,
+                        z.saturating_add(2),
+                        styled_text_primitive_for_entity(
+                            world,
+                            entity,
+                            clip,
+                            TextPlacement {
+                                origin: [x, text_y],
+                                text,
+                            },
+                            color,
+                            theme,
+                            false,
+                        ),
+                    ));
+                }
+            }
+        } else {
+            camera_items.push(item(
+                clip,
+                z.saturating_add(1),
+                styled_text_primitive_for_entity(
+                    world,
+                    entity,
+                    clip,
+                    TextPlacement {
+                        origin: [
+                            rect.x + theme.spacing.control.padding_x,
+                            rect.y + theme.spacing.control.padding_y,
+                        ],
+                        text: if label.is_empty() {
+                            choice
+                        } else {
+                            format!("{label}: {choice} ▾")
+                        },
+                    },
+                    theme.text,
+                    theme,
+                    false,
+                ),
+            ));
+        }
         return true;
     }
     if let Some(panel) = world.get::<Panel>(entity) {
@@ -180,6 +230,20 @@ pub(super) fn paint_misc_controls(paint: &mut PaintEntityContext<'_>) -> bool {
                 },
             },
         ));
+        if sub_panel {
+            camera_items.push(item(
+                clip,
+                z.saturating_add(1),
+                Primitive::RoundedRect {
+                    rect: ClipRect::from(Rect {
+                        height: header_height,
+                        ..rect
+                    }),
+                    radius: 0.0,
+                    color: theme.surface,
+                },
+            ));
+        }
         let arrow = if panel.state.target_expanded {
             "▾"
         } else {
@@ -194,7 +258,12 @@ pub(super) fn paint_misc_controls(paint: &mut PaintEntityContext<'_>) -> bool {
                 clip,
                 TextPlacement {
                     origin: [
-                        rect.x + theme.spacing.panel.content_padding,
+                        rect.x
+                            + if sub_panel {
+                                20.0
+                            } else {
+                                theme.spacing.panel.content_padding
+                            },
                         rect.y + theme.spacing.panel.content_padding,
                     ],
                     text: if object_panel {

@@ -759,6 +759,7 @@ struct WidgetPaintCache {
     node_graph_chrome_stamps: HashMap<Entity, NodeGraphChromeStamp>,
     node_graph_output_measurements:
         HashMap<Entity, HashMap<NodeId, NodeGraphOutputLabelMeasurements>>,
+    text_measurements: HashMap<Entity, (String, f32)>,
     fragments: HashSet<Entity>,
     paint_ranks: HashMap<Entity, u64>,
     paint_order_keys: BTreeMap<u64, Entity>,

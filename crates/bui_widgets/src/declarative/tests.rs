@@ -23,6 +23,26 @@ fn observe_intrinsic_label_buffers(
 }
 
 #[test]
+fn explicit_roles_override_control_defaults_when_mounted() {
+    let mut world = World::new();
+    let root = WidgetTree::new(WidgetNode::row([
+        WidgetNode::icon_button("◇", "Keep").with_role("flat-icon-button"),
+        WidgetNode::slider_range("Scale", 1.0, 0.0, 4.0, 0.1).with_role("filled-slider"),
+        WidgetNode::menu("File", []).with_role("flat-menu"),
+    ]))
+    .spawn(&mut world, None)
+    .unwrap();
+    let children = &world.get::<UiChildren>(root).unwrap().0;
+    for (entity, expected) in
+        children
+            .iter()
+            .zip(["flat-icon-button", "filled-slider", "flat-menu"])
+    {
+        assert_eq!(world.get::<UiRole>(*entity).unwrap().0, expected);
+    }
+}
+
+#[test]
 fn intrinsic_label_sync_skips_idle_buffers_and_reconciles_changed_or_new_labels() {
     let mut app = App::new();
     app.add_plugins((TextPlugin, crate::WidgetPlugin));

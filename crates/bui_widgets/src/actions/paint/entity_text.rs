@@ -94,6 +94,20 @@ pub(super) fn paint_text_controls(paint: &mut PaintEntityContext<'_>) -> bool {
             || world.get::<TextArea>(entity).is_some()
             || world.get::<Dropdown>(entity).is_some();
         if !composite {
+            let label_text = label.text.clone();
+            let property_label = world
+                .get::<UiRole>(entity)
+                .is_some_and(|role| role.0 == "property-label");
+            let centered_label = world
+                .get::<UiRole>(entity)
+                .is_some_and(|role| role.0 == "centered-label");
+            let label_x = if property_label {
+                rect.x + rect.width - measured_text_width(world, entity, &label_text, theme) - 2.0
+            } else if centered_label {
+                rect.x + (rect.width - measured_text_width(world, entity, &label_text, theme)) * 0.5
+            } else {
+                rect.x
+            };
             camera_items.push(item(
                 clip,
                 z,
@@ -102,8 +116,16 @@ pub(super) fn paint_text_controls(paint: &mut PaintEntityContext<'_>) -> bool {
                     entity,
                     clip,
                     TextPlacement {
-                        origin: [rect.x, rect.y],
-                        text: label.text.clone(),
+                        origin: [
+                            label_x,
+                            rect.y
+                                + if property_label || centered_label {
+                                    2.0
+                                } else {
+                                    0.0
+                                },
+                        ],
+                        text: label_text,
                     },
                     theme.text,
                     theme,
@@ -113,7 +135,7 @@ pub(super) fn paint_text_controls(paint: &mut PaintEntityContext<'_>) -> bool {
             return true;
         }
     }
-    if let Some(slider) = world.get::<Slider>(entity) {
+    if let Some(slider) = world.get::<Slider>(entity).cloned() {
         let label = world
             .get::<Label>(entity)
             .map_or_else(String::new, |label| label.text.clone());
@@ -125,9 +147,14 @@ pub(super) fn paint_text_controls(paint: &mut PaintEntityContext<'_>) -> bool {
             .get_resource::<WidgetInteractionState>()
             .and_then(|state| state.slider_drags.get(&layout.window))
             .is_some_and(|drag| drag.target == entity);
+        let filled = world
+            .get::<UiRole>(entity)
+            .is_some_and(|role| role.0 == "filled-slider");
+        let value_width = filled
+            .then(|| measured_text_width(world, entity, &format!("{:.3}", slider.value), theme));
         paint_slider(
             SliderPaint {
-                slider,
+                slider: &slider,
                 label: &label,
                 rect,
                 clip,
@@ -135,9 +162,8 @@ pub(super) fn paint_text_controls(paint: &mut PaintEntityContext<'_>) -> bool {
                 enabled: enabled && slider.enabled,
                 focused,
                 dragging,
-                filled: world
-                    .get::<UiRole>(entity)
-                    .is_some_and(|role| role.0 == "filled-slider"),
+                filled,
+                value_width,
                 theme,
             },
             camera_items,
@@ -160,6 +186,9 @@ pub(super) fn paint_text_controls(paint: &mut PaintEntityContext<'_>) -> bool {
                 "vector-axis-degrees" => Some("°"),
                 _ => None,
             });
+        let centered = world
+            .get::<UiRole>(entity)
+            .is_some_and(|role| role.0 == "centered-number");
         camera_items.push(item(
             clip,
             z,
@@ -172,7 +201,7 @@ pub(super) fn paint_text_controls(paint: &mut PaintEntityContext<'_>) -> bool {
                 },
                 color: if scrub_selected {
                     theme.color(ThemeColorToken::EditorActiveFieldSurface)
-                } else if axis_suffix.is_some() {
+                } else if axis_suffix.is_some() || centered {
                     theme.surface.mix(theme.text, 0.12)
                 } else {
                     theme.surface
@@ -200,7 +229,7 @@ pub(super) fn paint_text_controls(paint: &mut PaintEntityContext<'_>) -> bool {
                 ),
             ));
             let value = format!("{}{}", field.display(), suffix);
-            let estimated_width = value.chars().count() as f32 * theme.font_size * 0.53;
+            let value_width = measured_text_width(world, entity, &value, theme);
             camera_items.push(item(
                 clip,
                 z.saturating_add(1),
@@ -210,7 +239,31 @@ pub(super) fn paint_text_controls(paint: &mut PaintEntityContext<'_>) -> bool {
                     clip,
                     TextPlacement {
                         origin: [
-                            rect.x + (rect.width - estimated_width - 12.0).max(42.0),
+                            rect.x + rect.width - value_width - 12.0,
+                            rect.y + theme.spacing.control.padding_y,
+                        ],
+                        text: value,
+                    },
+                    theme.text,
+                    theme,
+                    false,
+                ),
+            ));
+            return true;
+        }
+        if centered {
+            let value = field.display();
+            let value_width = measured_text_width(world, entity, &value, theme);
+            camera_items.push(item(
+                clip,
+                z.saturating_add(1),
+                styled_text_primitive_for_entity(
+                    world,
+                    entity,
+                    clip,
+                    TextPlacement {
+                        origin: [
+                            rect.x + (rect.width - value_width) * 0.5,
                             rect.y + theme.spacing.control.padding_y,
                         ],
                         text: value,

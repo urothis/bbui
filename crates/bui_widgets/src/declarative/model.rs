@@ -226,6 +226,22 @@ impl WidgetNode {
         .with_role("property-row")
         .with_width(UiLength::Fill(1.0))
     }
+    /// Blender-style property split with a trailing keyframe decorator toggle.
+    pub fn property_row_with_decorator(label: impl Into<String>, control: Self) -> Self {
+        Self::container(
+            WidgetContainer::PropertyRow,
+            [
+                Self::label(label).with_role("property-label"),
+                control.with_width(UiLength::Fill(1.0)),
+                Self::checkbox("", false)
+                    .with_role("property-decorator")
+                    .with_width(UiLength::Px(16.0))
+                    .with_height(UiLength::Px(20.0)),
+            ],
+        )
+        .with_role("property-row")
+        .with_width(UiLength::Fill(1.0))
+    }
     pub fn scroll(children: impl IntoIterator<Item = Self>) -> Self {
         Self::container(WidgetContainer::Scroll, children)
             .with_role("scroll")
@@ -568,6 +584,15 @@ impl WidgetNode {
         self.style
             .get_or_insert_with(UiInlineStyle::default)
             .set(UiStyleProperty::Gap, UiStyleValue::Scalar(gap));
+        self
+    }
+    pub fn with_padding(mut self, padding: UiEdges) -> Self {
+        let mut layout = self.layout.unwrap_or_else(|| layout_for(&self.spec));
+        layout.padding = padding;
+        self.layout = Some(layout);
+        self.style
+            .get_or_insert_with(UiInlineStyle::default)
+            .set(UiStyleProperty::Padding, UiStyleValue::Edges(padding));
         self
     }
     pub fn with_style(mut self, style: UiInlineStyle) -> Self {

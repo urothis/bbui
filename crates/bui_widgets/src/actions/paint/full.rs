@@ -289,6 +289,12 @@ pub(in crate::actions) fn collect_widget_paint_full(
     }
     let mut cache = world.resource_mut::<WidgetPaintCache>();
     cache.fragments = fragments;
+    let WidgetPaintCache {
+        fragments,
+        text_measurements,
+        ..
+    } = &mut *cache;
+    text_measurements.retain(|entity, _| fragments.contains(entity));
     cache.paint_ranks = paint_ranks;
     cache.paint_order_keys = paint_order_keys;
     cache.paint_children = paint_children;

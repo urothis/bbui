@@ -134,7 +134,7 @@ Run `cargo run -p bui --example menus`. The `bui!` macro supports `menu_bar`, `m
 
 ## Properties editor example
 
-Run `cargo run -p bui --example properties_editor` for a compact object-properties panel inspired by Blender. Drag the Location and Rotation fields, adjust Scale, switch modes, toggle visibility options, and collapse sections. The left rail opens Transform, Visibility, Viewport Display, or all sections. The menu bar and progress footer complete the reference-sized composition.
+Run `cargo run -p bui --example properties_editor` for a compact object-properties panel inspired by Blender. Drag the Location and Rotation fields, adjust Scale, switch modes, toggle visibility options, and collapse sections. The left rail switches between Object, Modifiers, Material, Outliner, Preferences, and Geometry Nodes pages. The menu bar and progress footer complete the reference-sized composition.
 
 Reviewed screenshots of every graphical example, including open menu states, are in [docs/visuals](docs/visuals/README.md).
 

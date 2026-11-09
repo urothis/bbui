@@ -19,8 +19,8 @@ COLUMNS = 4
 def main() -> None:
     paths = sorted(SOURCE.glob("*.png"))
     paths = [path for path in paths if path.stem not in {
-        "menus_object_actions", "menus_transform_pie", "properties_editor_visibility"
-    }]
+        "menus_object_actions", "menus_transform_pie"
+    } and not path.stem.startswith("properties_editor_")]
     if not paths:
         raise SystemExit("No example screenshots found; run scripts/capture_examples.py first")
     rows = (len(paths) + COLUMNS - 1) // COLUMNS

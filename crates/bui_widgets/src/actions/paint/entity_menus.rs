@@ -8,6 +8,7 @@ pub(super) fn paint_buttons_and_menus(paint: &mut PaintEntityContext<'_>) -> boo
     let clip = paint.clip;
     let z = paint.z;
     let theme = paint.theme;
+    let base_theme = paint.base_theme;
     let enabled = paint.enabled;
     let camera_items = &mut *paint.output;
 
@@ -53,14 +54,20 @@ pub(super) fn paint_buttons_and_menus(paint: &mut PaintEntityContext<'_>) -> boo
         ));
         return true;
     }
-    if let Some(button) = world.get::<IconButton>(entity) {
+    if let Some(button) = world.get::<IconButton>(entity).cloned() {
         let enabled = enabled && button.enabled;
         let icon_role = world.get::<UiRole>(entity).map(|role| role.0.as_str());
-        let properties_rail = icon_role.is_some_and(|role| role.starts_with("flat-icon-"));
+        let header_play = icon_role == Some("header-play-icon");
+        let properties_rail =
+            header_play || icon_role.is_some_and(|role| role.starts_with("flat-icon-"));
+        let side_tab = icon_role.is_some_and(|role| role.starts_with("side-tab"));
+        let side_tab_active = side_tab && icon_role.is_some_and(|role| role.ends_with("-active"));
         let icon_color = match icon_role {
-            Some("flat-icon-orange") => Rgba(0.91, 0.52, 0.23, 1.0),
-            Some("flat-icon-blue") => theme.accent,
-            Some("flat-icon-red") => theme.error,
+            Some("flat-icon-orange" | "side-tab-orange" | "side-tab-orange-active") => {
+                Rgba(0.91, 0.52, 0.23, 1.0)
+            }
+            Some("flat-icon-blue" | "side-tab-blue" | "side-tab-blue-active") => base_theme.accent,
+            Some("flat-icon-red" | "side-tab-red" | "side-tab-red-active") => base_theme.error,
             _ => theme.text,
         };
         camera_items.push(item(
@@ -68,13 +75,17 @@ pub(super) fn paint_buttons_and_menus(paint: &mut PaintEntityContext<'_>) -> boo
             z,
             Primitive::RoundedRect {
                 rect: ClipRect::from(rect),
-                radius: if properties_rail {
+                radius: if properties_rail || !side_tab_active {
                     1.0
                 } else {
                     theme.corner_radius
                 },
                 color: if enabled {
-                    if properties_rail {
+                    if side_tab_active {
+                        base_theme.surface
+                    } else if side_tab {
+                        base_theme.background
+                    } else if properties_rail {
                         theme.background
                     } else {
                         theme.surface
@@ -84,9 +95,41 @@ pub(super) fn paint_buttons_and_menus(paint: &mut PaintEntityContext<'_>) -> boo
                 },
             },
         ));
+        if header_play {
+            for row in 0_i32..9 {
+                let width = ((4 - (row - 4).abs()) * 2 + 2) as f32;
+                let y = rect.y + 5.0 + row as f32;
+                camera_items.push(item(
+                    clip,
+                    z.saturating_add(1),
+                    Primitive::Line {
+                        from: [rect.x + 8.0, y],
+                        to: [rect.x + 8.0 + width, y],
+                        width: 1.0,
+                        color: theme.text,
+                    },
+                ));
+            }
+            return true;
+        }
+        if side_tab {
+            paint_properties_tab_icon(
+                camera_items,
+                clip,
+                z,
+                rect,
+                &button.accessible_name,
+                icon_color,
+            );
+            return true;
+        }
         if world.get::<IconButtonAsset>(entity).is_none() {
-            let text_width = button.icon.chars().count() as f32 * theme.font_size * 0.56;
-            let text_height = theme.font_size * theme.line_height;
+            let mut icon_theme = theme.clone();
+            if side_tab {
+                icon_theme.font_size *= 1.4;
+            }
+            let text_width = measured_text_width(world, entity, &button.icon, &icon_theme);
+            let text_height = icon_theme.font_size * icon_theme.line_height;
             camera_items.push(item(
                 clip,
                 z.saturating_add(1),
@@ -106,7 +149,7 @@ pub(super) fn paint_buttons_and_menus(paint: &mut PaintEntityContext<'_>) -> boo
                     } else {
                         theme.color(ThemeColorToken::DisabledText)
                     },
-                    theme,
+                    &icon_theme,
                     false,
                 ),
             ));
@@ -291,32 +334,96 @@ pub(super) fn paint_buttons_and_menus(paint: &mut PaintEntityContext<'_>) -> boo
                 color: background,
             },
         ));
+        if properties_menu && menu.label == "⌕" {
+            let center = [
+                rect.x + rect.width * 0.5 - 1.0,
+                rect.y + rect.height * 0.5 - 1.0,
+            ];
+            camera_items.push(item(
+                clip,
+                z.saturating_add(1),
+                Primitive::Ellipse {
+                    rect: ClipRect {
+                        x: center[0] - 4.5,
+                        y: center[1] - 4.5,
+                        width: 9.0,
+                        height: 9.0,
+                    },
+                    color: theme.text,
+                },
+            ));
+            camera_items.push(item(
+                clip,
+                z.saturating_add(2),
+                Primitive::Ellipse {
+                    rect: ClipRect {
+                        x: center[0] - 3.2,
+                        y: center[1] - 3.2,
+                        width: 6.4,
+                        height: 6.4,
+                    },
+                    color: background,
+                },
+            ));
+            camera_items.push(item(
+                clip,
+                z.saturating_add(3),
+                Primitive::Line {
+                    from: [center[0] + 2.8, center[1] + 2.8],
+                    to: [center[0] + 6.4, center[1] + 6.4],
+                    width: 1.5,
+                    color: theme.text,
+                },
+            ));
+            return true;
+        }
+        let flat_label = properties_menu.then(|| menu.label.clone());
+        let normal_label = (!properties_menu).then(|| {
+            format!(
+                "{} {}",
+                menu.label,
+                if menu.session.open { "▴" } else { "▾" }
+            )
+        });
+        let flat_text_width = flat_label
+            .as_ref()
+            .map(|label| measured_text_width(world, entity, label, theme));
         camera_items.push(item(
             clip,
             z.saturating_add(1),
-            styled_text_primitive_for_entity(
-                world,
-                entity,
-                clip,
-                TextPlacement {
-                    origin: [
-                        rect.x + theme.spacing.menu.padding_x,
-                        rect.y + theme.spacing.menu.padding_y,
-                    ],
-                    text: if properties_menu {
-                        menu.label.clone()
-                    } else {
-                        format!(
-                            "{} {}",
-                            menu.label,
-                            if menu.session.open { "▴" } else { "▾" }
-                        )
+            if properties_menu {
+                styled_text_primitive_for_entity(
+                    world,
+                    entity,
+                    clip,
+                    TextPlacement {
+                        origin: [
+                            rect.x + (rect.width - flat_text_width.unwrap_or(0.0)).max(0.0) * 0.5,
+                            rect.y + 1.0,
+                        ],
+                        text: flat_label.unwrap_or_default(),
                     },
-                },
-                theme.text,
-                theme,
-                false,
-            ),
+                    theme.text,
+                    theme,
+                    false,
+                )
+            } else {
+                styled_text_primitive_for_entity(
+                    world,
+                    entity,
+                    clip,
+                    TextPlacement {
+                        origin: [
+                            rect.x + theme.spacing.menu.padding_x,
+                            rect.y + theme.spacing.menu.padding_y,
+                        ],
+                        text: normal_label.unwrap_or_default(),
+                    },
+                    theme.text,
+                    theme,
+                    false,
+                )
+            },
         ));
         return true;
     }
@@ -542,4 +649,117 @@ pub(super) fn paint_buttons_and_menus(paint: &mut PaintEntityContext<'_>) -> boo
         return true;
     }
     false
+}
+
+fn paint_properties_tab_icon(
+    output: &mut Vec<DrawItem>,
+    clip: ClipRect,
+    z: i32,
+    rect: Rect,
+    name: &str,
+    color: Rgba,
+) {
+    let x = rect.x + (rect.width - 16.0) * 0.5;
+    let y = rect.y + (rect.height - 16.0) * 0.5;
+    let z = z.saturating_add(1);
+    let mut line = |a: [f32; 2], b: [f32; 2], width: f32| {
+        output.push(item(
+            clip,
+            z,
+            Primitive::Line {
+                from: [x + a[0], y + a[1]],
+                to: [x + b[0], y + b[1]],
+                width,
+                color,
+            },
+        ));
+    };
+    match name {
+        "Object" => {
+            for (a, b) in [
+                ([2.0, 4.0], [5.0, 4.0]),
+                ([2.0, 4.0], [2.0, 7.0]),
+                ([11.0, 4.0], [14.0, 4.0]),
+                ([14.0, 4.0], [14.0, 7.0]),
+                ([2.0, 10.0], [2.0, 13.0]),
+                ([2.0, 13.0], [5.0, 13.0]),
+                ([14.0, 10.0], [14.0, 13.0]),
+                ([11.0, 13.0], [14.0, 13.0]),
+            ] {
+                line(a, b, 1.2);
+            }
+        }
+        "Modifiers" => {
+            line([4.0, 13.0], [11.0, 6.0], 3.0);
+            line([10.0, 5.0], [10.0, 2.0], 1.4);
+            line([10.0, 5.0], [13.0, 6.0], 1.4);
+            line([13.0, 6.0], [14.0, 3.0], 1.4);
+        }
+        "Outliner" => {
+            line([3.0, 3.0], [3.0, 13.0], 1.1);
+            for row in [3.0, 8.0, 13.0] {
+                line([3.0, row], [7.0, row], 1.1);
+                line([9.0, row], [14.0, row], 2.2);
+            }
+        }
+        "Preferences" => {
+            for offset in 0..8 {
+                let angle = offset as f32 * std::f32::consts::TAU / 8.0;
+                let direction = [angle.cos(), angle.sin()];
+                line(
+                    [8.0 + direction[0] * 5.0, 8.0 + direction[1] * 5.0],
+                    [8.0 + direction[0] * 7.0, 8.0 + direction[1] * 7.0],
+                    1.8,
+                );
+            }
+            output.push(item(
+                clip,
+                z,
+                Primitive::Ellipse {
+                    rect: ClipRect {
+                        x: x + 5.0,
+                        y: y + 5.0,
+                        width: 6.0,
+                        height: 6.0,
+                    },
+                    color,
+                },
+            ));
+        }
+        "Geometry Nodes" => {
+            line([4.0, 4.0], [11.0, 8.0], 1.3);
+            line([4.0, 12.0], [11.0, 8.0], 1.3);
+            for point in [[4.0, 4.0], [4.0, 12.0], [12.0, 8.0]] {
+                output.push(item(
+                    clip,
+                    z,
+                    Primitive::Ellipse {
+                        rect: ClipRect {
+                            x: x + point[0] - 2.0,
+                            y: y + point[1] - 2.0,
+                            width: 4.0,
+                            height: 4.0,
+                        },
+                        color,
+                    },
+                ));
+            }
+        }
+        _ => {
+            line([8.0, 2.0], [8.0, 14.0], 1.2);
+            output.push(item(
+                clip,
+                z,
+                Primitive::Ellipse {
+                    rect: ClipRect {
+                        x: x + 2.0,
+                        y: y + 2.0,
+                        width: 12.0,
+                        height: 12.0,
+                    },
+                    color,
+                },
+            ));
+        }
+    }
 }

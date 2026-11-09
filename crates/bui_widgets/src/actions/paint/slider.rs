@@ -10,6 +10,7 @@ pub(in crate::actions) struct SliderPaint<'a> {
     pub(in crate::actions) focused: bool,
     pub(in crate::actions) dragging: bool,
     pub(in crate::actions) filled: bool,
+    pub(in crate::actions) value_width: Option<f32>,
     pub(in crate::actions) theme: &'a Theme,
 }
 
@@ -24,6 +25,7 @@ pub(in crate::actions) fn paint_slider(paint: SliderPaint<'_>, output: &mut Vec<
         focused,
         dragging,
         filled,
+        value_width,
         theme,
     } = paint;
     if filled {
@@ -34,7 +36,7 @@ pub(in crate::actions) fn paint_slider(paint: SliderPaint<'_>, output: &mut Vec<
             Primitive::RoundedRect {
                 rect: track,
                 radius: 2.0,
-                color: theme.surface_hover,
+                color: theme.surface.mix(theme.text, 0.12),
             },
         ));
         let fill_width = rect.width * slider.normalized_value() as f32;
@@ -53,22 +55,19 @@ pub(in crate::actions) fn paint_slider(paint: SliderPaint<'_>, output: &mut Vec<
             ));
         }
         let value = format!("{:.3}", slider.value);
-        let text_width = value.chars().count() as f32 * theme.font_size * 0.54;
-        output.push(item(
+        let value_width = value_width.unwrap_or(0.0);
+        let value_text = styled_text_primitive(
             clip,
-            z.saturating_add(2),
-            styled_text_primitive(
-                clip,
-                [
-                    rect.x + (rect.width - text_width) * 0.5,
-                    rect.y + theme.spacing.control.padding_y,
-                ],
-                value,
-                theme.text,
-                theme,
-                false,
-            ),
-        ));
+            [
+                rect.x + (rect.width - value_width).max(0.0) * 0.5,
+                rect.y + theme.spacing.control.padding_y,
+            ],
+            value,
+            theme.text,
+            theme,
+            false,
+        );
+        output.push(item(clip, z.saturating_add(2), value_text));
         return;
     }
     let active = focused || dragging;

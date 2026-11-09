@@ -14,8 +14,12 @@ example together; open an individual image below to inspect it at full resolutio
 | Text and other | [Text area](examples/text_area.png) · [Text history](examples/text_history.png) · [Accessibility live](examples/accessibility_live.png) · [Icon assets](examples/icon_assets.png) · [Render basics](examples/render_basics.png) |
 
 Interaction captures show [Object Actions open](examples/menus_object_actions.png), the
-[selected Transform pie](examples/menus_transform_pie.png), and the
-[Visibility tab in the properties editor](examples/properties_editor_visibility.png).
+[selected Transform pie](examples/menus_transform_pie.png), and all five secondary properties
+pages: [Modifiers](examples/properties_editor_modifiers.png),
+[Material](examples/properties_editor_material.png),
+[Outliner](examples/properties_editor_outliner.png),
+[Preferences](examples/properties_editor_preferences.png), and
+[Geometry Nodes](examples/properties_editor_nodes.png).
 
 The [properties editor source map](properties-editor-reference.md) traces this composition to
 BUI's component demo and native panel layout code.
@@ -24,11 +28,14 @@ BUI's component demo and native panel layout code.
 
 On Linux, start an X11 display with at least a 1600×1000 24-bit screen, then run:
 
-```sh
+```bash
 cargo build -p bui --examples --locked
 DISPLAY=:99 python3 scripts/capture_examples.py
-DISPLAY=:99 python3 scripts/capture_examples.py --click 13,90 --output /tmp/bui-visibility properties_editor
-cp /tmp/bui-visibility/properties_editor.png docs/visuals/examples/properties_editor_visibility.png
+for page in '80 modifiers' '109 material' '138 outliner' '167 preferences' '196 nodes'; do
+  read -r y name <<< "$page"
+  DISPLAY=:99 python3 scripts/capture_examples.py --click "13,$y" --output "/tmp/bui-$name" properties_editor
+  cp "/tmp/bui-$name/properties_editor.png" "docs/visuals/examples/properties_editor_$name.png"
+done
 python3 scripts/make_example_gallery.py
 ```
 
