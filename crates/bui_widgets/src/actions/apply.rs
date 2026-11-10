@@ -682,11 +682,13 @@ pub(super) fn apply_action(
             edit_node_graph(world, target, emitted, NodeGraph::toggle_selected_collapsed);
         }
         WidgetActionKind::NodeGraphPanBy(delta) => {
+            let trusted = node_graph_pan_tracking_is_current(world, target);
             edit_node_graph(world, target, emitted, |graph| {
                 let before = graph.pan;
                 graph.pan_by(delta);
                 graph.pan != before
             });
+            record_node_graph_pan(world, target, trusted);
         }
         WidgetActionKind::NodeGraphZoomBy(factor) => {
             edit_node_graph(world, target, emitted, |graph| {

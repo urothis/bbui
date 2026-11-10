@@ -5,7 +5,6 @@ use super::*;
 /// only moved fragments plus local neighbors if their rank gap is exhausted.
 pub(in crate::actions) fn collect_widget_paint_full(
     world: &mut World,
-    input_stamp: Option<u64>,
     batch: Option<UiDirtyBatch>,
 ) {
     let base_theme = world.resource::<Theme>().clone();
@@ -117,10 +116,10 @@ pub(in crate::actions) fn collect_widget_paint_full(
         };
         let role = world.get::<UiRole>(entity).map(|role| role.0.as_str());
         let is_box = role == Some("box");
-        let properties_frame =
-            role.is_some_and(|role| matches!(role, "properties-menu-bar" | "properties-tab-rail"));
+        let editor_frame =
+            role.is_some_and(|role| matches!(role, EditorRole::MENU_BAR | EditorRole::TAB_RAIL));
         if !is_box
-            && !properties_frame
+            && !editor_frame
             && world.get::<Checkbox>(entity).is_none()
             && world.get::<Button>(entity).is_none()
             && world.get::<IconButton>(entity).is_none()
@@ -306,7 +305,6 @@ pub(in crate::actions) fn collect_widget_paint_full(
     cache
         .node_graph_output_measurements
         .retain(|owner, _| live_graph_owners.contains(owner));
-    cache.input_stamp = input_stamp;
     cache.rebuilt_frames = cache.rebuilt_frames.saturating_add(1);
     cache.repainted_entities = repainted_entities;
     cache.published_fragments = published_fragments;

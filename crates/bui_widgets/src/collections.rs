@@ -78,6 +78,7 @@ impl ListSelection {
 }
 
 #[derive(Component, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[component(summary_tick)]
 pub struct ListModel<T> {
     pub items: Vec<ListItem<T>>,
     pub selection: ListSelection,
@@ -227,6 +228,7 @@ pub struct TreeNode<T> {
 }
 
 #[derive(Component, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[component(summary_tick)]
 pub struct TreeModel<T> {
     pub nodes: Vec<TreeNode<T>>,
     pub selection: ListSelection,
@@ -563,6 +565,7 @@ impl PreviewGridItem {
 }
 
 #[derive(Component, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[component(summary_tick)]
 pub struct PreviewGrid {
     pub items: Vec<PreviewGridItem>,
     pub selection: ListSelection,
@@ -755,6 +758,7 @@ pub struct TableRow {
 }
 
 #[derive(Component, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[component(summary_tick)]
 pub struct DataTable {
     pub columns: Vec<TableColumn>,
     pub rows: Vec<TableRow>,

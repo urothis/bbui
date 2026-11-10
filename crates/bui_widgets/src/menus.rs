@@ -148,6 +148,7 @@ pub enum MenuDisplay {
 }
 
 #[derive(Component, Debug)]
+#[component(summary_tick)]
 pub struct MenuControl {
     pub label: String,
     pub tree: MenuTree,
@@ -230,6 +231,7 @@ impl MenuControl {
 }
 
 #[derive(Component, Debug, Clone, PartialEq, Eq)]
+#[component(summary_tick)]
 pub struct MenuItemControl {
     pub owner: Entity,
     pub id: String,

@@ -498,6 +498,81 @@ pub fn move_node_graph_node(
     true
 }
 
+/// Pan a graph through the tracked viewport path. Direct component edits are
+/// still reconciled by the full signature comparison during view sync.
+pub fn pan_node_graph(world: &mut World, owner: Entity, pan: [f32; 2]) -> bool {
+    if !pan.into_iter().all(f32::is_finite) {
+        return false;
+    }
+    world.init_resource::<WidgetNodeGraphItems>();
+    let cache = world.resource::<WidgetNodeGraphItems>();
+    let expected = cache.viewport_ticks.get(&owner).copied().or_else(|| {
+        cache
+            .journaled_ticks
+            .get(&owner)
+            .copied()
+            .or_else(|| cache.stamps.get(&owner).map(|stamp| stamp.model_changed))
+    });
+    let current = entity_component_changed_tick::<NodeGraph>(world, owner);
+    let trusted = current.zip(expected).is_some_and(|(a, b)| a == b);
+    if world
+        .get::<NodeGraph>(owner)
+        .is_none_or(|graph| graph.pan == pan)
+    {
+        return false;
+    }
+    world.increment_change_tick();
+    if let Some(mut graph) = world.get_mut::<NodeGraph>(owner) {
+        graph.pan = pan;
+    }
+    if trusted {
+        if let Some(tick) = entity_component_changed_tick::<NodeGraph>(world, owner) {
+            world
+                .resource_mut::<WidgetNodeGraphItems>()
+                .viewport_ticks
+                .insert(owner, tick);
+        }
+    } else {
+        world
+            .resource_mut::<WidgetNodeGraphItems>()
+            .viewport_ticks
+            .remove(&owner);
+    }
+    world.increment_change_tick();
+    true
+}
+
+pub(super) fn node_graph_pan_tracking_is_current(world: &World, owner: Entity) -> bool {
+    let Some(cache) = world.get_resource::<WidgetNodeGraphItems>() else {
+        return false;
+    };
+    let expected = cache
+        .viewport_ticks
+        .get(&owner)
+        .copied()
+        .or_else(|| cache.stamps.get(&owner).map(|stamp| stamp.model_changed));
+    entity_component_changed_tick::<NodeGraph>(world, owner)
+        .zip(expected)
+        .is_some_and(|(a, b)| a == b)
+}
+
+pub(super) fn record_node_graph_pan(world: &mut World, owner: Entity, trusted: bool) {
+    if trusted {
+        if let Some(tick) = entity_component_changed_tick::<NodeGraph>(world, owner) {
+            world
+                .resource_mut::<WidgetNodeGraphItems>()
+                .viewport_ticks
+                .insert(owner, tick);
+        }
+    } else {
+        world
+            .resource_mut::<WidgetNodeGraphItems>()
+            .viewport_ticks
+            .remove(&owner);
+    }
+    world.increment_change_tick();
+}
+
 pub(super) fn update_node_graph_gesture(world: &mut World, target: Entity, position: [f32; 2]) {
     let Some(gesture) = world
         .get::<NodeGraphEditorState>(target)
@@ -511,12 +586,14 @@ pub(super) fn update_node_graph_gesture(world: &mut World, target: Entity, posit
             start_pan,
             ..
         } => {
-            if let Some(mut graph) = world.get_mut::<NodeGraph>(target) {
-                graph.pan = [
+            pan_node_graph(
+                world,
+                target,
+                [
                     start_pan[0] + position[0] - start_pointer[0],
                     start_pan[1] + position[1] - start_pointer[1],
-                ];
-            }
+                ],
+            );
         }
         NodeGraphGesture::MoveNodes {
             start_pointer,
@@ -843,6 +920,8 @@ pub(super) fn node_graph_wheel(
     };
     let theme = world.get_resource::<Theme>().cloned().unwrap_or_default();
     let spacing = &theme.spacing.node_graph;
+    let tracked_pan = !modifiers.control && !modifiers.super_key;
+    let trusted = tracked_pan && node_graph_pan_tracking_is_current(world, target);
     edit_node_graph(world, target, emitted, |graph| {
         if modifiers.control || modifiers.super_key {
             let anchor = node_graph_data_position(graph, rect, pointer, spacing);
@@ -870,6 +949,9 @@ pub(super) fn node_graph_wheel(
         }
         true
     });
+    if tracked_pan {
+        record_node_graph_pan(world, target, trusted);
+    }
 }
 
 pub(super) fn node_graph_key(

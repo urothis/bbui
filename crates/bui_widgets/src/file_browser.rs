@@ -100,6 +100,7 @@ fn failure(operation: &'static str, path: &Path, source: io::Error) -> FileBrows
 /// use `set_filter`, `set_sort`, navigation, and refresh methods to keep its virtual index current.
 /// Selection and keyboard cursor use paths, so sorting does not change object identity.
 #[derive(Component, Debug, Clone)]
+#[component(summary_tick)]
 pub struct FileBrowser {
     pub directory: PathBuf,
     entries: Vec<FileEntry>,

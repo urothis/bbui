@@ -2,7 +2,24 @@
 
 use std::collections::HashSet;
 
-use bevy_ecs::{entity::Entity, resource::Resource};
+use bevy_ecs::{
+    change_detection::Tick, component::ComponentId, entity::Entity, resource::Resource,
+    world::World,
+};
+
+/// Checks table summary ticks without visiting unchanged component instances.
+/// Returns true for a tracked column without a summary tick so callers remain correct.
+pub fn ui_components_changed_since(world: &World, components: &[ComponentId], last: Tick) -> bool {
+    let now = world.read_change_tick();
+    world.storages().tables.iter().any(|table| {
+        components.iter().any(|component| {
+            table.has_column(*component)
+                && table
+                    .get_summary_tick(*component)
+                    .is_none_or(|summary| summary.get().is_newer_than(last, now))
+        })
+    })
+}
 
 /// A subsystem that consumes UI invalidations independently of other subsystems.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -105,6 +122,23 @@ impl UiDirty {
             UiDirtyDomain::Accessibility => self.accessibility.generation,
             UiDirtyDomain::Preview => self.preview.generation,
         }
+    }
+
+    /// Whether a domain already needs this entity or a complete refresh.
+    pub fn is_marked(&self, domain: UiDirtyDomain, entity: Entity) -> bool {
+        let set = match domain {
+            UiDirtyDomain::Style => &self.style,
+            UiDirtyDomain::Layout => &self.layout,
+            UiDirtyDomain::TextMeasure => &self.text_measure,
+            UiDirtyDomain::TextLayout => &self.text_layout,
+            UiDirtyDomain::TextSync => &self.text_sync,
+            UiDirtyDomain::Paint => &self.paint,
+            UiDirtyDomain::Render => &self.render,
+            UiDirtyDomain::HitTest => &self.hit_test,
+            UiDirtyDomain::Accessibility => &self.accessibility,
+            UiDirtyDomain::Preview => &self.preview,
+        };
+        set.all || set.entities.contains(&entity)
     }
 
     pub fn take(&mut self, domain: UiDirtyDomain) -> UiDirtyBatch {

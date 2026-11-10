@@ -52,9 +52,9 @@ pub fn sync_collection_views(world: &mut World) {
     let mut views = Vec::with_capacity(dirty_owners.len());
 
     for (owner, layout, stamp) in dirty_owners {
-        let mut list = world.get::<ListModel<String>>(owner).cloned();
-        let mut tree = world.get::<TreeModel<String>>(owner).cloned();
-        let mut grid = world.get::<PreviewGrid>(owner).cloned();
+        let list = world.get::<ListModel<String>>(owner);
+        let tree = world.get::<TreeModel<String>>(owner);
+        let grid = world.get::<PreviewGrid>(owner);
         let Some(layout) = layout else {
             views.push(CollectionView {
                 owner,
@@ -75,7 +75,7 @@ pub fn sync_collection_views(world: &mut World) {
             .unwrap_or(viewport);
         let mut items = Vec::new();
 
-        if let Some(model) = list.as_mut() {
+        if let Some(model) = list {
             let row_height = if model.row_height == 22.0 {
                 list_spacing.row_height
             } else {
@@ -84,20 +84,20 @@ pub fn sync_collection_views(world: &mut World) {
             .max(1.0);
             let content_height = model.items.len() as f32 * row_height;
             let max_offset = (content_height - viewport.height).max(0.0);
-            model.scroll_offset = model.scroll_offset.clamp(0.0, max_offset);
+            let mut scroll_offset = model.scroll_offset.clamp(0.0, max_offset);
             if viewport.height > 0.0
                 && let Some(active) = model.selection.active
                 && let Some(index) = model.items.iter().position(|item| item.id == active)
             {
                 let top = index as f32 * row_height;
                 let bottom = top + row_height;
-                if top < model.scroll_offset {
-                    model.scroll_offset = top;
-                } else if bottom > model.scroll_offset + viewport.height {
-                    model.scroll_offset = (bottom - viewport.height).min(max_offset);
+                if top < scroll_offset {
+                    scroll_offset = top;
+                } else if bottom > scroll_offset + viewport.height {
+                    scroll_offset = (bottom - viewport.height).min(max_offset);
                 }
             }
-            let actual_offset = model.scroll_offset;
+            let actual_offset = scroll_offset;
             let start = (actual_offset / row_height).floor() as usize;
             let end = start
                 .saturating_add((viewport.height / row_height).ceil() as usize + 1)
@@ -135,7 +135,7 @@ pub fn sync_collection_views(world: &mut World) {
             {
                 current.scroll_offset = actual_offset;
             }
-        } else if let Some(model) = tree.as_mut() {
+        } else if let Some(model) = tree {
             let row_height = if model.row_height == 22 {
                 list_spacing.row_height
             } else {
@@ -144,21 +144,22 @@ pub fn sync_collection_views(world: &mut World) {
             .max(1.0);
             let visible_ids = model.visible_ids();
             let page_rows = (viewport.height / row_height).ceil().max(1.0) as usize;
+            let mut scroll_rows = model.scroll_rows;
             if let Some(active_index) = model
                 .selection
                 .active
                 .and_then(|active| visible_ids.iter().position(|id| *id == active))
             {
-                if active_index < model.scroll_rows {
-                    model.scroll_rows = active_index;
-                } else if active_index >= model.scroll_rows.saturating_add(page_rows) {
-                    model.scroll_rows = active_index + 1 - page_rows;
+                if active_index < scroll_rows {
+                    scroll_rows = active_index;
+                } else if active_index >= scroll_rows.saturating_add(page_rows) {
+                    scroll_rows = active_index + 1 - page_rows;
                 }
             }
             let visible_rows = page_rows.saturating_add(1);
             let max_scroll = visible_ids.len().saturating_sub(page_rows);
-            model.scroll_rows = model.scroll_rows.min(max_scroll);
-            let start = model.scroll_rows;
+            scroll_rows = scroll_rows.min(max_scroll);
+            let start = scroll_rows;
             let end = start.saturating_add(visible_rows).min(visible_ids.len());
             for (slot, id) in visible_ids[start..end].iter().copied().enumerate() {
                 let Some(node) = model.nodes.iter().find(|node| node.id == id) else {
@@ -188,7 +189,6 @@ pub fn sync_collection_views(world: &mut World) {
                     items.push((control, rect));
                 }
             }
-            let scroll_rows = model.scroll_rows;
             if world
                 .get::<TreeModel<String>>(owner)
                 .is_some_and(|current| current.scroll_rows != scroll_rows)
@@ -196,7 +196,7 @@ pub fn sync_collection_views(world: &mut World) {
             {
                 current.scroll_rows = scroll_rows;
             }
-        } else if let Some(model) = grid.as_mut() {
+        } else if let Some(model) = grid {
             let cell_width = if model.cell_width == 112.0 {
                 collection_spacing.preview_cell_width
             } else {
@@ -211,31 +211,31 @@ pub fn sync_collection_views(world: &mut World) {
             .max(collection_spacing.minimum_preview_cell_size);
             let columns =
                 (((viewport.width + item_gap) / (cell_width + item_gap)).floor() as usize).max(1);
-            model.columns = columns;
             let viewport_rows = (viewport.height / (cell_height + item_gap)).ceil() as usize;
             let total_rows = model.items.len().div_ceil(columns);
             let page_rows = viewport_rows.max(1);
+            let mut scroll_rows = model.scroll_rows;
             if let Some(active_row) = model
                 .selection
                 .active
                 .and_then(|active| model.items.iter().position(|item| item.id == active))
                 .map(|index| index / columns)
             {
-                if active_row < model.scroll_rows {
-                    model.scroll_rows = active_row;
-                } else if active_row >= model.scroll_rows.saturating_add(page_rows) {
-                    model.scroll_rows = active_row + 1 - page_rows;
+                if active_row < scroll_rows {
+                    scroll_rows = active_row;
+                } else if active_row >= scroll_rows.saturating_add(page_rows) {
+                    scroll_rows = active_row + 1 - page_rows;
                 }
             }
-            model.scroll_rows = model.scroll_rows.min(total_rows.saturating_sub(page_rows));
-            let first = model.scroll_rows.saturating_mul(columns);
+            scroll_rows = scroll_rows.min(total_rows.saturating_sub(page_rows));
+            let first = scroll_rows.saturating_mul(columns);
             let end = first
                 .saturating_add(viewport_rows.saturating_add(1).saturating_mul(columns))
                 .min(model.items.len());
             for index in first..end {
                 let item = &model.items[index];
                 let col = index % columns;
-                let row = index / columns - model.scroll_rows;
+                let row = index / columns - scroll_rows;
                 let control = CollectionItemControl {
                     owner,
                     id: item.id,
@@ -261,8 +261,6 @@ pub fn sync_collection_views(world: &mut World) {
                     items.push((control, rect));
                 }
             }
-            let columns = model.columns;
-            let scroll_rows = model.scroll_rows;
             if world.get::<PreviewGrid>(owner).is_some_and(|current| {
                 current.columns != columns || current.scroll_rows != scroll_rows
             }) && let Some(mut current) = world.get_mut::<PreviewGrid>(owner)

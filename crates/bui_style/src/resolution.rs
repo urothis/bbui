@@ -3,18 +3,23 @@ use super::*;
 /// Resolve theme defaults, matching rules, inherited text values, and inline
 /// values. Layout declarations are applied before the following layout phase.
 pub fn resolve_ui_styles(world: &mut World) {
+    world.init_resource::<UiDirty>();
     world.init_resource::<UiStyleResolutionCache>();
-    let input_stamp = ui_style_input_stamp(world);
-    if world.resource::<UiStyleResolutionCache>().input_stamp == Some(input_stamp) {
+    world.init_resource::<UiStyleCollectorCursor>();
+    world.init_resource::<UiStyleResourceCursor>();
+    world.init_resource::<Theme>();
+    world.init_resource::<UiStyleSheet>();
+    world.init_resource::<UiReducedMotion>();
+    collect_style_component_changes_gated(world);
+    if world
+        .run_system_cached(collect_style_resource_changes)
+        .is_err()
+    {
         world
-            .resource_mut::<UiStyleResolutionCache>()
-            .skipped_passes += 1;
-        return;
+            .resource_mut::<UiDirty>()
+            .mark_all(UiDirtyDomain::Style);
     }
-
-    resolve_ui_styles_pass(world, None);
-    let settled_stamp = ui_style_input_stamp(world);
-    world.resource_mut::<UiStyleResolutionCache>().input_stamp = Some(settled_stamp);
+    resolve_ui_styles_dirty(world);
 }
 
 pub(super) fn resolve_ui_styles_pass(world: &mut World, dirty: Option<UiDirtyBatch>) {
@@ -49,8 +54,9 @@ pub(super) fn resolve_ui_styles_pass(world: &mut World, dirty: Option<UiDirtyBat
     });
 
     for entity in nodes {
-        let role = world.get::<UiRole>(entity).cloned();
-        let classes = world.get::<UiClasses>(entity).cloned();
+        let base_layout = capture_base_layout_node(world, entity);
+        let role = world.get::<UiRole>(entity);
+        let classes = world.get::<UiClasses>(entity);
         let mut state = world
             .get::<UiStyleState>(entity)
             .copied()
@@ -74,38 +80,28 @@ pub(super) fn resolve_ui_styles_pass(world: &mut World, dirty: Option<UiDirtyBat
                 }
             }
         }
+        let default_inline = UiInlineStyle::default();
         let inline = world
             .get::<UiInlineStyle>(entity)
-            .cloned()
-            .unwrap_or_default();
+            .unwrap_or(&default_inline);
         let parent_style = world
             .get::<UiParent>(entity)
-            .and_then(|parent| world.get::<UiComputedStyle>(parent.0))
-            .cloned();
-        let mut target = resolve_style(
-            &theme,
-            &sheet,
-            role.as_ref(),
-            classes.as_ref(),
-            state,
-            parent_style.as_ref(),
-            &inline,
-        );
-        let base_layout = capture_base_layout_node(world, entity);
+            .and_then(|parent| world.get::<UiComputedStyle>(parent.0));
+        let mut target = resolve_style(&theme, &sheet, role, classes, state, parent_style, inline);
         add_base_layout_values(&mut target, base_layout);
 
+        let default_current = UiComputedStyle::default();
         let current = world
             .get::<UiComputedStyle>(entity)
-            .cloned()
-            .unwrap_or_default();
+            .unwrap_or(&default_current);
+        let default_previous = UiStyleTransitionState::default();
         let previous_transitions = world
             .get::<UiStyleTransitionState>(entity)
-            .cloned()
-            .unwrap_or_default();
+            .unwrap_or(&default_previous);
+        let default_transitions = UiTransitions::default();
         let transitions = world
             .get::<UiTransitions>(entity)
-            .cloned()
-            .unwrap_or_default();
+            .unwrap_or(&default_transitions);
         let reduced_motion = world
             .get_resource::<UiReducedMotion>()
             .is_some_and(|setting| setting.0)
@@ -113,18 +109,20 @@ pub(super) fn resolve_ui_styles_pass(world: &mut World, dirty: Option<UiDirtyBat
             || nonnegative(theme.motion_scale) == 0.0;
         let motion_scale = nonnegative(theme.motion_scale);
         let (resolved, next_transitions) = transition_style(
-            &current,
+            current,
             &target,
-            &transitions,
-            &previous_transitions,
+            transitions,
+            previous_transitions,
             reduced_motion,
             motion_scale,
         );
-        if current != resolved {
+        let changed = current != &resolved;
+        let transition_changed = previous_transitions != &next_transitions;
+        if changed {
             apply_box_shadow_style(world, entity, &resolved, &theme);
             world.entity_mut(entity).insert(resolved.clone());
         }
-        if previous_transitions != next_transitions {
+        if transition_changed {
             if next_transitions.tracks.is_empty() {
                 world.entity_mut(entity).remove::<UiStyleTransitionState>();
             } else {
@@ -135,74 +133,9 @@ pub(super) fn resolve_ui_styles_pass(world: &mut World, dirty: Option<UiDirtyBat
     }
 
     let mut cache = world.resource_mut::<UiStyleResolutionCache>();
-    cache.input_stamp = None;
     cache.resolved_passes = cache.resolved_passes.saturating_add(1);
     let settled_tick = world.read_change_tick();
     if let Some(mut cursor) = world.get_resource_mut::<UiStyleCollectorCursor>() {
         cursor.0 = settled_tick;
-    }
-}
-
-pub(super) fn ui_style_input_stamp(world: &World) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    hash_style_resource_ticks::<Theme>(world, &mut hasher);
-    hash_style_resource_ticks::<UiStyleSheet>(world, &mut hasher);
-    hash_style_resource_ticks::<UiReducedMotion>(world, &mut hasher);
-    world.contains_resource::<Time>().hash(&mut hasher);
-
-    if let Some(focus) = world.get_resource::<UiFocus>() {
-        for (window, state) in &focus.windows {
-            window.hash(&mut hasher);
-            state.focused.hash(&mut hasher);
-            state.hovered.hash(&mut hasher);
-            state.captured.hash(&mut hasher);
-        }
-    }
-
-    macro_rules! hash_style_component {
-        ($entity:ident, $component:ty) => {
-            if let Some(ticks) = $entity.get_change_ticks::<$component>() {
-                true.hash(&mut hasher);
-                ticks.added.get().hash(&mut hasher);
-                ticks.changed.get().hash(&mut hasher);
-            } else {
-                false.hash(&mut hasher);
-            }
-        };
-    }
-
-    for entity in world.iter_entities() {
-        if !entity.contains::<UiNode>()
-            && !entity.contains::<UiParent>()
-            && !entity.contains::<UiComputedStyle>()
-            && !entity.contains::<UiBaseLayoutNode>()
-            && !entity.contains::<UiLayoutNode>()
-        {
-            continue;
-        }
-        entity.id().hash(&mut hasher);
-        hash_style_component!(entity, UiNode);
-        hash_style_component!(entity, UiParent);
-        hash_style_component!(entity, UiRole);
-        hash_style_component!(entity, UiClasses);
-        hash_style_component!(entity, UiStyleState);
-        hash_style_component!(entity, UiEnabled);
-        hash_style_component!(entity, UiInlineStyle);
-        hash_style_component!(entity, UiComputedStyle);
-        hash_style_component!(entity, UiTransitions);
-        hash_style_component!(entity, UiStyleTransitionState);
-        hash_style_component!(entity, UiBaseLayoutNode);
-        hash_style_component!(entity, UiLayoutNode);
-    }
-    hasher.finish()
-}
-
-pub(super) fn hash_style_resource_ticks<R: Resource>(world: &World, hasher: &mut impl Hasher) {
-    if let Some(ticks) = world.get_resource_change_ticks::<R>() {
-        true.hash(hasher);
-        ticks.added.get().hash(hasher);
-        ticks.changed.get().hash(hasher);
-    } else {
-        false.hash(hasher);
     }
 }

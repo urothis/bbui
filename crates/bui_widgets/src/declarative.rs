@@ -2,8 +2,8 @@
 
 use bevy_ecs::prelude::{Changed, Component, Entity, Or, Query, ResMut, With, World};
 use bui_core::{
-    UiDirty, UiDirtyDomain, UiEnabled, UiFocusable, UiHierarchyError, UiKey, UiNode, UiTabIndex,
-    UiVisible, set_parent,
+    UiAccessibleName, UiDirty, UiDirtyDomain, UiEnabled, UiFocusable, UiHierarchyError, UiKey,
+    UiNode, UiTab, UiTabIndex, UiTabList, UiVisible, set_parent,
 };
 use bui_layout::{
     Rect, UiEdges, UiFlexDirection, UiLayoutMode, UiLayoutNode, UiLength, UiScroll, UiWheelHandled,

@@ -97,6 +97,7 @@ impl PanelState {
 }
 
 #[derive(Component, Debug, Clone, PartialEq)]
+#[component(summary_tick)]
 pub struct Panel {
     pub title: String,
     pub state: PanelState,
@@ -147,6 +148,7 @@ impl Panel {
 }
 
 #[derive(Component, Debug, Default, Clone, PartialEq, Eq)]
+#[component(summary_tick)]
 pub struct PanelGroup {
     pub panel_keys: Vec<String>,
     pub exclusive_open: Option<String>,

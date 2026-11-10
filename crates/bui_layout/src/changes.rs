@@ -35,7 +35,28 @@ pub(super) fn effective_roots(world: &mut World) -> Vec<(Entity, UiLayoutRoot)> 
 }
 
 pub(super) fn collect_layout_changes(world: &mut World) -> Vec<LayoutInputChange> {
-    let changed: Vec<Entity> = {
+    world.init_resource::<UiLayoutCollectorGate>();
+    let inputs_changed = world.resource_scope(|world, mut gate: Mut<UiLayoutCollectorGate>| {
+        if !gate.initialized {
+            gate.components = vec![
+                world.register_component::<UiNode>(),
+                world.register_component::<UiLayoutRoot>(),
+                world.register_component::<UiLayoutNode>(),
+                world.register_component::<UiIntrinsicSize>(),
+                world.register_component::<UiParent>(),
+                world.register_component::<UiChildren>(),
+                world.register_component::<UiZIndex>(),
+                world.register_component::<UiScroll>(),
+                world.register_component::<UiFlexItem>(),
+                world.register_component::<UiVisible>(),
+            ];
+            gate.initialized = true;
+        }
+        let changed = ui_components_changed_since(world, &gate.components, gate.last);
+        gate.last = world.read_change_tick();
+        changed
+    });
+    let changed: Vec<Entity> = if inputs_changed {
         let mut query = world.query_filtered::<Entity, Or<(
             Changed<UiNode>,
             Changed<UiLayoutRoot>,
@@ -49,7 +70,10 @@ pub(super) fn collect_layout_changes(world: &mut World) -> Vec<LayoutInputChange
             Changed<UiVisible>,
         )>>();
         query.iter(world).collect()
+    } else {
+        Vec::new()
     };
+    world.increment_change_tick();
     let mut cache = world.remove_resource::<UiLayoutCache>().unwrap_or_default();
     let mut removed = read_removed::<UiNode>(world, &mut cache.removed_nodes);
     removed.extend(read_removed::<UiLayoutRoot>(

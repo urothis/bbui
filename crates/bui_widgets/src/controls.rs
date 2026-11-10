@@ -17,6 +17,7 @@ pub enum WidgetStatus {
 }
 
 #[derive(Component, Debug, Clone, PartialEq, Eq)]
+#[component(summary_tick)]
 pub struct Button {
     pub label: String,
     pub enabled: bool,
@@ -45,6 +46,7 @@ impl Button {
 }
 
 #[derive(Component, Debug, Clone, PartialEq, Eq)]
+#[component(summary_tick)]
 pub struct Checkbox {
     pub label: String,
     pub value: CheckboxValue,
@@ -223,6 +225,7 @@ pub struct RadioOption {
 }
 
 #[derive(Component, Debug, Clone, PartialEq, Eq)]
+#[component(summary_tick)]
 pub struct RadioGroup {
     pub options: Vec<RadioOption>,
     pub selected: Option<usize>,
@@ -284,6 +287,7 @@ impl RadioGroup {
 }
 
 #[derive(Component, Debug, Clone, PartialEq, Eq)]
+#[component(summary_tick)]
 pub struct Dropdown {
     pub options: Vec<String>,
     pub selected: Option<usize>,
@@ -344,6 +348,7 @@ impl Dropdown {
 }
 
 #[derive(Component, Debug, Clone, PartialEq, Eq)]
+#[component(summary_tick)]
 pub struct Label {
     pub text: String,
     pub selectable: bool,
@@ -359,6 +364,7 @@ impl Label {
 }
 
 #[derive(Component, Debug, Clone, PartialEq, Eq)]
+#[component(summary_tick)]
 pub struct IconButton {
     pub icon: String,
     pub accessible_name: String,
@@ -390,6 +396,7 @@ impl IconButton {
 /// The path is resolved by Bevy's `AssetServer` while the control is visible. The widget cache
 /// drops its strong handle and renderer registration when the control leaves the visible tree.
 #[derive(Component, Debug, Clone, PartialEq)]
+#[component(summary_tick)]
 pub struct IconButtonAsset {
     pub path: String,
     /// Optional sRGB tint. `None` uses the themed icon color, or the disabled icon color.
@@ -428,6 +435,7 @@ pub enum IconButtonAssetStatus {
 }
 
 #[derive(Component, Debug, Clone, PartialEq, Eq)]
+#[component(summary_tick)]
 pub struct IconButtonAssetState {
     pub status: IconButtonAssetStatus,
 }
@@ -441,6 +449,7 @@ impl Default for IconButtonAssetState {
 }
 
 #[derive(Component, Debug, Clone, Copy, PartialEq)]
+#[component(summary_tick)]
 pub struct Progress {
     pub value: f32,
     pub indeterminate: bool,
@@ -468,6 +477,7 @@ impl Progress {
 }
 
 #[derive(Component, Debug, Clone, PartialEq, Eq)]
+#[component(summary_tick)]
 pub struct Tooltip {
     pub text: String,
     pub delay_millis: u32,
@@ -485,6 +495,7 @@ impl Tooltip {
 }
 
 #[derive(Component, Debug, Clone, PartialEq, Eq)]
+#[component(summary_tick)]
 pub struct TextField {
     pub text: String,
     /// Caret and selection use Unicode scalar-value indices, not UTF-8 byte offsets.
@@ -606,6 +617,7 @@ impl TextField {
 }
 
 #[derive(Component, Debug, Clone, PartialEq, Eq)]
+#[component(summary_tick)]
 pub struct TextArea {
     pub field: TextField,
     pub scroll_line: usize,

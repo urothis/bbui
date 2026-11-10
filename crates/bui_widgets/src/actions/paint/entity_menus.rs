@@ -183,7 +183,7 @@ pub(super) fn paint_buttons_and_menus(paint: &mut PaintEntityContext<'_>) -> boo
     if let Some(menu) = world.get::<MenuControl>(entity) {
         let properties_menu = world
             .get::<UiRole>(entity)
-            .is_some_and(|role| matches!(role.0.as_str(), "flat-menu" | "properties-flat-menu"));
+            .is_some_and(|role| matches!(role.0.as_str(), "flat-menu" | EditorRole::FLAT_MENU));
         let background = if menu.session.open {
             theme.color(ThemeColorToken::MenuOpenSurface)
         } else if properties_menu {

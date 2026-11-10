@@ -7,7 +7,7 @@ use bevy::prelude::*;
 use bevy::window::{PrimaryWindow, WindowResolution};
 use bui::prelude::*;
 use bui::widgets::{
-    Dropdown, IconButton, Label, MenuEntry, Panel, PanelGroup, Progress, WidgetEvent,
+    Dropdown, EditorChrome, IconButton, Label, MenuEntry, Panel, PanelGroup, Progress, WidgetEvent,
     WidgetEventQueue, WidgetNode,
 };
 use bui_layout::{Rect, UiEdges};
@@ -97,6 +97,7 @@ fn check(label: &str, checked: bool) -> WidgetNode {
 fn toolbar_button(index: usize, icon: &str) -> WidgetNode {
     WidgetNode::icon_button(icon, TAB_NAMES[index])
         .with_key(TAB_KEYS[index])
+        .with_tab_selected(index == 0)
         .with_role(tab_role(index, index == 0))
         .with_width(UiLength::Px(28.0))
         .with_height(UiLength::Px(28.0))
@@ -115,6 +116,9 @@ fn activate_page(world: &mut World, controls: PropertyControls, selected: usize)
             if role.0 != expected {
                 role.0 = expected.into();
             }
+        }
+        if let Some(mut state) = world.get_mut::<bui_core::UiTab>(tab) {
+            state.selected = active;
         }
     }
 }
@@ -168,8 +172,8 @@ fn setup(world: &mut World) {
         ))
         .id();
 
-    let menu = WidgetNode::menu_bar([
-        WidgetNode::menu(
+    let menu = EditorChrome::menu_bar([
+        EditorChrome::flat_menu(
             "File",
             [
                 MenuEntry::command("new", "New Scene"),
@@ -177,31 +181,27 @@ fn setup(world: &mut World) {
                 MenuEntry::command("save", "Save Scene"),
             ],
         )
-        .with_role("properties-flat-menu")
         .with_width(UiLength::Px(43.0))
         .with_height(UiLength::Px(20.0)),
-        WidgetNode::menu(
+        EditorChrome::flat_menu(
             "Edit",
             [
                 MenuEntry::command("undo", "Undo"),
                 MenuEntry::command("redo", "Redo"),
             ],
         )
-        .with_role("properties-flat-menu")
         .with_width(UiLength::Px(43.0))
         .with_height(UiLength::Px(20.0)),
-        WidgetNode::menu(
+        EditorChrome::flat_menu(
             "Render",
             [
                 MenuEntry::command("render", "Render Image"),
                 MenuEntry::command("animation", "Render Animation"),
             ],
         )
-        .with_role("properties-flat-menu")
         .with_width(UiLength::Px(60.0))
         .with_height(UiLength::Px(20.0)),
-        WidgetNode::menu("Help", [MenuEntry::command("about", "About BUI")])
-            .with_role("properties-flat-menu")
+        EditorChrome::flat_menu("Help", [MenuEntry::command("about", "About BUI")])
             .with_width(UiLength::Px(45.0))
             .with_height(UiLength::Px(20.0)),
         WidgetNode::label("")
@@ -212,7 +212,7 @@ fn setup(world: &mut World) {
             .with_role("header-play-icon")
             .with_width(UiLength::Px(25.0))
             .with_height(UiLength::Px(20.0)),
-        WidgetNode::menu(
+        EditorChrome::flat_menu(
             "⌕",
             [
                 MenuEntry::command("find-transform", "Transform"),
@@ -220,17 +220,15 @@ fn setup(world: &mut World) {
                 MenuEntry::command("find-display", "Viewport Display"),
             ],
         )
-        .with_role("properties-flat-menu")
         .with_width(UiLength::Px(25.0))
         .with_height(UiLength::Px(20.0)),
     ])
-    .with_role("properties-menu-bar")
     .with_gap(0.0)
     .with_padding(UiEdges::all(4.0))
     .with_width(UiLength::Fill(1.0))
     .with_height(UiLength::Px(28.0));
 
-    let transform = WidgetNode::panel(
+    let transform = EditorChrome::primary_panel(
         "Transform",
         true,
         [
@@ -262,7 +260,6 @@ fn setup(world: &mut World) {
         ],
     )
     .with_key("transform")
-    .with_role("object-panel")
     .with_gap(1.0)
     .with_width(UiLength::Fill(1.0));
 
@@ -299,12 +296,11 @@ fn setup(world: &mut World) {
             .with_gap(2.0)
             .with_padding(UiEdges::horizontal_vertical(8.0, 0.0))
             .with_width(UiLength::Fill(1.0)),
-            WidgetNode::panel(
+            EditorChrome::sub_panel(
                 "Mask",
                 true,
                 [check("Shadow Catcher", false), check("Holdout", false)],
             )
-            .with_role("sub-panel")
             .with_padding(UiEdges {
                 left: 8.0,
                 top: 28.0,
@@ -313,7 +309,7 @@ fn setup(world: &mut World) {
             })
             .with_gap(0.0)
             .with_width(UiLength::Fill(1.0)),
-            WidgetNode::panel(
+            EditorChrome::sub_panel(
                 "Motion Blur",
                 true,
                 [WidgetNode::property_row_with_decorator(
@@ -324,7 +320,6 @@ fn setup(world: &mut World) {
                 )
                 .with_height(UiLength::Px(20.0))],
             )
-            .with_role("sub-panel")
             .with_padding(UiEdges {
                 left: 8.0,
                 top: 28.0,
@@ -388,7 +383,7 @@ fn setup(world: &mut World) {
     let nodes = nodes_page();
 
     let content = WidgetNode::row([
-        WidgetNode::column([
+        EditorChrome::tab_rail([
             toolbar_button(0, "▣"),
             toolbar_button(1, "⚒"),
             toolbar_button(2, "◕"),
@@ -396,7 +391,6 @@ fn setup(world: &mut World) {
             toolbar_button(4, "⚙"),
             toolbar_button(5, "✣"),
         ])
-        .with_role("properties-tab-rail")
         .with_gap(1.0)
         .with_width(UiLength::Px(29.0)),
         WidgetNode::scroll([inspector, modifiers, material, outliner, preferences, nodes])
@@ -418,9 +412,8 @@ fn setup(world: &mut World) {
             content,
             WidgetNode::column([
                 WidgetNode::overlay([
-                    WidgetNode::progress(0.25)
+                    EditorChrome::progress(0.25)
                         .with_key("render-progress")
-                        .with_role("properties-progress")
                         .with_width(UiLength::Fill(1.0))
                         .with_height(UiLength::Px(18.0)),
                     WidgetNode::label("Rendering 25%")

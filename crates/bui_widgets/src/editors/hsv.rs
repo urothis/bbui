@@ -2,6 +2,7 @@ use super::*;
 
 /// Editable HSV state with a round-trippable hue even when saturation is zero.
 #[derive(Component, Debug, Clone, Copy, PartialEq)]
+#[component(summary_tick)]
 pub struct HsvColorEditor {
     pub hue_degrees: f32,
     pub saturation: f32,
@@ -198,6 +199,7 @@ impl HsvColorField {
 }
 
 #[derive(Component, Debug, Clone, PartialEq, Eq)]
+#[component(summary_tick)]
 pub struct HsvColorEditorState {
     pub active_field: HsvColorField,
     pub editing: bool,

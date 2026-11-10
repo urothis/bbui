@@ -2,6 +2,39 @@ use super::*;
 
 /// Advance animated panel state using Bevy's frame delta (or a stable fallback in bare apps).
 pub fn advance_panel_animations(world: &mut World) {
+    world.init_resource::<WidgetPanelAnimationGate>();
+    let changed = world.resource_scope(|world, mut gate: Mut<WidgetPanelAnimationGate>| {
+        let component = *gate
+            .component
+            .get_or_insert_with(|| world.register_component::<Panel>());
+        let changed =
+            !gate.initialized || ui_components_changed_since(world, &[component], gate.last);
+        gate.initialized = true;
+        changed
+    });
+    let mut active = std::mem::take(&mut world.resource_mut::<WidgetPanelAnimationGate>().active);
+    if changed {
+        let mut query = world.query::<(Entity, &Panel)>();
+        active = query
+            .iter(world)
+            .filter_map(|(entity, panel)| {
+                let target = if panel.state.target_expanded {
+                    1.0
+                } else {
+                    0.0
+                };
+                (!panel.state.progress.is_finite()
+                    || (panel.state.progress - target).abs() > f32::EPSILON)
+                    .then_some(entity)
+            })
+            .collect();
+    }
+    if active.is_empty() {
+        let now = world.read_change_tick();
+        world.resource_mut::<WidgetPanelAnimationGate>().last = now;
+        world.increment_change_tick();
+        return;
+    }
     let delta = world
         .get_resource::<bevy_time::Time>()
         .map_or(1.0 / 60.0, bevy_time::Time::delta_secs);
@@ -18,8 +51,10 @@ pub fn advance_panel_animations(world: &mut World) {
     let reduced_motion = world
         .get_resource::<bui_style::UiReducedMotion>()
         .is_some_and(|reduced| reduced.0);
-    let mut query = world.query::<&mut Panel>();
-    for mut panel in query.iter_mut(world) {
+    active.retain(|entity| {
+        let Some(mut panel) = world.get_mut::<Panel>(*entity) else {
+            return false;
+        };
         let target = if panel.state.target_expanded {
             1.0
         } else {
@@ -28,13 +63,19 @@ pub fn advance_panel_animations(world: &mut World) {
         let needs_advance = !panel.state.progress.is_finite()
             || (panel.state.progress - target).abs() > f32::EPSILON;
         if !needs_advance {
-            continue;
+            return false;
         }
         panel.state.animation_seconds = duration_seconds;
         panel
             .state
             .advance_with_motion(delta, motion_scale, reduced_motion);
-    }
+        (panel.state.progress - target).abs() > f32::EPSILON
+    });
+    let now = world.read_change_tick();
+    let mut gate = world.resource_mut::<WidgetPanelAnimationGate>();
+    gate.active = active;
+    gate.last = now;
+    world.increment_change_tick();
 }
 
 /// Animate popup surfaces independently from their hit boxes. `sync_menu_popups` keeps
@@ -49,12 +90,32 @@ pub fn advance_menu_animations(world: &mut World) {
 
 pub(super) fn advance_menu_animations_by(world: &mut World, delta_seconds: f32) {
     world.init_resource::<WidgetMenuAnimations>();
-    let mut query = world.query::<(Entity, &MenuControl, &UiLayoutResult)>();
-    let menus: Vec<_> = query
-        .iter(world)
-        .map(|(entity, menu, layout)| (entity, menu.session.open, layout.rect, menu.popup.bounds))
-        .collect();
-    let live: HashSet<_> = menus.iter().map(|(entity, ..)| *entity).collect();
+    world.init_resource::<WidgetMenuAnimationGate>();
+    let scan = world.resource_scope(|world, mut gate: Mut<WidgetMenuAnimationGate>| {
+        if !gate.initialized {
+            gate.components = vec![
+                world.register_component::<MenuControl>(),
+                world.register_component::<UiLayoutResult>(),
+            ];
+            gate.initialized = true;
+            return true;
+        }
+        let now = world.read_change_tick();
+        ui_components_changed_since(world, &gate.components, gate.last)
+            || world
+                .get_resource_change_ticks::<Theme>()
+                .is_some_and(|ticks| ticks.is_changed(gate.last, now))
+            || world
+                .get_resource_change_ticks::<bui_style::UiReducedMotion>()
+                .is_some_and(|ticks| ticks.is_changed(gate.last, now))
+    });
+    let mut active = std::mem::take(&mut world.resource_mut::<WidgetMenuAnimationGate>().active);
+    if !scan && active.is_empty() {
+        let now = world.read_change_tick();
+        world.resource_mut::<WidgetMenuAnimationGate>().last = now;
+        world.increment_change_tick();
+        return;
+    }
     let theme = world.resource::<Theme>();
     let spec = theme.motion.transition(ThemeMotionToken::MenuOpen);
     let duration = spec.duration.as_secs_f32();
@@ -73,32 +134,73 @@ pub(super) fn advance_menu_animations_by(world: &mut World, delta_seconds: f32) 
         (delta_seconds.max(0.0) * motion_scale / duration).clamp(0.0, 1.0)
     };
 
-    let previous = world.resource::<WidgetMenuAnimations>().clone();
-    let mut next = previous.clone();
-    next.0.retain(|entity, _| live.contains(entity));
-    for (entity, open, anchor, popup) in menus {
-        let Some(state) = next.0.get_mut(&entity) else {
-            if open {
-                next.0.insert(
+    let mut animations = std::mem::take(&mut world.resource_mut::<WidgetMenuAnimations>().0);
+    let mut changed_owners = HashSet::new();
+    let mut fresh = HashSet::new();
+    if scan {
+        let mut query = world.query::<(Entity, &MenuControl, &UiLayoutResult)>();
+        let menus: Vec<_> = query
+            .iter(world)
+            .map(|(entity, menu, layout)| {
+                (entity, menu.session.open, layout.rect, menu.popup.bounds)
+            })
+            .collect();
+        let live: HashSet<_> = menus.iter().map(|(entity, ..)| *entity).collect();
+        animations.retain(|entity, _| {
+            if live.contains(entity) {
+                true
+            } else {
+                changed_owners.insert(*entity);
+                active.remove(entity);
+                false
+            }
+        });
+        for (entity, open, anchor, popup) in menus {
+            if let Some(state) = animations.get_mut(&entity) {
+                let before = *state;
+                state.target_open = open;
+                if open {
+                    state.anchor = anchor;
+                    state.popup = popup;
+                }
+                if *state != before {
+                    changed_owners.insert(entity);
+                }
+                if (state.progress - if open { 1.0 } else { 0.0 }).abs() > f32::EPSILON {
+                    active.insert(entity);
+                }
+            } else if open {
+                let progress = if snap { 1.0 } else { step };
+                animations.insert(
                     entity,
                     MenuAnimationState {
-                        progress: if snap { 1.0 } else { step },
+                        progress,
                         target_open: true,
                         anchor,
                         popup,
                     },
                 );
+                changed_owners.insert(entity);
+                fresh.insert(entity);
+                if progress < 1.0 {
+                    active.insert(entity);
+                }
             }
-            continue;
+        }
+    }
+    active.retain(|entity| {
+        if world.get::<MenuControl>(*entity).is_none() {
+            animations.remove(entity);
+            changed_owners.insert(*entity);
+            return false;
+        }
+        let Some(state) = animations.get_mut(entity) else {
+            return false;
         };
-
-        if state.target_open != open {
-            state.target_open = open;
+        if fresh.contains(entity) {
+            return true;
         }
-        if open {
-            state.anchor = anchor;
-            state.popup = popup;
-        }
+        let before = *state;
         let target = if state.target_open { 1.0 } else { 0.0 };
         if snap {
             state.progress = target;
@@ -106,22 +208,28 @@ pub(super) fn advance_menu_animations_by(world: &mut World, delta_seconds: f32) 
             let remaining = target - state.progress;
             state.progress += remaining.signum() * step.min(remaining.abs());
         }
-    }
-    next.0
-        .retain(|_, state| state.target_open || state.progress > f32::EPSILON);
-    if previous != next {
-        let changed_owners: HashSet<_> = previous
-            .0
-            .keys()
-            .chain(next.0.keys())
-            .copied()
-            .filter(|owner| previous.0.get(owner) != next.0.get(owner))
-            .collect();
-        for owner in changed_owners {
-            mark_menu_paint_subtree(world, owner);
+        if *state != before {
+            changed_owners.insert(*entity);
         }
-        *world.resource_mut::<WidgetMenuAnimations>() = next;
+        (state.progress - target).abs() > f32::EPSILON
+    });
+    animations.retain(|entity, state| {
+        if state.target_open || state.progress > f32::EPSILON {
+            true
+        } else {
+            changed_owners.insert(*entity);
+            false
+        }
+    });
+    world.resource_mut::<WidgetMenuAnimations>().0 = animations;
+    for owner in changed_owners {
+        mark_menu_paint_subtree(world, owner);
     }
+    let now = world.read_change_tick();
+    let mut gate = world.resource_mut::<WidgetMenuAnimationGate>();
+    gate.active = active;
+    gate.last = now;
+    world.increment_change_tick();
 }
 
 pub(super) fn menu_animation_progress(world: &World, owner: Entity, theme: &Theme) -> Option<f32> {
@@ -483,6 +591,28 @@ pub(super) fn cancel_panel_reorder(
 pub fn sync_panel_children(world: &mut World) {
     world.init_resource::<WidgetPanelSyncCache>();
     world.init_resource::<WidgetPanelSyncInvalidations>();
+    world.init_resource::<WidgetPanelSyncGate>();
+    let needs_sync = world.resource_scope(|world, mut gate: Mut<WidgetPanelSyncGate>| {
+        let component = *gate
+            .component
+            .get_or_insert_with(|| world.register_component::<Panel>());
+        let now = world.read_change_tick();
+        let pending = world.resource::<WidgetPanelSyncInvalidations>();
+        let changed = !gate.initialized
+            || !pending.panels.is_empty()
+            || pending.topology_changed
+            || ui_components_changed_since(world, &[component], gate.last)
+            || world
+                .get_resource_change_ticks::<Theme>()
+                .is_some_and(|ticks| ticks.is_changed(gate.last, now));
+        gate.initialized = true;
+        gate.last = now;
+        changed
+    });
+    if !needs_sync {
+        world.increment_change_tick();
+        return;
+    }
     let theme_changed = world
         .get_resource_change_ticks::<Theme>()
         .map(|ticks| ticks.changed.get());
@@ -551,6 +681,9 @@ pub fn sync_panel_children(world: &mut World) {
         }
     }
     world.insert_resource(cache);
+    let now = world.read_change_tick();
+    world.resource_mut::<WidgetPanelSyncGate>().last = now;
+    world.increment_change_tick();
 }
 
 pub(super) fn panel_sync_stamp(
@@ -579,11 +712,39 @@ pub(super) fn widget_hierarchy_depth(world: &World, mut entity: Entity) -> usize
     depth
 }
 
+pub(super) fn collect_panel_descendant_invalidations(world: &mut World) {
+    world.init_resource::<WidgetPanelInvalidationGate>();
+    let changed = world.resource_scope(|world, mut gate: Mut<WidgetPanelInvalidationGate>| {
+        if !gate.initialized {
+            gate.components = vec![
+                world.register_component::<UiLayoutResult>(),
+                world.register_component::<UiHitBox>(),
+                world.register_component::<UiChildren>(),
+                world.register_component::<UiParent>(),
+            ];
+            gate.initialized = true;
+        }
+        let changed = ui_components_changed_since(world, &gate.components, gate.last);
+        gate.last = world.read_change_tick();
+        changed
+    });
+    if changed
+        && world
+            .run_system_cached(collect_panel_descendant_invalidations_query)
+            .is_err()
+    {
+        world
+            .resource_mut::<WidgetPanelSyncInvalidations>()
+            .topology_changed = true;
+    }
+    world.increment_change_tick();
+}
+
 #[expect(
     clippy::type_complexity,
     reason = "Panel clip invalidations track the layout, hitbox, and hierarchy inputs that can change a descendant reveal"
 )]
-pub(super) fn collect_panel_descendant_invalidations(
+pub(super) fn collect_panel_descendant_invalidations_query(
     changed: Query<
         Entity,
         Or<(

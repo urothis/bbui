@@ -21,6 +21,7 @@ impl CurvePoint {
 }
 
 #[derive(Component, Debug, Clone, PartialEq)]
+#[component(summary_tick)]
 pub struct CurveEditor {
     pub points: Vec<CurvePoint>,
     pub interpolation: Interpolation,

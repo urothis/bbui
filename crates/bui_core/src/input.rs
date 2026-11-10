@@ -3,6 +3,7 @@
 use std::collections::{HashMap, VecDeque};
 
 use bevy_ecs::prelude::*;
+use bevy_ecs::{change_detection::Tick, component::ComponentId};
 
 type HitTestStructuralChanged<'w, 's> = Query<
     'w,
@@ -20,7 +21,7 @@ type HitTestStructuralChanged<'w, 's> = Query<
 use crate::{
     UiChildren, UiClickRecord, UiDirty, UiDirtyDomain, UiEnabled, UiFocus, UiFocusable, UiHitBox,
     UiLifecycleEvents, UiNode, UiParent, UiRect, UiTabIndex, UiVisible, has_window_assignment,
-    is_interactable_in_window,
+    is_interactable_in_window, ui_components_changed_since,
 };
 
 const DOUBLE_CLICK_SECONDS: f64 = 0.35;
@@ -34,7 +35,47 @@ pub(crate) struct UiHoverValidation {
     hit_tests: u64,
 }
 
-pub(crate) fn collect_hit_test_changes(
+#[derive(Resource, Default)]
+struct UiHitTestSummaryGate {
+    components: Vec<ComponentId>,
+    last: Tick,
+    initialized: bool,
+}
+
+pub(crate) fn collect_hit_test_changes(world: &mut World) {
+    world.init_resource::<UiHitTestSummaryGate>();
+    world.init_resource::<UiHoverValidation>();
+    world.init_resource::<UiDirty>();
+    let changed = world.resource_scope(|world, mut gate: Mut<UiHitTestSummaryGate>| {
+        if !gate.initialized {
+            gate.components = vec![
+                world.register_component::<UiNode>(),
+                world.register_component::<UiEnabled>(),
+                world.register_component::<UiVisible>(),
+                world.register_component::<UiParent>(),
+                world.register_component::<UiChildren>(),
+                world.register_component::<UiHitBox>(),
+            ];
+            gate.initialized = true;
+        }
+        let changed = ui_components_changed_since(world, &gate.components, gate.last);
+        gate.last = world.read_change_tick();
+        changed
+    });
+    if changed
+        && world
+            .run_system_cached(collect_hit_test_changes_query)
+            .is_err()
+    {
+        world
+            .resource_mut::<UiDirty>()
+            .mark_all(UiDirtyDomain::HitTest);
+    }
+    world.resource_mut::<UiHoverValidation>().prepared = true;
+    world.increment_change_tick();
+}
+
+pub(crate) fn collect_hit_test_changes_query(
     changed: HitTestStructuralChanged,
     changed_hitboxes: Query<Entity, Changed<UiHitBox>>,
     children: Query<&UiChildren>,

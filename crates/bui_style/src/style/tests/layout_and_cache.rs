@@ -379,8 +379,8 @@ pub(super) fn style_cache_tracks_focus_changes_and_active_transition_ticks_same_
         app.world()
             .resource::<UiStyleResolutionCache>()
             .resolved_passes,
-        initial_passes + 2,
-        "the advanced transition tick invalidates the next style phase"
+        initial_passes + 1,
+        "paint-only animation advances without rerunning the cascade"
     );
 
     advance(&mut app, 50);

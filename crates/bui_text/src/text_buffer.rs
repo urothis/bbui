@@ -77,6 +77,7 @@ struct EditRecord {
 /// Editable text state. Caret and selection positions are UTF-8 byte offsets
 /// snapped to extended grapheme cluster boundaries.
 #[derive(Component, Debug, Clone, Default, PartialEq, Eq)]
+#[component(summary_tick)]
 pub struct TextBuffer {
     text: String,
     anchor: usize,
@@ -562,6 +563,7 @@ pub struct UiTextBuffer(pub TextBuffer);
 pub struct UiMultiline;
 
 #[derive(Component, Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[component(summary_tick)]
 pub struct UiReadOnly;
 
 /// Hand clipboard shortcuts to a widget/platform bridge instead of the local

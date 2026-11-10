@@ -36,9 +36,6 @@ pub(super) use order::*;
 mod full;
 pub(super) use full::*;
 
-mod stamps;
-pub(super) use stamps::*;
-
 mod overlays;
 pub(super) use overlays::*;
 

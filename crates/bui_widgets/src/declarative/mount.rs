@@ -159,6 +159,15 @@ pub(super) fn spawn_node(
     if let Some(key) = &node.key {
         entity.insert(UiKey(key.clone()));
     }
+    if let Some(name) = &node.accessible_name {
+        entity.insert(UiAccessibleName(name.clone()));
+    }
+    if let Some(selected) = node.tab_selected {
+        entity.insert(UiTab { selected });
+    }
+    if node.tab_list {
+        entity.insert(UiTabList);
+    }
     if matches!(
         &node.spec,
         WidgetSpec::Container {

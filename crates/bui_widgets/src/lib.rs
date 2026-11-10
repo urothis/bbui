@@ -11,6 +11,7 @@ pub mod canvas;
 pub mod collections;
 pub mod controls;
 pub mod declarative;
+pub mod editor_chrome;
 pub mod editors;
 pub mod file_browser;
 pub mod file_previews;
@@ -44,6 +45,7 @@ pub use declarative::{
     NodeGraphSocketControl, RadioOptionControl, WidgetContainer, WidgetElement, WidgetNode,
     WidgetSpec, WidgetTree, WidgetTreeError,
 };
+pub use editor_chrome::EditorChrome;
 pub use editors::{
     ColorChannel, ColorRamp, ColorStop, CurveEditor, CurvePoint, HsvColorEditor,
     HsvColorEditorState, HsvColorField, Interpolation, LinkEndpoint, NodeCategory, NodeGraph,

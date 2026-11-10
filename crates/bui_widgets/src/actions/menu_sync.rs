@@ -3,6 +3,31 @@ use super::*;
 /// Recompute popup item visibility, geometry, and hitboxes after widget state changes.
 pub fn sync_menu_popups(world: &mut World) {
     world.init_resource::<WidgetMenuPopupStamps>();
+    world.init_resource::<WidgetMenuPopupGate>();
+    let changed = world.resource_scope(|world, mut gate: Mut<WidgetMenuPopupGate>| {
+        if !gate.initialized {
+            gate.components = vec![
+                world.register_component::<UiLayoutRoot>(),
+                world.register_component::<MenuControl>(),
+                world.register_component::<UiLayoutResult>(),
+                world.register_component::<MenuItemControl>(),
+                world.register_component::<UiVisible>(),
+                world.register_component::<UiEnabled>(),
+            ];
+            gate.initialized = true;
+        }
+        let now = world.read_change_tick();
+        let changed = ui_components_changed_since(world, &gate.components, gate.last)
+            || world
+                .get_resource_change_ticks::<Theme>()
+                .is_some_and(|ticks| ticks.is_changed(gate.last, now));
+        gate.last = now;
+        changed
+    });
+    if !changed {
+        world.increment_change_tick();
+        return;
+    }
     let theme_changed = world
         .get_resource_change_ticks::<Theme>()
         .map(|ticks| ticks.changed.get());
@@ -406,4 +431,7 @@ pub fn sync_menu_popups(world: &mut World) {
         }
     }
     world.insert_resource(stamps);
+    let now = world.read_change_tick();
+    world.resource_mut::<WidgetMenuPopupGate>().last = now;
+    world.increment_change_tick();
 }

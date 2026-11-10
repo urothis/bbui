@@ -158,6 +158,9 @@ pub struct WidgetNode {
     pub role: Option<String>,
     pub scrollable: bool,
     pub style: Option<UiInlineStyle>,
+    pub accessible_name: Option<String>,
+    pub tab_selected: Option<bool>,
+    pub tab_list: bool,
 }
 
 impl WidgetNode {
@@ -170,6 +173,9 @@ impl WidgetNode {
             role: None,
             scrollable: false,
             style: None,
+            accessible_name: None,
+            tab_selected: None,
+            tab_list: false,
         }
     }
     pub fn column(children: impl IntoIterator<Item = Self>) -> Self {
@@ -216,11 +222,14 @@ impl WidgetNode {
             .with_width(UiLength::Fill(1.0))
     }
     pub fn property_row(label: impl Into<String>, control: Self) -> Self {
+        let label = label.into();
         Self::container(
             WidgetContainer::PropertyRow,
             [
-                Self::label(label).with_role("property-label"),
-                control.with_width(UiLength::Fill(1.0)),
+                Self::label(label.clone()).with_role("property-label"),
+                control
+                    .with_property_accessible_name(&label, false)
+                    .with_width(UiLength::Fill(1.0)),
             ],
         )
         .with_role("property-row")
@@ -228,12 +237,16 @@ impl WidgetNode {
     }
     /// Blender-style property split with a trailing keyframe decorator toggle.
     pub fn property_row_with_decorator(label: impl Into<String>, control: Self) -> Self {
+        let label = label.into();
         Self::container(
             WidgetContainer::PropertyRow,
             [
-                Self::label(label).with_role("property-label"),
-                control.with_width(UiLength::Fill(1.0)),
+                Self::label(label.clone()).with_role("property-label"),
+                control
+                    .with_property_accessible_name(&label, false)
+                    .with_width(UiLength::Fill(1.0)),
                 Self::checkbox("", false)
+                    .with_accessible_name(format!("{label} keyframe"))
                     .with_role("property-decorator")
                     .with_width(UiLength::Px(16.0))
                     .with_height(UiLength::Px(20.0)),
@@ -241,6 +254,41 @@ impl WidgetNode {
         )
         .with_role("property-row")
         .with_width(UiLength::Fill(1.0))
+    }
+    fn with_property_accessible_name(mut self, label: &str, compound: bool) -> Self {
+        if matches!(self.spec, WidgetSpec::Container { .. }) {
+            for child in &mut self.children {
+                let original = std::mem::replace(child, Self::label(""));
+                *child = original.with_property_accessible_name(label, true);
+            }
+        } else if !matches!(self.spec, WidgetSpec::Label { .. }) && self.accessible_name.is_none() {
+            let intrinsic = match &self.spec {
+                WidgetSpec::Button { label, .. }
+                | WidgetSpec::Checkbox { label, .. }
+                | WidgetSpec::RadioGroup { label, .. }
+                | WidgetSpec::Number { label, .. }
+                | WidgetSpec::Slider { label, .. }
+                | WidgetSpec::SliderRange { label, .. }
+                | WidgetSpec::TextField { label, .. }
+                | WidgetSpec::TextArea { label, .. }
+                | WidgetSpec::Dropdown { label, .. }
+                | WidgetSpec::Menu { label, .. } => label.as_str(),
+                WidgetSpec::IconButton {
+                    accessible_name, ..
+                }
+                | WidgetSpec::IconButtonAsset {
+                    accessible_name, ..
+                } => accessible_name.as_str(),
+                _ => "",
+            };
+            let name = if compound && !intrinsic.is_empty() && intrinsic != label {
+                format!("{label} {intrinsic}")
+            } else {
+                label.to_owned()
+            };
+            self.accessible_name = Some(name);
+        }
+        self
     }
     pub fn scroll(children: impl IntoIterator<Item = Self>) -> Self {
         Self::container(WidgetContainer::Scroll, children)
@@ -257,6 +305,9 @@ impl WidgetNode {
             role: None,
             scrollable: false,
             style: None,
+            accessible_name: None,
+            tab_selected: None,
+            tab_list: false,
         }
     }
     pub fn container(kind: WidgetContainer, children: impl IntoIterator<Item = Self>) -> Self {
@@ -282,6 +333,9 @@ impl WidgetNode {
             role: role.map(str::to_owned),
             scrollable: false,
             style: None,
+            accessible_name: None,
+            tab_selected: None,
+            tab_list: false,
         }
     }
     pub fn label(text: impl Into<String>) -> Self {
@@ -396,6 +450,9 @@ impl WidgetNode {
             role: None,
             scrollable: false,
             style: None,
+            accessible_name: None,
+            tab_selected: None,
+            tab_list: false,
         }
     }
     pub fn text_field(label: impl Into<String>, value: impl Into<String>) -> Self {
@@ -601,6 +658,21 @@ impl WidgetNode {
     }
     pub fn with_role(mut self, role: impl Into<String>) -> Self {
         self.role = Some(role.into());
+        self
+    }
+    /// Set the name announced by assistive technology without changing the painted text.
+    pub fn with_accessible_name(mut self, name: impl Into<String>) -> Self {
+        self.accessible_name = Some(name.into());
+        self
+    }
+    /// Mark this control as a selectable tab.
+    pub fn with_tab_selected(mut self, selected: bool) -> Self {
+        self.tab_selected = Some(selected);
+        self
+    }
+    /// Mark a container as a tab list.
+    pub fn with_tab_list(mut self) -> Self {
+        self.tab_list = true;
         self
     }
     pub fn with_scroll(mut self) -> Self {

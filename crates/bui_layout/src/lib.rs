@@ -3,10 +3,11 @@
 use bevy_app::{App, Plugin, Update};
 use bevy_ecs::lifecycle::RemovedComponentReader;
 use bevy_ecs::prelude::*;
+use bevy_ecs::{change_detection::Tick, component::ComponentId};
 
 use bui_core::{
     UiChildren, UiDirty, UiDirtyDomain, UiHitBox, UiKeyCode, UiNode, UiParent, UiRoutedEvent,
-    UiRoutedEvents, UiSystems, UiVisible, UiWheelUnit, UiZIndex,
+    UiRoutedEvents, UiSystems, UiVisible, UiWheelUnit, UiZIndex, ui_components_changed_since,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -125,6 +126,7 @@ pub enum UiJustify {
 /// Layout rules for one node. `Auto` sizes from its intrinsic size or children;
 /// row/column containers distribute `Fill` lengths after fixed sizes and gaps.
 #[derive(Component, Debug, Clone, Copy, PartialEq)]
+#[component(summary_tick)]
 pub struct UiLayoutNode {
     pub mode: UiLayoutMode,
     pub size: UiSize,
@@ -206,6 +208,7 @@ impl UiLayoutNode {
 /// positive `grow` and `shrink` weights distribute free and overflowing space.
 /// The parent must use `UiLayoutMode::Flex` for these values to apply.
 #[derive(Component, Debug, Clone, Copy, PartialEq)]
+#[component(summary_tick)]
 pub struct UiFlexItem {
     pub basis: Option<UiLength>,
     pub grow: f32,
@@ -226,6 +229,7 @@ impl Default for UiFlexItem {
 
 /// Content-provided natural size, for example measured text or an image.
 #[derive(Component, Debug, Clone, Copy, Default, PartialEq)]
+#[component(summary_tick)]
 pub struct UiIntrinsicSize(pub [f32; 2]);
 
 /// Logical-pixel scroll position for a clipped layout container.
@@ -235,6 +239,7 @@ pub struct UiIntrinsicSize(pub [f32; 2]);
 /// as their inherited clip. The same resulting rect and clip are written to
 /// `UiHitBox`, so hit testing follows the scrolled content.
 #[derive(Component, Debug, Clone, Copy, Default, PartialEq)]
+#[component(summary_tick)]
 pub struct UiScroll {
     pub offset: [f32; 2],
 }
@@ -284,6 +289,7 @@ impl UiScroll {
 /// A layout root provides logical viewport bounds and the current DPI scale.
 /// Resize and DPI changes are picked up on the next `Layout` phase.
 #[derive(Component, Debug, Clone, Copy, PartialEq)]
+#[component(summary_tick)]
 pub struct UiLayoutRoot {
     pub window: Entity,
     pub viewport: Rect,
@@ -302,6 +308,7 @@ impl UiLayoutRoot {
 
 /// Shared result consumed by hit testing and the renderer.
 #[derive(Component, Debug, Clone, Copy, PartialEq)]
+#[component(summary_tick)]
 pub struct UiLayoutResult {
     /// Window or camera surface used as the hit-test coordinate space.
     pub window: Entity,
@@ -373,6 +380,13 @@ struct UiLayoutCache {
     removed_flex_items: RemovedComponentReader<UiFlexItem>,
     removed_visibles: RemovedComponentReader<UiVisible>,
     removed_roots: RemovedComponentReader<UiLayoutRoot>,
+}
+
+#[derive(Resource, Default)]
+struct UiLayoutCollectorGate {
+    components: Vec<ComponentId>,
+    last: Tick,
+    initialized: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]

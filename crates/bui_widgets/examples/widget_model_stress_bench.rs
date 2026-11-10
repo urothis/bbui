@@ -22,6 +22,7 @@ use bui_text::TextPlugin;
 use bui_widgets::{
     Checkbox, DataTable, ListItem, ListModel, NodeGraph, NodeSocket, SocketType, TableColumn,
     TableRow, WidgetPlugin,
+    actions::{pan_node_graph, set_data_table_viewport},
     declarative::{CollectionItemControl, DataTableCellControl, NodeGraphNodeControl},
 };
 
@@ -336,13 +337,26 @@ fn step_workload(scene: &mut Scene, frame: usize) {
             }
         }
         Workload::Table { rows, .. } => {
-            if let Some(mut model) = scene.app.world_mut().get_mut::<DataTable>(scene.owner) {
-                model.scroll_rows = (frame * 2) % rows.saturating_sub(32).max(1);
-            }
+            let scroll_x = scene
+                .app
+                .world()
+                .get::<DataTable>(scene.owner)
+                .map_or(0.0, |model| model.scroll_x);
+            set_data_table_viewport(
+                scene.app.world_mut(),
+                scene.owner,
+                (frame * 2) % rows.saturating_sub(32).max(1),
+                scroll_x,
+            );
         }
         Workload::Graph { .. } => {
-            if let Some(mut graph) = scene.app.world_mut().get_mut::<NodeGraph>(scene.owner) {
-                graph.pan_by([0.25, -0.15]);
+            let pan = scene
+                .app
+                .world()
+                .get::<NodeGraph>(scene.owner)
+                .map(|graph| [graph.pan[0] + 0.25, graph.pan[1] - 0.15]);
+            if let Some(pan) = pan {
+                pan_node_graph(scene.app.world_mut(), scene.owner, pan);
             }
         }
         Workload::Animation { .. } => {

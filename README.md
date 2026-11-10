@@ -94,7 +94,7 @@ scripts/build_properties_editor_web.sh
 python3 -m http.server 8000 --directory target/web
 ```
 
-Open `http://localhost:8000/properties_editor/` in a WebGL2-capable browser. The page resizes the Bevy canvas to the browser viewport and scrolls when the viewport is smaller than the editor's 520×690 baseline. The object, material, outliner, preferences, and graph tabs share the desktop example's controls. Serve the files over HTTP so the browser can load the generated JavaScript and WASM bundle. See the [browser screenshot](docs/visuals/examples/properties_editor_web.png) and [geometry nodes screenshot](docs/visuals/examples/properties_editor_web_nodes.png).
+Open `http://localhost:8000/properties_editor/` in a WebGPU-capable browser. The browser build uses the same storage-buffer Bézier batching as the native renderer. The page resizes the Bevy canvas to the browser viewport and scrolls when the viewport is smaller than the editor's 520×690 baseline. The object, material, outliner, preferences, and graph tabs share the desktop example's controls. Serve the files over HTTP so the browser can load the generated JavaScript and WASM bundle. See the [browser screenshot](docs/visuals/examples/properties_editor_web.png) and [geometry nodes screenshot](docs/visuals/examples/properties_editor_web_nodes.png).
 
 ## Text editing
 

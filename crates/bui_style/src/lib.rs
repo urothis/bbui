@@ -1,19 +1,21 @@
 //! Typed theme tokens and a deterministic state-aware style cascade.
 
 use std::collections::{BTreeMap, HashMap};
-use std::hash::{DefaultHasher, Hash, Hasher};
 use std::time::Duration;
 
 use bevy_app::{App, Plugin, Update};
 use bevy_color::Color;
 use bevy_ecs::prelude::*;
 use bevy_ecs::schedule::IntoScheduleConfigs;
-use bevy_ecs::{change_detection::Tick, lifecycle::Remove, observer::On, system::SystemChangeTick};
+use bevy_ecs::{
+    change_detection::Tick, component::ComponentId, lifecycle::Remove, observer::On,
+    system::SystemChangeTick,
+};
 use bevy_time::Time;
 use bevy_ui::{BoxShadow, Val};
 use bui_core::{
     UiChildren, UiDirty, UiDirtyBatch, UiDirtyDomain, UiEnabled, UiFocus, UiNode, UiParent,
-    UiRoutedEvent, UiRoutedEvents, UiSystems, refresh_ui_hover,
+    UiRoutedEvent, UiRoutedEvents, UiSystems, refresh_ui_hover, ui_components_changed_since,
 };
 use bui_layout::{
     UiAlign, UiEdges, UiJustify, UiLayoutMode, UiLayoutNode, UiLength, compute_layout,
@@ -21,6 +23,9 @@ use bui_layout::{
 
 mod theme;
 pub use theme::*;
+
+mod editor;
+pub use editor::EditorRole;
 
 mod cascade;
 pub use cascade::*;
@@ -37,6 +42,7 @@ struct StyleTrack {
 /// Active transitions for one entity. Tracks are kept private; consumers read
 /// the interpolated values from [`UiComputedStyle`].
 #[derive(Component, Debug, Clone, Default, PartialEq)]
+#[component(summary_tick)]
 pub struct UiStyleTransitionState {
     tracks: BTreeMap<UiStyleProperty, StyleTrack>,
 }
@@ -54,6 +60,7 @@ impl UiStyleTransitionState {
 /// Captured pre-cascade layout values. This lets state/theme changes remove a
 /// previous declaration without permanently overwriting caller components.
 #[derive(Component, Debug, Clone, Copy, PartialEq)]
+#[component(summary_tick)]
 pub struct UiBaseLayoutNode(pub UiLayoutNode);
 
 #[derive(Component, Debug, Clone, PartialEq)]
@@ -70,13 +77,14 @@ impl Plugin for StylePlugin {
             .init_resource::<UiStyleResolutionCache>()
             .init_resource::<UiStyleCollectorCursor>()
             .init_resource::<UiStyleResourceCursor>()
+            .init_resource::<UiStyleTransitionOutputs>()
             .init_resource::<UiRoutedEvents>()
             .add_systems(
                 Update,
                 (
-                    advance_ui_style_transitions,
-                    collect_style_component_changes,
+                    collect_style_component_changes_gated,
                     collect_style_resource_changes,
+                    advance_ui_style_transitions,
                     resolve_ui_styles_dirty,
                 )
                     .chain()
@@ -85,7 +93,7 @@ impl Plugin for StylePlugin {
             .add_systems(
                 Update,
                 (
-                    collect_style_component_changes,
+                    collect_style_component_changes_gated,
                     collect_style_resource_changes,
                     resolve_ui_styles_dirty,
                 )
@@ -125,7 +133,6 @@ fn mark_style_component_removed<T: Component>(on: On<Remove<T>>, mut dirty: ResM
 
 #[derive(Resource, Debug, Default)]
 struct UiStyleResolutionCache {
-    input_stamp: Option<u64>,
     focus_targets: HashMap<Entity, u8>,
     resolved_passes: u64,
     skipped_passes: u64,
@@ -136,6 +143,18 @@ struct UiStyleCollectorCursor(Tick);
 
 #[derive(Resource, Debug, Default)]
 struct UiStyleResourceCursor(Tick);
+
+/// Exact ticks written by paint-only transitions; external computed-style edits
+/// remain visible to the style collector.
+#[derive(Resource, Debug, Default)]
+struct UiStyleTransitionOutputs(HashMap<Entity, Tick>);
+
+#[derive(Resource, Default)]
+struct UiStyleSummaryGate {
+    components: Vec<ComponentId>,
+    last: Tick,
+    initialized: bool,
+}
 
 mod collect;
 use collect::*;

@@ -28,6 +28,7 @@ pub struct CanvasImageAssets {
 }
 
 #[derive(Component, Debug, Clone, PartialEq, Eq)]
+#[component(summary_tick)]
 pub struct CanvasObjectControl {
     pub owner: Entity,
     pub object_id: u64,
@@ -37,6 +38,7 @@ pub struct CanvasObjectControl {
 }
 
 #[derive(Component, Debug, Clone, PartialEq)]
+#[component(summary_tick)]
 pub(crate) struct CanvasObjectPaint(pub CanvasObject);
 
 #[derive(Resource, Debug, Default)]

@@ -20,7 +20,7 @@ pub use input::{
     UiInputEvent, UiInputQueue, UiKeyCode, UiModifiers, UiPointerButton, UiRoutedEvent,
     UiRoutedEvents, UiWheelUnit, process_ui_input, refresh_ui_hover,
 };
-pub use invalidation::{UiDirty, UiDirtyBatch, UiDirtyDomain};
+pub use invalidation::{UiDirty, UiDirtyBatch, UiDirtyDomain, ui_components_changed_since};
 
 /// Ordered phases for BUI's frame work. Plugins should put their systems in
 /// these sets to make layout, input, widget updates, and rendering agree.
@@ -45,14 +45,17 @@ pub enum UiSystems {
 
 /// Marks an entity as part of the BUI hierarchy.
 #[derive(Component, Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[component(summary_tick)]
 pub struct UiNode;
 
 /// A stable semantic identity for a control, independent of its entity ID.
 #[derive(Component, Debug, Clone, PartialEq, Eq, Hash)]
+#[component(summary_tick)]
 pub struct UiKey(pub String);
 
 /// Controls whether a widget participates in interaction and layout.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+#[component(summary_tick)]
 pub struct UiEnabled(pub bool);
 
 impl Default for UiEnabled {
@@ -63,6 +66,7 @@ impl Default for UiEnabled {
 
 /// Controls whether a node and its subtree are shown and hit-testable.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+#[component(summary_tick)]
 pub struct UiVisible(pub bool);
 
 impl Default for UiVisible {
@@ -88,9 +92,27 @@ pub enum UiLivePoliteness {
 /// whole region value when a descendant changes, rather than only the changed
 /// text.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+#[component(summary_tick)]
 pub struct UiLiveRegion {
     pub politeness: UiLivePoliteness,
     pub atomic: bool,
+}
+
+/// Accessible name for a control whose visible caption is a separate entity.
+#[derive(Component, Debug, Clone, PartialEq, Eq)]
+#[component(summary_tick)]
+pub struct UiAccessibleName(pub String);
+
+/// Marks the container that owns a set of selectable tabs.
+#[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[component(summary_tick)]
+pub struct UiTabList;
+
+/// Semantic selection state for a tab control.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+#[component(summary_tick)]
+pub struct UiTab {
+    pub selected: bool,
 }
 
 impl UiLiveRegion {
@@ -122,6 +144,7 @@ impl Default for UiLiveRegion {
 
 /// Marks an enabled, visible node as eligible for keyboard focus.
 #[derive(Component, Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[component(summary_tick)]
 pub struct UiFocusable;
 
 /// Optional keyboard traversal order. Negative indices opt out of Tab traversal.
@@ -130,18 +153,22 @@ pub struct UiTabIndex(pub i32);
 
 /// Explicit paint order for nodes that otherwise share layout depth.
 #[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
+#[component(summary_tick)]
 pub struct UiZIndex(pub i32);
 
 /// The parent link for a node in the BUI-owned logical hierarchy.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+#[component(summary_tick)]
 pub struct UiParent(pub Entity);
 
 /// Children in stable insertion order. Keep this in sync using [`set_parent`].
 #[derive(Component, Debug, Default, Clone, PartialEq, Eq)]
+#[component(summary_tick)]
 pub struct UiChildren(pub Vec<Entity>);
 
 /// Bounds used by pointer routing. Layout writes this from its shared result.
 #[derive(Component, Debug, Clone, Copy, PartialEq)]
+#[component(summary_tick)]
 pub struct UiHitBox {
     /// Bevy window or offscreen camera entity. `None` accepts events from any surface.
     pub window: Option<Entity>,

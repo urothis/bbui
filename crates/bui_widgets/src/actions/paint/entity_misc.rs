@@ -11,17 +11,11 @@ pub(super) fn paint_misc_controls(paint: &mut PaintEntityContext<'_>) -> bool {
     let base_theme = paint.base_theme;
     let camera_items = &mut *paint.output;
 
-    if world.get::<UiRole>(entity).is_some_and(|role| {
-        matches!(
-            role.0.as_str(),
-            "properties-menu-bar" | "properties-tab-rail"
-        )
-    }) {
-        let rail_color = if base_theme.kind == bui_style::ThemeKind::Light {
-            Rgba(179.0 / 255.0, 179.0 / 255.0, 179.0 / 255.0, 1.0)
-        } else {
-            base_theme.background.mix(Rgba(0.0, 0.0, 0.0, 1.0), 0.5)
-        };
+    if world
+        .get::<UiRole>(entity)
+        .is_some_and(|role| matches!(role.0.as_str(), EditorRole::MENU_BAR | EditorRole::TAB_RAIL))
+    {
+        let rail_color = base_theme.color(ThemeColorToken::EditorChromeSurface);
         camera_items.push(item(
             clip,
             z,
@@ -207,10 +201,10 @@ pub(super) fn paint_misc_controls(paint: &mut PaintEntityContext<'_>) -> bool {
             .is_some_and(|state| state.hovered == Some(entity));
         let object_panel = world
             .get::<UiRole>(entity)
-            .is_some_and(|role| role.0 == "object-panel");
+            .is_some_and(|role| role.0 == EditorRole::PRIMARY_PANEL);
         let sub_panel = world
             .get::<UiRole>(entity)
-            .is_some_and(|role| role.0 == "sub-panel");
+            .is_some_and(|role| role.0 == EditorRole::SUB_PANEL);
         let header_height = rect.height.min(theme.spacing.panel.header_height);
         let panel_rect = Rect {
             height: header_height + (rect.height - header_height).max(0.0) * panel.state.progress,
@@ -223,7 +217,7 @@ pub(super) fn paint_misc_controls(paint: &mut PaintEntityContext<'_>) -> bool {
                 rect: ClipRect::from(panel_rect),
                 radius: theme.corner_radius,
                 color: if sub_panel {
-                    base_theme.surface.mix(base_theme.background, 0.615)
+                    base_theme.color(ThemeColorToken::EditorSubpanelSurface)
                 } else {
                     if panel_hovered {
                         base_theme.surface
@@ -308,7 +302,7 @@ pub(super) fn paint_misc_controls(paint: &mut PaintEntityContext<'_>) -> bool {
                         origin: [rect.x + 20.0, rect.y + theme.spacing.panel.content_padding],
                         text: "▣".into(),
                     },
-                    Rgba(0.91, 0.52, 0.23, 1.0),
+                    base_theme.color(ThemeColorToken::EditorObjectAccent),
                     theme,
                     false,
                 ),
@@ -344,7 +338,7 @@ pub(super) fn paint_misc_controls(paint: &mut PaintEntityContext<'_>) -> bool {
     if let Some(progress) = world.get::<Progress>(entity) {
         let properties_progress = world
             .get::<UiRole>(entity)
-            .is_some_and(|role| role.0 == "properties-progress");
+            .is_some_and(|role| role.0 == EditorRole::PROGRESS);
         camera_items.push(item(
             clip,
             z,
@@ -352,7 +346,7 @@ pub(super) fn paint_misc_controls(paint: &mut PaintEntityContext<'_>) -> bool {
                 rect: ClipRect::from(rect),
                 radius: theme.corner_radius,
                 color: if properties_progress {
-                    base_theme.background.mix(Rgba(0.0, 0.0, 0.0, 1.0), 0.4)
+                    base_theme.color(ThemeColorToken::EditorProgressTrack)
                 } else {
                     theme.surface
                 },

@@ -24,6 +24,8 @@ use crate::{
 use bevy_app::{App, Update};
 use bevy_asset::Assets;
 use bevy_ecs::change_detection::Mut;
+use bevy_ecs::change_detection::Tick;
+use bevy_ecs::component::ComponentId;
 use bevy_ecs::lifecycle::{Add, Remove};
 use bevy_ecs::observer::On;
 use bevy_ecs::prelude::*;
@@ -34,6 +36,7 @@ use bui_core::{
     UiFocusable, UiHitBox, UiKey, UiKeyCode, UiLiveRegion, UiModifiers, UiNode, UiParent,
     UiPointerButton, UiRect, UiRoutedEvent, UiRoutedEvents, UiSystems, UiVisible,
     detach_from_parent, is_interactable, is_interactable_in_window, set_parent,
+    ui_components_changed_since,
 };
 use bui_layout::{Rect, UiLayoutNode, UiLayoutResult, UiLayoutRoot, UiWheelHandled};
 use bui_render::{
@@ -41,8 +44,9 @@ use bui_render::{
     WidgetRenderFragment,
 };
 use bui_style::{
-    Rgba, Theme, ThemeColorToken, ThemeMotionToken, UiClasses, UiComputedStyle, UiInlineStyle,
-    UiRole, UiStyleProperty, UiStyleSheet, UiStyleState, UiStyleValue, set_ui_style_state,
+    EditorRole, Rgba, Theme, ThemeColorToken, ThemeMotionToken, UiClasses, UiComputedStyle,
+    UiInlineStyle, UiRole, UiStyleProperty, UiStyleSheet, UiStyleState, UiStyleValue,
+    set_ui_style_state,
 };
 use bui_text::{
     TextBuffer, TextLayout, UiReadOnly, UiTextBuffer, UiTextLayout, resolve_text_font,
@@ -751,7 +755,6 @@ impl Drop for PaintFragmentGuard<'_> {
 
 #[derive(Resource, Debug, Default)]
 struct WidgetPaintCache {
-    input_stamp: Option<u64>,
     prepared: bool,
     focus_active_window: Option<Entity>,
     focus_targets: Vec<FocusTargetSnapshot>,
@@ -772,6 +775,13 @@ struct WidgetPaintCache {
     rebuilt_frames: u64,
     repainted_entities: usize,
     published_fragments: usize,
+}
+
+#[derive(Resource, Debug, Default)]
+struct WidgetPaintSummaryGate {
+    components: Vec<ComponentId>,
+    last: Tick,
+    initialized: bool,
 }
 
 #[derive(Resource, Debug, Default)]
@@ -805,6 +815,13 @@ struct WidgetMenuPopupStamps {
     stamps: HashMap<Entity, MenuPopupSyncStamp>,
 }
 
+#[derive(Resource, Default)]
+struct WidgetMenuPopupGate {
+    components: Vec<ComponentId>,
+    last: Tick,
+    initialized: bool,
+}
+
 #[derive(Resource, Debug, Default)]
 struct WidgetPanelSyncCache {
     stamps: HashMap<Entity, PanelSyncStamp>,
@@ -815,6 +832,28 @@ struct WidgetPanelSyncCache {
 struct WidgetPanelSyncInvalidations {
     panels: HashSet<Entity>,
     topology_changed: bool,
+}
+
+#[derive(Resource, Default)]
+struct WidgetPanelSyncGate {
+    component: Option<ComponentId>,
+    last: Tick,
+    initialized: bool,
+}
+
+#[derive(Resource, Default)]
+struct WidgetPanelInvalidationGate {
+    components: Vec<ComponentId>,
+    last: Tick,
+    initialized: bool,
+}
+
+#[derive(Resource, Default)]
+struct WidgetPanelAnimationGate {
+    component: Option<ComponentId>,
+    last: Tick,
+    initialized: bool,
+    active: HashSet<Entity>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -897,6 +936,8 @@ struct PanelDescendantClip {
 struct WidgetDataTableItems {
     items: HashMap<Entity, HashMap<DataTableItemKey, Entity>>,
     stamps: HashMap<Entity, VirtualViewStamp>,
+    viewport_ticks: HashMap<Entity, u32>,
+    active_row_positions: HashMap<Entity, Option<usize>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -949,6 +990,9 @@ struct NodeGraphSignatureSnapshot {
     transform: NodeGraphTransformSignature,
 }
 
+type GraphSpatialCells = HashMap<(u8, i32, i32), Vec<NodeGraphItemKey>>;
+type GraphSpatialMembership = HashMap<NodeGraphItemKey, Vec<(u8, i32, i32)>>;
+
 #[derive(Resource, Debug, Default)]
 struct WidgetNodeGraphItems {
     items: HashMap<Entity, HashMap<NodeGraphItemKey, Entity>>,
@@ -962,18 +1006,25 @@ struct WidgetNodeGraphItems {
     link_order: HashMap<Entity, Vec<u64>>,
     transforms: HashMap<Entity, NodeGraphTransformSignature>,
     journaled_ticks: HashMap<Entity, u32>,
+    viewport_ticks: HashMap<Entity, u32>,
+    spatial_cells: HashMap<Entity, GraphSpatialCells>,
+    spatial_overflow: HashMap<Entity, Vec<NodeGraphItemKey>>,
+    spatial_membership: HashMap<Entity, GraphSpatialMembership>,
+    spatial_levels: HashMap<Entity, HashSet<u8>>,
 }
 
 #[derive(Resource, Debug, Default)]
 struct WidgetNodeGraphDeltas(HashMap<Entity, HashSet<NodeId>>, HashSet<Entity>);
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+#[component(summary_tick)]
 struct NodeGraphLinkPaintGeometry {
     points: [[u32; 2]; 4],
     source_socket_type: Option<SocketType>,
 }
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+#[component(summary_tick)]
 struct NodeGraphNodePaintState {
     signature: u64,
 }
@@ -999,6 +1050,14 @@ struct MenuAnimationState {
 
 #[derive(Resource, Debug, Default, Clone, PartialEq)]
 struct WidgetMenuAnimations(HashMap<Entity, MenuAnimationState>);
+
+#[derive(Resource, Default)]
+struct WidgetMenuAnimationGate {
+    components: Vec<ComponentId>,
+    last: Tick,
+    initialized: bool,
+    active: HashSet<Entity>,
+}
 
 struct NodeGraphViewItem {
     key: NodeGraphItemKey,
@@ -1058,6 +1117,7 @@ mod curve_editor;
 use curve_editor::*;
 
 mod data_table;
+pub use data_table::set_data_table_viewport;
 use data_table::*;
 
 mod collections;
@@ -1094,8 +1154,8 @@ mod graph_math;
 use graph_math::*;
 
 mod node_graph;
-pub use node_graph::move_node_graph_node;
 use node_graph::*;
+pub use node_graph::{move_node_graph_node, pan_node_graph};
 
 mod panels;
 use panels::*;

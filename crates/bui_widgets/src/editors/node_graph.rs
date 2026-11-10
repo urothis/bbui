@@ -136,6 +136,7 @@ pub enum NodeGraphError {
 }
 
 #[derive(Component, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[component(summary_tick)]
 #[serde(default)]
 pub struct NodeGraph {
     pub nodes: Vec<NodeModel>,

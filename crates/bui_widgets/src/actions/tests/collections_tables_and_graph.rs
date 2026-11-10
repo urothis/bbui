@@ -1138,3 +1138,79 @@ pub(super) fn graph_transform_node_move_and_resize_refresh_nodes_and_links() {
     let expected_points = node_graph_link_points(graph, resized, graph.links[0], spacing);
     assert_eq!(actual_points, expected_points);
 }
+
+#[test]
+pub(super) fn tracked_graph_pan_culls_and_enters_nodes_and_raw_edits_reconcile() {
+    let mut app = App::new();
+    app.add_plugins(WidgetPlugin);
+    let window = app.world_mut().spawn_empty().id();
+    let mut graph = NodeGraph::default();
+    let first = graph.add_node("First", [30.0, 30.0], vec![]);
+    let second = graph.add_node("Second", [580.0, 30.0], vec![]);
+    let owner = WidgetTree::new(WidgetNode::node_graph("Graph", graph))
+        .spawn(app.world_mut(), None)
+        .unwrap();
+    let rect = UiRect::new(0.0, 0.0, 320.0, 240.0);
+    app.world_mut().entity_mut(owner).insert(UiLayoutResult {
+        window,
+        rect,
+        clip: Some(rect),
+        z: 3,
+        content_size: [rect.width, rect.height],
+        dpi_scale: 1.0,
+    });
+    sync_node_graph_views(app.world_mut());
+    assert!(
+        app.world().resource::<WidgetNodeGraphItems>().items[&owner]
+            .contains_key(&NodeGraphItemKey::Node(first))
+    );
+    assert!(
+        !app.world().resource::<WidgetNodeGraphItems>().items[&owner]
+            .contains_key(&NodeGraphItemKey::Node(second))
+    );
+
+    assert!(pan_node_graph(app.world_mut(), owner, [-450.0, 0.0]));
+    sync_node_graph_views(app.world_mut());
+    assert!(
+        !app.world().resource::<WidgetNodeGraphItems>().items[&owner]
+            .contains_key(&NodeGraphItemKey::Node(first))
+    );
+    assert!(
+        app.world().resource::<WidgetNodeGraphItems>().items[&owner]
+            .contains_key(&NodeGraphItemKey::Node(second))
+    );
+
+    app.world_mut()
+        .get_mut::<NodeGraph>(owner)
+        .unwrap()
+        .nodes
+        .iter_mut()
+        .find(|node| node.id == second)
+        .unwrap()
+        .title = "Edited".into();
+    assert!(pan_node_graph(app.world_mut(), owner, [-440.0, 0.0]));
+    sync_node_graph_views(app.world_mut());
+    let entity = app.world().resource::<WidgetNodeGraphItems>().items[&owner]
+        [&NodeGraphItemKey::Node(second)];
+    assert_eq!(
+        app.world()
+            .get::<NodeGraphNodeControl>(entity)
+            .unwrap()
+            .label,
+        "Edited"
+    );
+
+    assert!(move_node_graph_node(
+        app.world_mut(),
+        owner,
+        first,
+        [540.0, 30.0]
+    ));
+    sync_node_graph_views(app.world_mut());
+    assert!(pan_node_graph(app.world_mut(), owner, [-430.0, 0.0]));
+    sync_node_graph_views(app.world_mut());
+    assert!(
+        app.world().resource::<WidgetNodeGraphItems>().items[&owner]
+            .contains_key(&NodeGraphItemKey::Node(first))
+    );
+}

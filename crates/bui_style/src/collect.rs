@@ -1,5 +1,42 @@
 use super::*;
 
+pub(super) fn collect_style_component_changes_gated(world: &mut World) {
+    world.init_resource::<UiStyleSummaryGate>();
+    world.init_resource::<UiStyleTransitionOutputs>();
+    let changed = world.resource_scope(|world, mut gate: Mut<UiStyleSummaryGate>| {
+        if !gate.initialized {
+            gate.components = vec![
+                world.register_component::<UiNode>(),
+                world.register_component::<UiParent>(),
+                world.register_component::<UiRole>(),
+                world.register_component::<UiClasses>(),
+                world.register_component::<UiStyleState>(),
+                world.register_component::<UiEnabled>(),
+                world.register_component::<UiInlineStyle>(),
+                world.register_component::<UiTransitions>(),
+                world.register_component::<UiBaseLayoutNode>(),
+                world.register_component::<UiLayoutNode>(),
+                world.register_component::<UiComputedStyle>(),
+            ];
+            gate.initialized = true;
+        }
+        let changed = ui_components_changed_since(world, &gate.components, gate.last);
+        gate.last = world.read_change_tick();
+        changed
+    });
+    if changed
+        && world
+            .run_system_cached(collect_style_component_changes)
+            .is_err()
+    {
+        world
+            .resource_mut::<UiDirty>()
+            .mark_all(UiDirtyDomain::Style);
+    }
+    // Keep a direct edit after collection newer than this gate's last tick.
+    world.increment_change_tick();
+}
+
 #[expect(
     clippy::type_complexity,
     reason = "Bevy change query covers the style inputs"
@@ -35,11 +72,13 @@ pub(super) fn collect_style_component_changes(
         )>,
     >,
     mut cursor: ResMut<UiStyleCollectorCursor>,
+    mut transition_outputs: ResMut<UiStyleTransitionOutputs>,
     tick: SystemChangeTick,
     mut dirty: ResMut<UiDirty>,
 ) {
     let last = cursor.0;
     let now = tick.this_run();
+    let internal_outputs = std::mem::take(&mut transition_outputs.0);
     for (
         entity,
         node,
@@ -55,7 +94,7 @@ pub(super) fn collect_style_component_changes(
         computed,
     ) in &changed
     {
-        if [
+        let source_changed = [
             node.as_ref().map(DetectChanges::last_changed),
             parent.as_ref().map(DetectChanges::last_changed),
             role.as_ref().map(DetectChanges::last_changed),
@@ -66,12 +105,17 @@ pub(super) fn collect_style_component_changes(
             transitions.as_ref().map(DetectChanges::last_changed),
             base.as_ref().map(DetectChanges::last_changed),
             layout.as_ref().map(DetectChanges::last_changed),
-            computed.as_ref().map(DetectChanges::last_changed),
         ]
         .into_iter()
         .flatten()
-        .any(|changed| changed.is_newer_than(last, now))
-        {
+        .any(|changed| changed.is_newer_than(last, now));
+        let computed_changed = computed
+            .as_ref()
+            .map(DetectChanges::last_changed)
+            .is_some_and(|changed| {
+                changed.is_newer_than(last, now) && internal_outputs.get(&entity) != Some(&changed)
+            });
+        if source_changed || computed_changed {
             dirty.mark(UiDirtyDomain::Style, entity);
         }
     }

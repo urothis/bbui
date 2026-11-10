@@ -110,7 +110,7 @@ pub(in crate::actions) struct WidgetPaintInvalidations<'w, 's> {
     clippy::too_many_arguments,
     reason = "Bevy injects the independent widget queries"
 )]
-pub(in crate::actions) fn collect_widget_paint_changes(
+pub(in crate::actions) fn collect_widget_paint_changes_query(
     invalidations: WidgetPaintInvalidations,
     base: Query<
         Entity,
@@ -210,6 +210,9 @@ pub(in crate::actions) fn collect_widget_paint_changes(
             Changed<UiLiveRegion>,
             Changed<UiReadOnly>,
             Changed<UiKey>,
+            Changed<bui_core::UiAccessibleName>,
+            Changed<bui_core::UiTab>,
+            Changed<bui_core::UiTabList>,
             Changed<crate::canvas::CanvasObjectControl>,
             Changed<crate::IconButtonAssetState>,
             Changed<crate::PanelGroup>,
@@ -305,22 +308,136 @@ pub(in crate::actions) fn collect_widget_paint_changes(
     cache.prepared = true;
 }
 
+pub(in crate::actions) fn collect_widget_paint_changes(world: &mut World) {
+    world.init_resource::<WidgetPaintCache>();
+    world.init_resource::<WidgetPaintSummaryGate>();
+    world.init_resource::<UiDirty>();
+    world.init_resource::<Theme>();
+    world.init_resource::<WidgetInteractionState>();
+    let changed = world.resource_scope(|world, mut gate: Mut<WidgetPaintSummaryGate>| {
+        if !gate.initialized {
+            macro_rules! track {
+                ($($component:ty),+ $(,)?) => {
+                    $(gate.components.push(world.register_component::<$component>());)+
+                };
+            }
+            track!(
+                UiNode,
+                UiParent,
+                UiChildren,
+                UiEnabled,
+                UiVisible,
+                UiLayoutResult,
+                UiLayoutRoot,
+                UiComputedStyle,
+                UiRole,
+                UiTextLayout,
+                TextBuffer,
+                Button,
+                Checkbox,
+                IconButton,
+                Label,
+                RadioGroup,
+                NumericField,
+                Slider,
+                TextField,
+                TextArea,
+                Dropdown,
+                Panel,
+                Progress,
+                MenuControl,
+                MenuItemControl,
+                DropdownOptionControl,
+                FileBrowser,
+                FileBrowserItem,
+                ListModel<String>,
+                TreeModel<String>,
+                PreviewGrid,
+                CollectionItemControl,
+                DataTable,
+                DataTableHeaderControl,
+                DataTableCellControl,
+                ColorRamp,
+                HsvColorEditor,
+                CurveEditor,
+                NodeGraph,
+                NodeGraphNodeControl,
+                NodeGraphNodePaintState,
+                NodeGraphSocketControl,
+                NodeGraphLinkControl,
+                NodeGraphLinkPaintGeometry,
+                crate::canvas::CanvasObjectControl,
+                crate::canvas::CanvasObjectPaint,
+                Tooltip,
+                IconButtonAsset,
+                DropdownPopupState,
+                CollectionEditorState,
+                HsvColorEditorState,
+                ColorRampEditorState,
+                NodeGraphEditorState,
+                FileBrowserViewState,
+                UiFocusable,
+                UiLiveRegion,
+                UiReadOnly,
+                UiKey,
+                bui_core::UiAccessibleName,
+                bui_core::UiTab,
+                bui_core::UiTabList,
+                crate::IconButtonAssetState,
+                crate::PanelGroup,
+                RadioOptionControl,
+            );
+            gate.initialized = true;
+            world
+                .resource_mut::<UiDirty>()
+                .mark_all(UiDirtyDomain::Paint);
+            world
+                .resource_mut::<UiDirty>()
+                .mark_all(UiDirtyDomain::Accessibility);
+        }
+        let now = world.read_change_tick();
+        let changed = ui_components_changed_since(world, &gate.components, gate.last)
+            || world
+                .get_resource_change_ticks::<Theme>()
+                .is_some_and(|ticks| ticks.is_changed(gate.last, now))
+            || world
+                .get_resource_change_ticks::<WidgetInteractionState>()
+                .is_some_and(|ticks| ticks.is_changed(gate.last, now))
+            || world
+                .get_resource_change_ticks::<UiFocus>()
+                .is_some_and(|ticks| ticks.is_changed(gate.last, now));
+        gate.last = now;
+        changed
+    });
+    if changed
+        && world
+            .run_system_cached(collect_widget_paint_changes_query)
+            .is_err()
+    {
+        world
+            .resource_mut::<UiDirty>()
+            .mark_all(UiDirtyDomain::Paint);
+        world
+            .resource_mut::<UiDirty>()
+            .mark_all(UiDirtyDomain::Accessibility);
+    }
+    world.resource_mut::<WidgetPaintCache>().prepared = true;
+    // Direct callers can edit the world immediately after collection.
+    // Assign those edits a later tick than the one this gate observed.
+    world.increment_change_tick();
+}
+
 pub fn collect_widget_paint(world: &mut World) {
     world.init_resource::<WidgetPaintCache>();
-    if std::mem::take(&mut world.resource_mut::<WidgetPaintCache>().prepared) {
-        let batch = world.resource_mut::<UiDirty>().take(UiDirtyDomain::Paint);
-        if batch.is_empty() {
-            world.resource_mut::<WidgetPaintCache>().skipped_frames += 1;
-            return;
-        }
-        collect_widget_paint_full(world, None, Some(batch));
-        return;
+    world.init_resource::<UiDirty>();
+    if !std::mem::take(&mut world.resource_mut::<WidgetPaintCache>().prepared) {
+        collect_widget_paint_changes(world);
+        world.resource_mut::<WidgetPaintCache>().prepared = false;
     }
-    let input_stamp = widget_paint_input_stamp(world);
-    if world.resource::<WidgetPaintCache>().input_stamp == Some(input_stamp) {
+    let batch = world.resource_mut::<UiDirty>().take(UiDirtyDomain::Paint);
+    if batch.is_empty() {
         world.resource_mut::<WidgetPaintCache>().skipped_frames += 1;
         return;
     }
-
-    collect_widget_paint_full(world, Some(input_stamp), None);
+    collect_widget_paint_full(world, Some(batch));
 }

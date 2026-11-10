@@ -17,10 +17,15 @@ pub fn install_widget_systems(app: &mut App) {
         .init_resource::<WidgetNodeGraphItems>()
         .init_resource::<WidgetNodeGraphDeltas>()
         .init_resource::<WidgetMenuPopupStamps>()
+        .init_resource::<WidgetMenuPopupGate>()
         .init_resource::<WidgetPanelSyncCache>()
         .init_resource::<WidgetPanelSyncInvalidations>()
+        .init_resource::<WidgetPanelSyncGate>()
+        .init_resource::<WidgetPanelInvalidationGate>()
+        .init_resource::<WidgetPanelAnimationGate>()
         .init_resource::<WidgetTooltips>()
         .init_resource::<WidgetMenuAnimations>()
+        .init_resource::<WidgetMenuAnimationGate>()
         .init_resource::<UiRoutedEvents>()
         .init_resource::<DisplayList>()
         .init_resource::<Theme>()
@@ -127,6 +132,41 @@ pub fn install_widget_systems(app: &mut App) {
     app.add_observer(mark_inherited_paint_component_removed::<UiVisible>);
     app.add_observer(mark_widget_paint_camera_added);
     app.add_observer(mark_widget_paint_camera_removed);
+    app.add_observer(mark_panel_topology_removed::<Panel>);
+    app.add_observer(mark_panel_topology_removed::<UiParent>);
+    app.add_observer(mark_panel_topology_removed::<UiChildren>);
+    app.add_observer(mark_menu_animation_removed);
+    app.add_observer(mark_menu_popup_input_removed::<UiLayoutRoot>);
+    app.add_observer(mark_menu_popup_input_removed::<MenuControl>);
+    app.add_observer(mark_menu_popup_input_removed::<UiLayoutResult>);
+    app.add_observer(mark_menu_popup_input_removed::<MenuItemControl>);
+    app.add_observer(mark_menu_popup_input_removed::<UiVisible>);
+    app.add_observer(mark_menu_popup_input_removed::<UiEnabled>);
+}
+
+pub(super) fn mark_menu_popup_input_removed<T: Component>(
+    _on: On<Remove<T>>,
+    mut gate: ResMut<WidgetMenuPopupGate>,
+) {
+    gate.initialized = false;
+}
+
+pub(super) fn mark_panel_topology_removed<T: Component>(
+    on: On<Remove<T>>,
+    mut invalidations: ResMut<WidgetPanelSyncInvalidations>,
+) {
+    invalidations.topology_changed = true;
+    invalidations.panels.insert(on.entity);
+}
+
+pub(super) fn mark_menu_animation_removed(
+    on: On<Remove<MenuControl>>,
+    mut animations: ResMut<WidgetMenuAnimations>,
+    mut gate: ResMut<WidgetMenuAnimationGate>,
+) {
+    animations.0.remove(&on.entity);
+    gate.active.remove(&on.entity);
+    gate.initialized = false;
 }
 
 pub(super) fn mark_paint_component_removed<T: Component>(

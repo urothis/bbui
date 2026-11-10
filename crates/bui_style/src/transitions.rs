@@ -10,27 +10,117 @@ pub fn advance_ui_style_transitions(world: &mut World) {
     if delta.is_zero() {
         return;
     }
-    let mut query = world.query_filtered::<Entity, With<UiStyleTransitionState>>();
-    let entities: Vec<_> = query.iter(world).collect();
+    world.init_resource::<UiStyleTransitionOutputs>();
+    let mut entity_query = world.query_filtered::<Entity, With<UiStyleTransitionState>>();
+    let entities: Vec<_> = entity_query.iter(world).collect();
+    let mut query = world.query::<(&mut UiStyleTransitionState, Option<&mut UiComputedStyle>)>();
+    let mut resolve_entities = Vec::new();
+    let mut painted_entities = Vec::new();
+    let mut finished_entities = Vec::new();
     for entity in entities {
-        let Some(mut state) = world.get::<UiStyleTransitionState>(entity).cloned() else {
+        let input_changed = world
+            .resource::<UiDirty>()
+            .is_marked(UiDirtyDomain::Style, entity);
+        let Ok((mut state, computed)) = query.get_mut(world, entity) else {
             continue;
         };
-        let mut changed = false;
-        for track in state.tracks.values_mut() {
-            if track.elapsed < track.duration {
-                let elapsed = track.elapsed.saturating_add(delta).min(track.duration);
-                changed |= elapsed != track.elapsed;
-                track.elapsed = elapsed;
-            }
+        if !state
+            .tracks
+            .values()
+            .any(|track| track.elapsed < track.duration)
+        {
+            continue;
         }
-        if changed {
-            world.entity_mut(entity).insert(state);
-            if let Some(mut dirty) = world.get_resource_mut::<UiDirty>() {
-                dirty.mark(UiDirtyDomain::Style, entity);
+        let paint_only = !input_changed
+            && computed.is_some()
+            && state
+                .tracks
+                .keys()
+                .all(|property| paint_only_transition(*property));
+        if paint_only {
+            let Some(mut computed) = computed else {
+                continue;
+            };
+            let mut painted = false;
+            for (&property, track) in &mut state.tracks {
+                track.elapsed = track.elapsed.saturating_add(delta).min(track.duration);
+                let progress = (track.elapsed.as_secs_f64() / track.duration.as_secs_f64()) as f32;
+                let value = if progress >= 1.0 {
+                    Some(track.to.clone())
+                } else {
+                    interpolate_style_value(
+                        track.from.clone(),
+                        track.to.clone(),
+                        track.easing.sample(progress),
+                    )
+                };
+                if let Some(value) = value
+                    && computed.properties.get(&property) != Some(&value)
+                {
+                    computed.properties.insert(property, value);
+                    painted = true;
+                }
             }
+            state
+                .tracks
+                .retain(|_, track| track.elapsed < track.duration);
+            if state.tracks.is_empty() {
+                finished_entities.push(entity);
+            }
+            if painted {
+                painted_entities.push(entity);
+            }
+        } else {
+            for track in state.tracks.values_mut() {
+                track.elapsed = track.elapsed.saturating_add(delta).min(track.duration);
+            }
+            resolve_entities.push(entity);
         }
     }
+    let output_ticks: Vec<_> = painted_entities
+        .iter()
+        .filter_map(|entity| {
+            world
+                .get_entity(*entity)
+                .ok()?
+                .get_change_ticks::<UiComputedStyle>()
+                .map(|ticks| (*entity, ticks.changed))
+        })
+        .collect();
+    world
+        .resource_mut::<UiStyleTransitionOutputs>()
+        .0
+        .extend(output_ticks);
+    for entity in finished_entities {
+        world.entity_mut(entity).remove::<UiStyleTransitionState>();
+    }
+    if let Some(mut dirty) = world.get_resource_mut::<UiDirty>() {
+        for entity in resolve_entities {
+            dirty.mark(UiDirtyDomain::Style, entity);
+        }
+        for entity in painted_entities {
+            dirty.mark(UiDirtyDomain::Paint, entity);
+        }
+    }
+}
+
+fn paint_only_transition(property: UiStyleProperty) -> bool {
+    matches!(
+        property,
+        UiStyleProperty::Background
+            | UiStyleProperty::BorderColor
+            | UiStyleProperty::AccentColor
+            | UiStyleProperty::SelectionColor
+            | UiStyleProperty::FocusColor
+            | UiStyleProperty::DisabledColor
+            | UiStyleProperty::ErrorColor
+            | UiStyleProperty::IconColor
+            | UiStyleProperty::MutedIconColor
+            | UiStyleProperty::DisabledIconColor
+            | UiStyleProperty::BorderWidth
+            | UiStyleProperty::CornerRadius
+            | UiStyleProperty::Opacity
+    )
 }
 
 pub(super) fn transition_style(

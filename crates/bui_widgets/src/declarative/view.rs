@@ -1,6 +1,7 @@
 use super::*;
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+#[component(summary_tick)]
 pub struct ColorRampEditorState {
     pub active_channel: ColorChannel,
     pub editing_color: bool,
@@ -16,6 +17,7 @@ impl Default for ColorRampEditorState {
 }
 
 #[derive(Component, Debug, Clone, Copy, PartialEq)]
+#[component(summary_tick)]
 pub struct FileBrowserViewState {
     pub scroll_rows: usize,
     pub row_height: f32,
@@ -23,6 +25,7 @@ pub struct FileBrowserViewState {
 }
 
 #[derive(Component, Debug, Clone, PartialEq, Eq)]
+#[component(summary_tick)]
 pub struct FileBrowserItem {
     pub owner: Entity,
     pub path: PathBuf,
@@ -36,6 +39,7 @@ pub struct FileBrowserItem {
 
 /// Stable virtual child for a single Dropdown option row.
 #[derive(Component, Debug, Clone, PartialEq, Eq)]
+#[component(summary_tick)]
 pub struct DropdownOptionControl {
     pub owner: Entity,
     pub index: usize,
@@ -47,6 +51,7 @@ pub struct DropdownOptionControl {
 
 /// Geometry and scroll window for a Dropdown popup, shared with accessibility adapters.
 #[derive(Component, Debug, Clone, Copy, PartialEq)]
+#[component(summary_tick)]
 pub struct DropdownPopupState {
     pub popup: PopupState,
     pub viewport: Rect,
@@ -56,6 +61,7 @@ pub struct DropdownPopupState {
 
 /// Stable virtual child for a single RadioGroup option row.
 #[derive(Component, Debug, Clone, PartialEq, Eq)]
+#[component(summary_tick)]
 pub struct RadioOptionControl {
     pub owner: Entity,
     pub index: usize,
@@ -65,6 +71,7 @@ pub struct RadioOptionControl {
 }
 
 #[derive(Component, Debug, Clone, Default, PartialEq)]
+#[component(summary_tick)]
 pub struct NodeGraphEditorState {
     pub gesture: Option<NodeGraphGesture>,
 }
@@ -108,6 +115,7 @@ pub enum NodeGraphGesture {
 }
 
 #[derive(Component, Debug, Clone, PartialEq, Eq)]
+#[component(summary_tick)]
 pub struct NodeGraphNodeControl {
     pub owner: Entity,
     pub node_id: NodeId,
@@ -117,6 +125,7 @@ pub struct NodeGraphNodeControl {
 }
 
 #[derive(Component, Debug, Clone, PartialEq, Eq)]
+#[component(summary_tick)]
 pub struct NodeGraphSocketControl {
     pub owner: Entity,
     pub node_id: NodeId,
@@ -127,6 +136,7 @@ pub struct NodeGraphSocketControl {
 }
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+#[component(summary_tick)]
 pub struct NodeGraphLinkControl {
     pub owner: Entity,
     pub link_id: u64,
@@ -155,6 +165,7 @@ pub enum CollectionItemKind {
 }
 
 #[derive(Component, Debug, Clone, PartialEq)]
+#[component(summary_tick)]
 pub struct CollectionItemControl {
     pub owner: Entity,
     pub id: u64,
@@ -173,6 +184,7 @@ pub struct CollectionItemControl {
 /// A virtualized table header. `column` is the stable column identity within
 /// the table declaration, while `owner` identifies the live model entity.
 #[derive(Component, Debug, Clone, PartialEq)]
+#[component(summary_tick)]
 pub struct DataTableHeaderControl {
     pub owner: Entity,
     pub column: usize,
@@ -186,6 +198,7 @@ pub struct DataTableHeaderControl {
 /// A virtualized table cell carrying stable row and column identity for input
 /// routing and accessibility adapters.
 #[derive(Component, Debug, Clone, PartialEq, Eq)]
+#[component(summary_tick)]
 pub struct DataTableCellControl {
     pub owner: Entity,
     pub row_id: u64,
@@ -198,6 +211,7 @@ pub struct DataTableCellControl {
 }
 
 #[derive(Component, Debug, Default, Clone, PartialEq, Eq)]
+#[component(summary_tick)]
 pub struct CollectionEditorState {
     pub rename_id: Option<u64>,
     pub rename_buffer: String,

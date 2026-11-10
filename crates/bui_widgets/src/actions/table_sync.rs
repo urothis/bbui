@@ -25,6 +25,14 @@ pub fn sync_data_table_views(world: &mut World) {
         let mut cache = world.resource_mut::<WidgetDataTableItems>();
         std::mem::take(&mut cache.stamps)
     };
+    let mut viewport_ticks = {
+        let mut cache = world.resource_mut::<WidgetDataTableItems>();
+        std::mem::take(&mut cache.viewport_ticks)
+    };
+    let mut active_row_positions = {
+        let mut cache = world.resource_mut::<WidgetDataTableItems>();
+        std::mem::take(&mut cache.active_row_positions)
+    };
     let mut views = Vec::with_capacity(owners.len());
     for (owner, layout, stamp) in owners.iter().copied() {
         if stamps.get(&owner) == Some(&stamp) && previous.contains_key(&owner) {
@@ -40,6 +48,14 @@ pub fn sync_data_table_views(world: &mut World) {
         let Some(table) = world.get::<DataTable>(owner) else {
             continue;
         };
+        let viewport_only = viewport_ticks.get(&owner) == Some(&stamp.model_changed)
+            && previous.contains_key(&owner)
+            && stamps.get(&owner).is_some_and(|old| {
+                old.layout_changed == stamp.layout_changed
+                    && old.theme_changed == stamp.theme_changed
+                    && old.style_changed == stamp.style_changed
+                    && old.key_changed == stamp.key_changed
+            });
         let rect = layout.rect;
         let clip = layout
             .clip
@@ -62,11 +78,17 @@ pub fn sync_data_table_views(world: &mut World) {
         let page_rows = (body.height / row_height).floor().max(1.0) as usize;
         let max_scroll = table.rows.len().saturating_sub(page_rows);
         let mut scroll_rows = table.scroll_rows.min(max_scroll);
-        if let Some(active_row) = table
-            .selection
-            .active
-            .and_then(|active| table.rows.iter().position(|row| row.id == active))
-        {
+        let active_row = if viewport_only {
+            active_row_positions.get(&owner).copied().flatten()
+        } else {
+            let position = table
+                .selection
+                .active
+                .and_then(|active| table.rows.iter().position(|row| row.id == active));
+            active_row_positions.insert(owner, position);
+            position
+        };
+        if let Some(active_row) = active_row {
             if active_row < scroll_rows {
                 scroll_rows = active_row;
             } else if active_row >= scroll_rows.saturating_add(page_rows) {
@@ -109,7 +131,12 @@ pub fn sync_data_table_views(world: &mut World) {
                 width: column.width,
                 height: column_header_height,
             };
-            let header = DataTableHeaderControl {
+            let retained = viewport_only
+                && previous
+                    .get(&owner)
+                    .and_then(|items| items.get(&DataTableItemKey::Header(column_index)))
+                    .is_some_and(|entity| world.get::<DataTableHeaderControl>(*entity).is_some());
+            let header = (!retained).then(|| DataTableHeaderControl {
                 owner,
                 column: column_index,
                 label: column.label.clone(),
@@ -120,10 +147,10 @@ pub fn sync_data_table_views(world: &mut World) {
                     .filter(|(sorted, _)| *sorted == column_index)
                     .map(|(_, ascending)| ascending),
                 active: table.active_column == column_index,
-            };
+            });
             items.push(DataTableViewItem {
                 key: DataTableItemKey::Header(column_index),
-                header: Some(header),
+                header,
                 cell: None,
                 rect: header_rect,
                 clip: clip.intersection(header_rect).unwrap_or_default(),
@@ -164,7 +191,16 @@ pub fn sync_data_table_views(world: &mut World) {
                     width: column.width,
                     height: row_height,
                 };
-                let cell = DataTableCellControl {
+                let key = DataTableItemKey::Cell {
+                    row_id: row.id,
+                    column: column_index,
+                };
+                let retained = viewport_only
+                    && previous
+                        .get(&owner)
+                        .and_then(|items| items.get(&key))
+                        .is_some_and(|entity| world.get::<DataTableCellControl>(*entity).is_some());
+                let cell = (!retained).then(|| DataTableCellControl {
                     owner,
                     row_id: row.id,
                     row_index,
@@ -174,14 +210,11 @@ pub fn sync_data_table_views(world: &mut World) {
                     selected: table.selection.contains(row.id),
                     active: table.selection.active == Some(row.id)
                         && table.active_column == column_index,
-                };
+                });
                 items.push(DataTableViewItem {
-                    key: DataTableItemKey::Cell {
-                        row_id: row.id,
-                        column: column_index,
-                    },
+                    key,
                     header: None,
-                    cell: Some(cell),
+                    cell,
                     rect: cell_rect,
                     clip: body_clip.intersection(cell_rect).unwrap_or_default(),
                 });
@@ -198,6 +231,7 @@ pub fn sync_data_table_views(world: &mut World) {
         views.push(DataTableView { owner, items });
     }
 
+    let did_sync = !views.is_empty();
     for view in views {
         let mut current_items = previous.remove(&view.owner).unwrap_or_default();
         let mut mounted_keys = HashSet::with_capacity(view.items.len());
@@ -295,7 +329,14 @@ pub fn sync_data_table_views(world: &mut World) {
         stamps.insert(owner, stamp);
     }
     stamps.retain(|owner, _| live_owners.contains(owner));
+    viewport_ticks.clear();
+    active_row_positions.retain(|owner, _| live_owners.contains(owner));
     let mut cache = world.resource_mut::<WidgetDataTableItems>();
     cache.items = previous;
     cache.stamps = stamps;
+    cache.viewport_ticks = viewport_ticks;
+    cache.active_row_positions = active_row_positions;
+    if did_sync {
+        world.increment_change_tick();
+    }
 }

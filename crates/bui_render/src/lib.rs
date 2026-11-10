@@ -112,11 +112,7 @@ impl Plugin for BuiRenderPlugin {
             bevy::asset::embedded_asset!(app, "bezier.wesl");
             app.add_plugins(UiMaterialPlugin::<HsvWheelMaterial>::default());
             app.add_plugins(UiMaterialPlugin::<BezierMaterial>::default());
-            // WebGL2 has no storage buffers. The renderer already falls back to
-            // per-curve uniform materials when the batch material is absent.
-            #[cfg(not(target_arch = "wasm32"))]
             bevy::asset::embedded_asset!(app, "bezier_batch.wesl");
-            #[cfg(not(target_arch = "wasm32"))]
             app.add_plugins(UiMaterialPlugin::<BezierBatchMaterial>::default());
         }
         app.init_resource::<DisplayList>()

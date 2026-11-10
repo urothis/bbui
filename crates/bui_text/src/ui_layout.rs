@@ -2,13 +2,15 @@
 
 use bevy_asset::Assets;
 use bevy_ecs::prelude::*;
-use bevy_ecs::{change_detection::Tick, system::SystemChangeTick};
+use bevy_ecs::{change_detection::Tick, component::ComponentId, system::SystemChangeTick};
 use bevy_math::Vec2;
 use bevy_text::{
     Font, FontCx, Justify, LayoutCx, LetterSpacing, LineBreak, LineHeight, RemSize, TextFont,
     TextPipeline,
 };
-use bui_core::{UiDirty, UiDirtyBatch, UiDirtyDomain, UiFocus, UiParent};
+use bui_core::{
+    UiDirty, UiDirtyBatch, UiDirtyDomain, UiFocus, UiParent, ui_components_changed_since,
+};
 use bui_layout::{
     UiIntrinsicSize, UiLayoutNode, UiLayoutResult, UiLayoutRoot, UiLength, UiViewports,
 };
@@ -29,6 +31,67 @@ pub(crate) struct TextWorkCache {
     prepared_sync: bool,
 }
 
+#[derive(Resource, Default)]
+struct TextSummaryGate {
+    components: Vec<ComponentId>,
+    last: Tick,
+    initialized: bool,
+}
+
+pub(crate) fn collect_text_changes(world: &mut World) {
+    world.init_resource::<TextSummaryGate>();
+    world.init_resource::<TextWorkCache>();
+    world.init_resource::<UiDirty>();
+    let changed = world.resource_scope(|world, mut gate: Mut<TextSummaryGate>| {
+        if !gate.initialized {
+            gate.components = vec![
+                world.register_component::<TextBuffer>(),
+                world.register_component::<UiTextLayout>(),
+                world.register_component::<UiLayoutNode>(),
+                world.register_component::<UiLayoutResult>(),
+                world.register_component::<UiComputedStyle>(),
+                world.register_component::<UiParent>(),
+            ];
+            gate.initialized = true;
+        }
+        let now = world.read_change_tick();
+        let changed = ui_components_changed_since(world, &gate.components, gate.last)
+            || world
+                .get_resource_change_ticks::<Theme>()
+                .is_some_and(|ticks| ticks.is_changed(gate.last, now))
+            || world
+                .get_resource_change_ticks::<Assets<Font>>()
+                .is_some_and(|ticks| ticks.is_changed(gate.last, now))
+            || world
+                .get_resource_change_ticks::<UiViewports>()
+                .is_some_and(|ticks| ticks.is_changed(gate.last, now))
+            || world
+                .get_resource_change_ticks::<UiFocus>()
+                .is_some_and(|ticks| ticks.is_changed(gate.last, now));
+        gate.last = now;
+        changed
+    });
+    if changed {
+        if world.run_system_cached(collect_text_changes_query).is_err() {
+            for domain in [
+                UiDirtyDomain::TextMeasure,
+                UiDirtyDomain::TextLayout,
+                UiDirtyDomain::TextSync,
+            ] {
+                world.resource_mut::<UiDirty>().mark_all(domain);
+            }
+        }
+    } else {
+        let now = world.read_change_tick();
+        let mut cache = world.resource_mut::<TextWorkCache>();
+        cache.cursor = now;
+        cache.prepared_measure = true;
+        cache.prepared_layout = true;
+        cache.prepared_sync = true;
+    }
+    world.increment_change_tick();
+}
+
 #[expect(
     clippy::type_complexity,
     reason = "Bevy change query covers the text inputs"
@@ -37,7 +100,7 @@ pub(crate) struct TextWorkCache {
     clippy::too_many_arguments,
     reason = "Bevy injects each tracked resource separately"
 )]
-pub(crate) fn collect_text_changes(
+pub(crate) fn collect_text_changes_query(
     changed: Query<
         (
             Entity,
@@ -139,6 +202,13 @@ pub fn collect_text_widget_changes(world: &mut World) {
     world.init_resource::<UiDirty>();
     world.init_resource::<TextWorkCache>();
     let last = world.resource::<TextWorkCache>().cursor;
+    let tracked = [
+        world.register_component::<TextBuffer>(),
+        world.register_component::<UiTextLayout>(),
+    ];
+    if !ui_components_changed_since(world, &tracked, last) {
+        return;
+    }
     let now = world.read_change_tick();
     let mut query = world.query_filtered::<Entity, Or<(With<TextBuffer>, With<UiTextLayout>)>>();
     let changed: Vec<_> = query
@@ -182,6 +252,7 @@ fn settle_text_cursor(world: &mut World) {
 /// that paint a label before their editable value; `placeholder` is drawn only
 /// while the buffer is empty and is excluded from caret/selection positions.
 #[derive(Component, Debug, Clone)]
+#[component(summary_tick)]
 pub struct UiTextLayout {
     /// Optional explicit Bevy font. If absent, the current theme's font size
     /// and Bevy's default font handle are used.

@@ -192,27 +192,91 @@ pub(super) fn scroll_data_table(
         bui_core::UiWheelUnit::Lines => dy.abs().ceil() as usize,
         bui_core::UiWheelUnit::Pixels => (dy.abs() / row_height).ceil().max(1.0) as usize,
     };
-    if let Some(mut table) = world.get_mut::<DataTable>(owner) {
+    let Some(table) = world.get::<DataTable>(owner) else {
+        return;
+    };
+    let mut scroll_rows = table.scroll_rows;
+    let mut scroll_x = table.scroll_x;
+    {
         if delta[1].is_finite() && delta[1] != 0.0 {
             let amount = rows(delta[1]);
-            table.scroll_rows = if delta[1] > 0.0 {
-                table.scroll_rows.saturating_sub(amount)
+            scroll_rows = if delta[1] > 0.0 {
+                scroll_rows.saturating_sub(amount)
             } else {
-                table.scroll_rows.saturating_add(amount)
+                scroll_rows.saturating_add(amount)
             };
         }
         if delta[0].is_finite() {
-            table.scroll_x = (table.scroll_x - delta[0]).max(0.0);
+            scroll_x = (scroll_x - delta[0]).max(0.0);
         }
     }
+    set_data_table_viewport(world, owner, scroll_rows, scroll_x);
 }
 
 pub(super) fn scroll_data_table_by_rows(world: &mut World, target: Entity, delta: i32) {
-    if let Some(owner) = data_table_owner(world, target)
-        && let Some(mut table) = world.get_mut::<DataTable>(owner)
-    {
-        table.scroll_rows = table.scroll_rows.saturating_add_signed(delta as isize);
+    if let Some(owner) = data_table_owner(world, target) {
+        let Some(table) = world.get::<DataTable>(owner) else {
+            return;
+        };
+        set_data_table_viewport(
+            world,
+            owner,
+            table.scroll_rows.saturating_add_signed(delta as isize),
+            table.scroll_x,
+        );
     }
+}
+
+/// Change only the table viewport. An exact component tick lets the view sync
+/// retain controls for cells that remain visible; arbitrary ECS edits still
+/// take the full reconciliation path.
+pub fn set_data_table_viewport(
+    world: &mut World,
+    owner: Entity,
+    scroll_rows: usize,
+    scroll_x: f32,
+) {
+    world.init_resource::<WidgetDataTableItems>();
+    let previous_tick = world
+        .resource::<WidgetDataTableItems>()
+        .viewport_ticks
+        .get(&owner)
+        .copied()
+        .or_else(|| {
+            world
+                .resource::<WidgetDataTableItems>()
+                .stamps
+                .get(&owner)
+                .map(|stamp| stamp.model_changed)
+        });
+    let current_tick = entity_component_changed_tick::<DataTable>(world, owner);
+    let trusted = current_tick.zip(previous_tick).is_some_and(|(a, b)| a == b);
+    let before = world
+        .get::<DataTable>(owner)
+        .map(|table| (table.scroll_rows, table.scroll_x));
+    let Some(before) = before else { return };
+    if before == (scroll_rows, scroll_x) {
+        return;
+    }
+    world.increment_change_tick();
+    if let Some(mut table) = world.get_mut::<DataTable>(owner) {
+        table.scroll_rows = scroll_rows;
+        table.scroll_x = scroll_x;
+    }
+    if trusted {
+        if let Some(tick) = entity_component_changed_tick::<DataTable>(world, owner) {
+            world
+                .resource_mut::<WidgetDataTableItems>()
+                .viewport_ticks
+                .insert(owner, tick);
+        }
+    } else {
+        world
+            .resource_mut::<WidgetDataTableItems>()
+            .viewport_ticks
+            .remove(&owner);
+    }
+    world.increment_change_tick();
 }
 
 pub(super) fn move_data_table_active_row(

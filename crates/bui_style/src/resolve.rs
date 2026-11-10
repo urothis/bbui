@@ -195,10 +195,10 @@ pub(super) fn role_style_values(
             values.insert(Background, UiStyleValue::Color(theme.background));
             values.insert(CornerRadius, UiStyleValue::Scalar(0.0));
         }
-        "properties-flat-menu" => {
+        EditorRole::FLAT_MENU => {
             values.insert(
                 Background,
-                UiStyleValue::Color(theme.background.mix(Rgba(0.0, 0.0, 0.0, 1.0), 0.5)),
+                UiStyleValue::Color(theme.color(ThemeColorToken::EditorChromeSurface)),
             );
             values.insert(CornerRadius, UiStyleValue::Scalar(0.0));
         }

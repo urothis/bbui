@@ -2,6 +2,9 @@ use super::*;
 
 pub(super) fn node_for(world: &World, entity: Entity) -> Option<Node> {
     let label = world.get::<Label>(entity).map(|label| label.text.clone());
+    if world.get::<UiTabList>(entity).is_some() {
+        return Some(Node::new(Role::TabList));
+    }
     if let Some(option) = world.get::<RadioOptionControl>(entity) {
         let mut node = Node::new(Role::RadioButton);
         node.set_label(option.label.clone());
@@ -543,8 +546,16 @@ pub(super) fn node_for(world: &World, entity: Entity) -> Option<Node> {
         return Some(node);
     }
     if let Some(button) = world.get::<IconButton>(entity) {
-        let mut node = Node::new(Role::Button);
+        let tab = world.get::<UiTab>(entity);
+        let mut node = Node::new(if tab.is_some() {
+            Role::Tab
+        } else {
+            Role::Button
+        });
         node.set_label(button.accessible_name.clone());
+        if let Some(tab) = tab {
+            node.set_selected(tab.selected);
+        }
         if let Some(state) = world.get::<IconButtonAssetState>(entity) {
             match &state.status {
                 IconButtonAssetStatus::Loading => node.set_description("Icon loading"),

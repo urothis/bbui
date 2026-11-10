@@ -239,6 +239,60 @@ pub(super) fn data_table_sync_prunes_keys_for_a_wide_and_tall_viewport() {
     assert!(cells.len() > 1_000);
 }
 
+#[test]
+pub(super) fn tracked_table_scroll_retains_controls_and_raw_edits_reconcile() {
+    let mut app = App::new();
+    app.add_plugins(WidgetPlugin);
+    let window = app.world_mut().spawn_empty().id();
+    let owner = WidgetTree::new(WidgetNode::data_table("Table", sample_table(80)))
+        .spawn(app.world_mut(), None)
+        .unwrap();
+    let rect = UiRect::new(0.0, 0.0, 420.0, 300.0);
+    app.world_mut().entity_mut(owner).insert(UiLayoutResult {
+        window,
+        rect,
+        clip: Some(rect),
+        z: 3,
+        content_size: [rect.width, rect.height],
+        dpi_scale: 1.0,
+    });
+    sync_data_table_views(app.world_mut());
+    let key = DataTableItemKey::Cell {
+        row_id: 3,
+        column: 0,
+    };
+    let entity = app.world().resource::<WidgetDataTableItems>().items[&owner][&key];
+    let before = entity_component_changed_tick::<DataTableCellControl>(app.world(), entity);
+    set_data_table_viewport(app.world_mut(), owner, 1, 0.0);
+    sync_data_table_views(app.world_mut());
+    assert_eq!(
+        app.world().resource::<WidgetDataTableItems>().items[&owner][&key],
+        entity
+    );
+    assert_eq!(
+        entity_component_changed_tick::<DataTableCellControl>(app.world(), entity),
+        before
+    );
+
+    app.world_mut()
+        .get_mut::<DataTable>(owner)
+        .unwrap()
+        .rows
+        .iter_mut()
+        .find(|row| row.id == 3)
+        .unwrap()
+        .cells[0] = "Raw edit".into();
+    set_data_table_viewport(app.world_mut(), owner, 2, 0.0);
+    sync_data_table_views(app.world_mut());
+    assert_eq!(
+        app.world()
+            .get::<DataTableCellControl>(entity)
+            .unwrap()
+            .value,
+        "Raw edit"
+    );
+}
+
 #[derive(Resource, Debug, Default, PartialEq, Eq)]
 pub(super) struct VirtualSyncChanges {
     pub(super) table_cells: usize,

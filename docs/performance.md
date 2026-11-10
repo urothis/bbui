@@ -264,6 +264,59 @@ GPU submission and scene construction are not included. Group timings are direct
 while whole-app measurements use the scheduled `App::update` path. Measurements are local
 single-run data, not cross-machine performance targets.
 
+The next pass removed those entity-wide fingerprints. Style and paint now consume shared
+`UiDirty` batches. Bevy table summary ticks skip their change queries entirely on unchanged
+frames while preserving direct public ECS component edits. A local release rerun on the same
+aarch64 machine (30 frames per case) measured:
+
+| Controls | App idle µs / allocs / KB | App changed µs / allocs / KB | Painter idle µs | Direct idle style µs |
+| ---: | ---: | ---: | ---: | ---: |
+| 1,000 | 37.86 / 440 / 25.9 | 67.02 / 652 / 136.4 | 0.61 | 0.89 |
+| 10,000 | 137.82 / 440 / 25.9 | 277.42 / 652 / 136.4 | 0.61 | 0.89 |
+
+At 10k controls, whole-app idle time is 21.6 times lower than the previous 2,983 µs run. Direct
+idle style and paint times are effectively constant between 1k and 10k controls. Changed frames
+still run Bevy change queries to identify direct ECS edits and therefore scale with the number of
+candidate entities. The numbers exclude GPU submission.
+
+The next local release run on the same machine gated layout, hit testing, text, panel, and menu
+maintenance by component summary ticks and advanced paint-only transitions without rerunning the full style
+cascade. Virtualized collections now borrow their models and copy only visible rows. The same
+30-frame stress harnesses measured:
+
+| Workload | Before | After | Allocations before → after |
+| --- | ---: | ---: | ---: |
+| 10k controls, whole-app idle | 137.82 µs | 39.13 µs | 440 → 236/frame |
+| 10k controls, direct idle layout | 28.46 µs | 0.62 µs | — |
+| 10k-row list, scrolling | 482.78 µs | 125.16 µs | 11,275 → 1,238/frame |
+| 1k controls, active background transition | 7.53 ms | 1.30 ms | 66,436 → 8,402/frame |
+
+These are local single-run comparisons, not Criterion confidence intervals. The transition case
+advances all 1,000 controls concurrently; inherited or layout-changing properties still use the
+full resolver so descendants and geometry remain correct. The list case scrolls a 10,000-row model
+while only 32 rows are materialized. Table scrolling and graph panning still rebuild their visible
+projections and measured 0.85 ms and 1.42 ms respectively in this run.
+
+The next local release run (2026-11-10) uses explicit viewport edits for table scrolling and
+graph panning. A table scroll retains the control data of cells that remain visible and changes
+only their geometry; cells entering or leaving the viewport are mounted or removed. A graph pan
+queries a spatial index of node and link bounds, then updates the previously visible and newly
+visible items. Node moves update their own index entry and incident links. An exact model change
+tick rejects the viewport path when another ECS edit occurred, so direct model writes still take
+the full reconciliation path. The stress harness now exercises these tracked interactions.
+
+| Changed workload | Previous run | Tracked viewport run | Allocations before → after |
+| --- | ---: | ---: | ---: |
+| 80k-cell table scroll, 224 visible cells | 0.85 ms | 0.82 ms | 8,368 → 7,389/frame |
+| 1k-node, 3,984-link graph pan, 35 visible nodes | 1.42 ms | 0.66 ms | 6,204 → 4,216/frame |
+
+These are local single runs, not Criterion confidence intervals. The table still lays out and
+repaints each visible cell when its screen position changes; that visible text and draw work
+dominates its changed-frame time. The viewport paths avoid scanning model rows, nodes, and links
+on ordinary tracked scrolls and pans. Invalid graph geometry is kept in a conservative fallback
+list. Idle updates in the same run measured 21.38 µs for the table and 22.31 µs for the graph.
+GPU submission is excluded.
+
 ## Virtualized Model Stress Measurements
 
 Run `cargo run --release -p bui_widgets --example widget_model_stress_bench --locked` to exercise

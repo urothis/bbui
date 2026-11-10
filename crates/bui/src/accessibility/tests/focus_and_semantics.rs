@@ -1,6 +1,72 @@
 use super::*;
 
 #[test]
+pub(super) fn property_rows_and_tabs_keep_accessible_names_and_selection() {
+    use bui_widgets::{WidgetNode, WidgetTree};
+
+    let mut world = World::new();
+    let row = WidgetTree::new(WidgetNode::property_row_with_decorator(
+        "Scale",
+        WidgetNode::number("", 1.0, 0.0, 4.0, 0.1),
+    ))
+    .spawn(&mut world, None)
+    .unwrap();
+    let children = world.get::<UiChildren>(row).unwrap().0.clone();
+    let control = children[1];
+    let decorator = children[2];
+    let tabs = WidgetTree::new(
+        WidgetNode::column([WidgetNode::icon_button("◇", "Object").with_tab_selected(true)])
+            .with_tab_list(),
+    )
+    .spawn(&mut world, None)
+    .unwrap();
+    let tab = world.get::<UiChildren>(tabs).unwrap().0[0];
+    let vector = WidgetTree::new(WidgetNode::property_row(
+        "Location",
+        WidgetNode::row([
+            WidgetNode::number("X", 0.0, -1.0, 1.0, 0.1),
+            WidgetNode::number("Y", 0.0, -1.0, 1.0, 0.1),
+        ]),
+    ))
+    .spawn(&mut world, None)
+    .unwrap();
+    let axes = world.get::<UiChildren>(vector).unwrap().0[1];
+    let axes = world.get::<UiChildren>(axes).unwrap().0.clone();
+
+    sync_accessibility(&mut world);
+    assert_eq!(
+        world.get::<AccessibilityNode>(control).unwrap().0.label(),
+        Some("Scale")
+    );
+    assert_eq!(
+        world.get::<AccessibilityNode>(decorator).unwrap().0.label(),
+        Some("Scale keyframe")
+    );
+    assert_eq!(
+        world.get::<AccessibilityNode>(tabs).unwrap().0.role(),
+        Role::TabList
+    );
+    let tab_node = &world.get::<AccessibilityNode>(tab).unwrap().0;
+    assert_eq!(tab_node.role(), Role::Tab);
+    assert_eq!(tab_node.is_selected(), Some(true));
+    assert_eq!(
+        world.get::<AccessibilityNode>(axes[0]).unwrap().0.label(),
+        Some("Location X")
+    );
+    assert_eq!(
+        world.get::<AccessibilityNode>(axes[1]).unwrap().0.label(),
+        Some("Location Y")
+    );
+
+    world.get_mut::<UiTab>(tab).unwrap().selected = false;
+    sync_accessibility(&mut world);
+    assert_eq!(
+        world.get::<AccessibilityNode>(tab).unwrap().0.is_selected(),
+        Some(false)
+    );
+}
+
+#[test]
 pub(super) fn keyboard_focus_is_mirrored_to_bevys_accessible_focus() {
     let mut app = App::new();
     app.init_resource::<UiFocus>()

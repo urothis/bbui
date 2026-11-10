@@ -67,6 +67,65 @@ pub fn sync_node_graph_views(world: &mut World) {
         let Some(graph) = world.get::<NodeGraph>(owner) else {
             continue;
         };
+        let pan_only = cache.viewport_ticks.get(&owner) == Some(&stamp.model_changed)
+            && moved_nodes.is_none()
+            && !force_signature_diff
+            && previous.contains_key(&owner)
+            && previous_stamp.is_some_and(|old| {
+                old.layout_changed == stamp.layout_changed
+                    && old.theme_changed == stamp.theme_changed
+                    && old.style_changed == stamp.style_changed
+                    && old.key_changed == stamp.key_changed
+            })
+            && cache.spatial_cells.contains_key(&owner)
+            && cache.node_indices.contains_key(&owner)
+            && cache.link_indices.contains_key(&owner)
+            && cache.incident_links.contains_key(&owner)
+            && cache
+                .transforms
+                .get(&owner)
+                .is_some_and(|old| old.zoom == graph.zoom.to_bits());
+        if pan_only {
+            let candidates = node_graph_spatial_candidates(&cache, owner, graph, layout, spacing);
+            let mut nodes = HashSet::new();
+            let mut links = HashSet::new();
+            for key in candidates
+                .into_iter()
+                .chain(previous[&owner].keys().copied())
+            {
+                match key {
+                    NodeGraphItemKey::Node(id) | NodeGraphItemKey::Socket(id, _) => {
+                        nodes.insert(id);
+                    }
+                    NodeGraphItemKey::Link(id) => {
+                        links.insert(id);
+                    }
+                }
+            }
+            let (items, replaced_keys) = node_graph_delta_view_items(
+                NodeGraphViewContext {
+                    owner,
+                    graph,
+                    layout,
+                    spacing,
+                    node_indices: &cache.node_indices[&owner],
+                    link_indices: &cache.link_indices[&owner],
+                    incident_links: &cache.incident_links[&owner],
+                },
+                &nodes,
+                Some(&links),
+            );
+            cache
+                .transforms
+                .insert(owner, node_graph_transform_signature(graph));
+            views.push(NodeGraphView {
+                owner,
+                items,
+                replaced_keys,
+                replace_all: false,
+            });
+            continue;
+        }
         if let Some(moved_nodes) = partial_update
             && let (Some(node_indices), Some(link_indices), Some(incident_links)) = (
                 cache.node_indices.get(&owner),
@@ -99,6 +158,20 @@ pub fn sync_node_graph_views(world: &mut World) {
                         .copied()
                 })
                 .collect();
+            let affected_keys = moved_nodes
+                .iter()
+                .copied()
+                .map(NodeGraphItemKey::Node)
+                .chain(affected_links.iter().copied().map(NodeGraphItemKey::Link))
+                .collect::<Vec<_>>();
+            update_node_graph_spatial_index(
+                &mut cache,
+                owner,
+                graph,
+                layout.rect,
+                spacing,
+                &affected_keys,
+            );
             if let Some(signatures) = cache.node_signatures.get_mut(&owner) {
                 for node_id in moved_nodes {
                     if let Some(node) = cache
@@ -166,6 +239,26 @@ pub fn sync_node_graph_views(world: &mut World) {
             if changed_nodes.is_empty() && changed_links.is_empty() {
                 store_node_graph_signature_snapshot(owner, signature_snapshot, &mut cache);
                 continue;
+            }
+            if changed_nodes.iter().any(|id| {
+                previous_nodes.get(id).map(|signature| signature.geometry)
+                    != signature_snapshot
+                        .node_signatures
+                        .get(id)
+                        .map(|signature| signature.geometry)
+            }) || !changed_links.is_empty()
+            {
+                let (cells, overflow, membership, levels) = build_node_graph_spatial_index(
+                    graph,
+                    layout.rect,
+                    spacing,
+                    &signature_snapshot.node_indices,
+                    &signature_snapshot.link_indices,
+                );
+                cache.spatial_cells.insert(owner, cells);
+                cache.spatial_overflow.insert(owner, overflow);
+                cache.spatial_membership.insert(owner, membership);
+                cache.spatial_levels.insert(owner, levels);
             }
             let (items, replaced_keys) = node_graph_delta_view_items(
                 NodeGraphViewContext {
@@ -348,6 +441,17 @@ pub fn sync_node_graph_views(world: &mut World) {
             });
         }
         let replaced_keys = items.iter().map(|item| item.key).collect();
+        let (cells, overflow, membership, levels) = build_node_graph_spatial_index(
+            graph,
+            layout.rect,
+            spacing,
+            &signature_snapshot.node_indices,
+            &signature_snapshot.link_indices,
+        );
+        cache.spatial_cells.insert(owner, cells);
+        cache.spatial_overflow.insert(owner, overflow);
+        cache.spatial_membership.insert(owner, membership);
+        cache.spatial_levels.insert(owner, levels);
         views.push(NodeGraphView {
             owner,
             items,
@@ -357,6 +461,7 @@ pub fn sync_node_graph_views(world: &mut World) {
         store_node_graph_signature_snapshot(owner, signature_snapshot, &mut cache);
     }
 
+    let did_sync = !views.is_empty();
     for view in views {
         let mut current_items = previous.remove(&view.owner).unwrap_or_default();
         let replace_all = view.replace_all;
@@ -498,6 +603,10 @@ pub fn sync_node_graph_views(world: &mut World) {
         cache.link_signatures.remove(&owner);
         cache.link_order.remove(&owner);
         cache.transforms.remove(&owner);
+        cache.spatial_cells.remove(&owner);
+        cache.spatial_overflow.remove(&owner);
+        cache.spatial_membership.remove(&owner);
+        cache.spatial_levels.remove(&owner);
         for entity in items.into_values() {
             if world.get_entity(entity).is_ok() {
                 detach_from_parent(world, entity);
@@ -536,7 +645,11 @@ pub fn sync_node_graph_views(world: &mut World) {
     cache.items = previous;
     cache.stamps = stamps;
     cache.journaled_ticks.clear();
+    cache.viewport_ticks.clear();
     world.insert_resource(cache);
+    if did_sync {
+        world.increment_change_tick();
+    }
 }
 
 pub(super) fn reorder_node_graph_children(world: &mut World, owner: Entity, ordered: &[Entity]) {
@@ -560,6 +673,260 @@ pub(super) fn reorder_node_graph_children(world: &mut World, owner: Entity, orde
     if children.0 != next {
         children.0 = next;
     }
+}
+
+const GRAPH_SPATIAL_CELL: f32 = 256.0;
+
+fn graph_spatial_cell(value: f32, level: u8) -> i32 {
+    (value / (GRAPH_SPATIAL_CELL * 2.0_f32.powi(i32::from(level)))).floor() as i32
+}
+
+fn insert_graph_spatial_bounds(
+    cells: &mut GraphSpatialCells,
+    overflow: &mut Vec<NodeGraphItemKey>,
+    membership: &mut GraphSpatialMembership,
+    levels: &mut HashSet<u8>,
+    key: NodeGraphItemKey,
+    rect: Rect,
+) {
+    if ![rect.x, rect.y, rect.width, rect.height]
+        .into_iter()
+        .all(f32::is_finite)
+    {
+        overflow.push(key);
+        membership.insert(key, Vec::new());
+        return;
+    }
+    if ![rect.x + rect.width, rect.y + rect.height]
+        .into_iter()
+        .all(f32::is_finite)
+    {
+        overflow.push(key);
+        membership.insert(key, Vec::new());
+        return;
+    }
+    let Some((level, x0, x1, y0, y1)) = (0..=31_u8).find_map(|level| {
+        let x0 = graph_spatial_cell(rect.x, level);
+        let x1 = graph_spatial_cell(rect.x + rect.width, level);
+        let y0 = graph_spatial_cell(rect.y, level);
+        let y1 = graph_spatial_cell(rect.y + rect.height, level);
+        let width = (i64::from(x1) - i64::from(x0) + 1).max(0);
+        let height = (i64::from(y1) - i64::from(y0) + 1).max(0);
+        (width.saturating_mul(height) <= 256).then_some((level, x0, x1, y0, y1))
+    }) else {
+        overflow.push(key);
+        membership.insert(key, Vec::new());
+        return;
+    };
+    levels.insert(level);
+    let mut occupied = Vec::new();
+    for x in x0..=x1 {
+        for y in y0..=y1 {
+            cells.entry((level, x, y)).or_default().push(key);
+            occupied.push((level, x, y));
+        }
+    }
+    membership.insert(key, occupied);
+}
+
+fn graph_spatial_bounds_for_key(
+    graph: &NodeGraph,
+    layout: Rect,
+    spacing: &bui_style::ThemeNodeGraphSpacing,
+    indices: &HashMap<NodeId, usize>,
+    link_indices: &HashMap<u64, usize>,
+    key: NodeGraphItemKey,
+) -> Option<Rect> {
+    let offset = [
+        layout.x + graph.pan[0],
+        layout.y + spacing.header_height + graph.pan[1],
+    ];
+    match key {
+        NodeGraphItemKey::Node(id) => {
+            let node = indices.get(&id).and_then(|index| graph.nodes.get(*index))?;
+            let mut rect = node_graph_node_rect(graph, layout, node, spacing);
+            rect.x -= offset[0];
+            rect.y -= offset[1];
+            Some(rect)
+        }
+        NodeGraphItemKey::Link(id) => {
+            let link = link_indices
+                .get(&id)
+                .and_then(|index| graph.links.get(*index))?;
+            let from = indices
+                .get(&link.from_node)
+                .and_then(|index| graph.nodes.get(*index))?;
+            let to = indices
+                .get(&link.to_node)
+                .and_then(|index| graph.nodes.get(*index))?;
+            let mut points =
+                node_graph_link_points_between(graph, layout, *link, from, to, spacing)?;
+            for point in &mut points {
+                point[0] -= offset[0];
+                point[1] -= offset[1];
+            }
+            Some(node_graph_bezier_bounds(points, 8.0))
+        }
+        NodeGraphItemKey::Socket(_, _) => None,
+    }
+}
+
+fn build_node_graph_spatial_index(
+    graph: &NodeGraph,
+    layout: Rect,
+    spacing: &bui_style::ThemeNodeGraphSpacing,
+    indices: &HashMap<NodeId, usize>,
+    link_indices: &HashMap<u64, usize>,
+) -> (
+    GraphSpatialCells,
+    Vec<NodeGraphItemKey>,
+    GraphSpatialMembership,
+    HashSet<u8>,
+) {
+    let mut cells = HashMap::new();
+    let mut overflow = Vec::new();
+    let mut membership = HashMap::new();
+    let mut levels = HashSet::new();
+    for node in &graph.nodes {
+        let key = NodeGraphItemKey::Node(node.id);
+        if let Some(rect) =
+            graph_spatial_bounds_for_key(graph, layout, spacing, indices, link_indices, key)
+        {
+            insert_graph_spatial_bounds(
+                &mut cells,
+                &mut overflow,
+                &mut membership,
+                &mut levels,
+                key,
+                rect,
+            );
+        }
+    }
+    for link in &graph.links {
+        let key = NodeGraphItemKey::Link(link.id);
+        if let Some(rect) =
+            graph_spatial_bounds_for_key(graph, layout, spacing, indices, link_indices, key)
+        {
+            insert_graph_spatial_bounds(
+                &mut cells,
+                &mut overflow,
+                &mut membership,
+                &mut levels,
+                key,
+                rect,
+            );
+        }
+    }
+    (cells, overflow, membership, levels)
+}
+
+fn update_node_graph_spatial_index(
+    cache: &mut WidgetNodeGraphItems,
+    owner: Entity,
+    graph: &NodeGraph,
+    layout: Rect,
+    spacing: &bui_style::ThemeNodeGraphSpacing,
+    keys: &[NodeGraphItemKey],
+) {
+    let (
+        Some(cells),
+        Some(overflow),
+        Some(membership),
+        Some(levels),
+        Some(indices),
+        Some(link_indices),
+    ) = (
+        cache.spatial_cells.get_mut(&owner),
+        cache.spatial_overflow.get_mut(&owner),
+        cache.spatial_membership.get_mut(&owner),
+        cache.spatial_levels.get_mut(&owner),
+        cache.node_indices.get(&owner),
+        cache.link_indices.get(&owner),
+    )
+    else {
+        return;
+    };
+    for &key in keys {
+        if let Some(occupied) = membership.remove(&key) {
+            for cell in occupied {
+                if let Some(entries) = cells.get_mut(&cell) {
+                    entries.retain(|entry| *entry != key);
+                }
+            }
+        }
+        overflow.retain(|entry| *entry != key);
+        if let Some(rect) =
+            graph_spatial_bounds_for_key(graph, layout, spacing, indices, link_indices, key)
+        {
+            insert_graph_spatial_bounds(cells, overflow, membership, levels, key, rect);
+        }
+    }
+}
+
+fn node_graph_spatial_candidates(
+    cache: &WidgetNodeGraphItems,
+    owner: Entity,
+    graph: &NodeGraph,
+    layout: UiLayoutResult,
+    spacing: &bui_style::ThemeNodeGraphSpacing,
+) -> HashSet<NodeGraphItemKey> {
+    let viewport = layout
+        .clip
+        .unwrap_or(layout.rect)
+        .intersection(layout.rect)
+        .and_then(|clip| {
+            clip.intersection(Rect {
+                y: layout.rect.y + spacing.header_height,
+                height: (layout.rect.height - spacing.header_height).max(0.0),
+                ..layout.rect
+            })
+        })
+        .unwrap_or_default();
+    let offset = [
+        layout.rect.x + graph.pan[0],
+        layout.rect.y + spacing.header_height + graph.pan[1],
+    ];
+    let mut candidates = HashSet::new();
+    if let (Some(cells), Some(levels)) = (
+        cache.spatial_cells.get(&owner),
+        cache.spatial_levels.get(&owner),
+    ) {
+        for &level in levels {
+            let x0 = graph_spatial_cell(viewport.x - offset[0], level);
+            let x1 = graph_spatial_cell(viewport.x + viewport.width - offset[0], level);
+            let y0 = graph_spatial_cell(viewport.y - offset[1], level);
+            let y1 = graph_spatial_cell(viewport.y + viewport.height - offset[1], level);
+            let width = (i64::from(x1) - i64::from(x0) + 1).max(0);
+            let height = (i64::from(y1) - i64::from(y0) + 1).max(0);
+            if width.saturating_mul(height) > 4096 {
+                candidates.extend(
+                    cells
+                        .iter()
+                        .filter(|((entry_level, x, y), _)| {
+                            *entry_level == level
+                                && (*x >= x0 && *x <= x1)
+                                && (*y >= y0 && *y <= y1)
+                        })
+                        .flat_map(|(_, entries)| entries.iter().copied()),
+                );
+                continue;
+            }
+            for x in x0..=x1 {
+                for y in y0..=y1 {
+                    candidates.extend(cells.get(&(level, x, y)).into_iter().flatten().copied());
+                }
+            }
+        }
+    }
+    candidates.extend(
+        cache
+            .spatial_overflow
+            .get(&owner)
+            .into_iter()
+            .flatten()
+            .copied(),
+    );
+    candidates
 }
 
 pub(super) fn node_graph_node_signature(

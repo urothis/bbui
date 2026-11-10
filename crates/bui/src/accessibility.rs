@@ -11,8 +11,8 @@ use bevy::ecs::system::SystemParam;
 use bevy::input_focus::{FocusCause, InputFocus};
 use bevy::prelude::*;
 use bui_core::{
-    UiChildren, UiDirty, UiDirtyDomain, UiEnabled, UiFocus, UiFocusable, UiLivePoliteness,
-    UiLiveRegion, UiNode, UiParent, UiVisible,
+    UiAccessibleName, UiChildren, UiDirty, UiDirtyDomain, UiEnabled, UiFocus, UiFocusable,
+    UiLivePoliteness, UiLiveRegion, UiNode, UiParent, UiTab, UiTabList, UiVisible,
 };
 use bui_layout::UiLayoutResult;
 use bui_text::UiReadOnly;
@@ -131,6 +131,9 @@ pub fn sync_accessibility(world: &mut World) {
             }
             continue;
         };
+        if let Some(name) = world.get::<UiAccessibleName>(entity) {
+            node.set_label(name.0.clone());
+        }
         if world.get::<UiFocusable>(entity).is_some() {
             node.add_action(Action::Focus);
         }

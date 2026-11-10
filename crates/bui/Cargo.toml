@@ -17,7 +17,7 @@ bui_widgets = { path = "../bui_widgets" }
 bui_macros = { path = "../bui_macros" }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-bevy = { workspace = true, default-features = false, features = ["web", "webgl2"] }
+bevy = { workspace = true, default-features = false, features = ["web", "webgpu"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 image.workspace = true

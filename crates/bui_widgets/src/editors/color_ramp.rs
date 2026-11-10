@@ -17,6 +17,7 @@ pub struct ColorStop {
 }
 
 #[derive(Component, Debug, Clone, PartialEq)]
+#[component(summary_tick)]
 pub struct ColorRamp {
     pub stops: Vec<ColorStop>,
     pub interpolation: Interpolation,

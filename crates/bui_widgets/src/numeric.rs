@@ -34,6 +34,7 @@ impl NumericValue {
 }
 
 #[derive(Component, Debug, Clone, PartialEq)]
+#[component(summary_tick)]
 pub struct NumericField {
     pub value: f64,
     pub default: f64,

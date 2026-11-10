@@ -7,6 +7,7 @@ use std::ops::{Deref, DerefMut};
 /// A range control backed by the same normalization, defaults, units, and
 /// stepping rules as [`NumericField`]. Sliders require finite bounds.
 #[derive(Component, Debug, Clone, PartialEq)]
+#[component(summary_tick)]
 pub struct Slider {
     /// Shared numeric state used by text fields, scrub gestures, and history.
     pub field: NumericField,

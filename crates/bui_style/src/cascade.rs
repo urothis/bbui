@@ -56,6 +56,7 @@ pub enum UiStyleValue {
 }
 
 #[derive(Component, Debug, Clone, Default, PartialEq)]
+#[component(summary_tick)]
 pub struct UiInlineStyle(pub BTreeMap<UiStyleProperty, UiStyleValue>);
 
 impl UiInlineStyle {
@@ -140,6 +141,7 @@ impl ThemeMotion {
 
 /// Per-property transition settings. Unsupported value pairs snap to target.
 #[derive(Component, Debug, Clone, Default, PartialEq)]
+#[component(summary_tick)]
 pub struct UiTransitions(pub BTreeMap<UiStyleProperty, UiTransitionSpec>);
 
 impl UiTransitions {
@@ -166,6 +168,7 @@ impl UiTransitions {
 pub struct UiReducedMotion(pub bool);
 
 #[derive(Component, Debug, Clone, Default, PartialEq, Eq)]
+#[component(summary_tick)]
 pub struct UiClasses(pub Vec<String>);
 
 impl UiClasses {
@@ -175,6 +178,7 @@ impl UiClasses {
 }
 
 #[derive(Component, Debug, Clone, PartialEq, Eq)]
+#[component(summary_tick)]
 pub struct UiRole(pub String);
 
 impl UiRole {
@@ -185,6 +189,7 @@ impl UiRole {
 
 /// Bitset for state selectors. Multiple states can be active together.
 #[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[component(summary_tick)]
 pub struct UiStyleState(pub u16);
 
 impl UiStyleState {
@@ -320,6 +325,7 @@ impl UiStyleSheet {
 }
 
 #[derive(Component, Debug, Clone, Default, PartialEq)]
+#[component(summary_tick)]
 pub struct UiComputedStyle {
     pub properties: HashMap<UiStyleProperty, UiStyleValue>,
 }

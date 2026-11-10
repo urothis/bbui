@@ -72,6 +72,10 @@ pub enum ThemeColorToken {
     EditorActiveFieldSurface,
     EditorCaret,
     EditorImeUnderline,
+    EditorChromeSurface,
+    EditorSubpanelSurface,
+    EditorProgressTrack,
+    EditorObjectAccent,
     CurvePlotSurface,
     CurveGridLine,
     CurveAxisLine,
@@ -96,7 +100,7 @@ pub enum ThemeColorToken {
 impl ThemeColorToken {
     /// Every built-in semantic color token. Keep this list in sync with
     /// [`Theme::color`] so theme completeness can be checked exhaustively.
-    pub const ALL: [Self; 56] = [
+    pub const ALL: [Self; 60] = [
         Self::Background,
         Self::Surface,
         Self::HoverSurface,
@@ -134,6 +138,10 @@ impl ThemeColorToken {
         Self::EditorActiveFieldSurface,
         Self::EditorCaret,
         Self::EditorImeUnderline,
+        Self::EditorChromeSurface,
+        Self::EditorSubpanelSurface,
+        Self::EditorProgressTrack,
+        Self::EditorObjectAccent,
         Self::CurvePlotSurface,
         Self::CurveGridLine,
         Self::CurveAxisLine,
@@ -543,6 +551,18 @@ impl Theme {
             ThemeColorToken::EditorActiveFieldSurface => self.background.mix(self.accent, 0.16),
             ThemeColorToken::EditorCaret => self.text,
             ThemeColorToken::EditorImeUnderline => self.accent,
+            ThemeColorToken::EditorChromeSurface => match self.kind {
+                ThemeKind::Dark => self.background.mix(Rgba(0.0, 0.0, 0.0, 1.0), 0.5),
+                ThemeKind::Light => Rgba(179.0 / 255.0, 179.0 / 255.0, 179.0 / 255.0, 1.0),
+            },
+            ThemeColorToken::EditorSubpanelSurface => self.surface.mix(self.background, 0.615),
+            ThemeColorToken::EditorProgressTrack => {
+                self.background.mix(Rgba(0.0, 0.0, 0.0, 1.0), 0.4)
+            }
+            ThemeColorToken::EditorObjectAccent => match self.kind {
+                ThemeKind::Dark => Rgba(0.91, 0.52, 0.23, 1.0),
+                ThemeKind::Light => Rgba(0.67, 0.31, 0.06, 1.0),
+            },
             ThemeColorToken::CurvePlotSurface => self.background.mix(self.surface, 0.25),
             ThemeColorToken::CurveGridLine => self.border.mix(self.background, 0.35),
             ThemeColorToken::CurveAxisLine => self.border.mix(self.text, 0.25),
