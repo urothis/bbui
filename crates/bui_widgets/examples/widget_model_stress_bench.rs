@@ -288,8 +288,7 @@ fn measure(scene: &mut Scene, frames: usize, changed: bool) -> Measure {
                 .app
                 .world()
                 .resource::<DisplayList>()
-                .widget_items()
-                .len(),
+                .item_count(),
         );
     }
     let micros_per_frame = start.elapsed().as_secs_f64() * 1_000_000.0 / frames as f64;
@@ -308,8 +307,7 @@ fn measure(scene: &mut Scene, frames: usize, changed: bool) -> Measure {
                 .app
                 .world()
                 .resource::<DisplayList>()
-                .widget_items()
-                .len(),
+                .item_count(),
         );
     }
     let delta = ALLOCATOR.stats() - before;

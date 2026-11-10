@@ -317,6 +317,15 @@ on ordinary tracked scrolls and pans. Invalid graph geometry is kept in a conser
 list. Idle updates in the same run measured 21.38 µs for the table and 22.31 µs for the graph.
 GPU submission is excluded.
 
+The stress harness previously called `DisplayList::widget_items()` inside each timed update. That
+materialized and cloned a flattened draw list after every changed frame, inflating its measured
+time and allocations. The harness now observes the allocation-free `item_count()` instead. On the
+same machine, the corrected 1,000-control background-animation case measured **1.22 ms**, **7,383
+allocations**, and **2.26 MB allocated per frame**, compared with the prior **1.27 ms**, **8,402
+allocations**, and **2.71 MB**. Its idle update measured 20.79 µs. These are whole-app CPU figures;
+the remaining allocations cannot be attributed to style interpolation alone without phase
+profiling. Each active control still republishes its painted fragment as its color changes.
+
 ## Virtualized Model Stress Measurements
 
 Run `cargo run --release -p bui_widgets --example widget_model_stress_bench --locked` to exercise
