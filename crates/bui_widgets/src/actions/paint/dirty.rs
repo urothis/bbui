@@ -437,7 +437,13 @@ pub fn collect_widget_paint(world: &mut World) {
     let batch = world.resource_mut::<UiDirty>().take(UiDirtyDomain::Paint);
     if batch.is_empty() {
         world.resource_mut::<WidgetPaintCache>().skipped_frames += 1;
+        if let Some(mut outputs) = world.get_resource_mut::<UiStylePaintOnlyOutputs>() {
+            outputs.clear();
+        }
         return;
     }
     collect_widget_paint_full(world, Some(batch));
+    if let Some(mut outputs) = world.get_resource_mut::<UiStylePaintOnlyOutputs>() {
+        outputs.clear();
+    }
 }

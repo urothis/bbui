@@ -59,6 +59,31 @@ impl DisplayList {
         self.upsert_widget_fragment_with_batch_group(fragment, None)
     }
 
+    /// Recolor one retained rounded rectangle without rebuilding its fragment.
+    /// Returns `None` when the fragment or primitive no longer matches.
+    pub fn recolor_widget_fragment_rounded_rect(
+        &mut self,
+        entity: Entity,
+        item_index: usize,
+        next: Rgba,
+    ) -> Option<bool> {
+        let item = self
+            .widget_fragments
+            .get_mut(&entity)?
+            .items
+            .get_mut(item_index)?;
+        let Primitive::RoundedRect { color, .. } = &mut item.primitive else {
+            return None;
+        };
+        if *color == next {
+            return Some(false);
+        }
+        *color = next;
+        self.pending_widget_fragment_changes.insert(entity);
+        self.invalidate_views();
+        Some(true)
+    }
+
     /// Publish a widget fragment with optional membership in a bounded cross-fragment Bezier
     /// batch. The group is metadata only; fragment equality remains local to its items/order.
     pub fn upsert_widget_fragment_with_batch_group(
@@ -450,5 +475,74 @@ impl DisplayList {
             .into_iter()
             .map(|(_, _, _, _, _, _, _, item)| item)
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod retained_tests {
+    use super::*;
+
+    #[test]
+    fn recoloring_one_primitive_keeps_text_and_publishes_one_delta() {
+        let entity = Entity::PLACEHOLDER;
+        let clip = ClipRect {
+            x: 0.0,
+            y: 0.0,
+            width: 100.0,
+            height: 24.0,
+        };
+        let initial = Rgba(0.2, 0.2, 0.2, 1.0);
+        let changed = Rgba(0.4, 0.3, 0.2, 1.0);
+        let mut display = DisplayList::default();
+        display.upsert_widget_fragment(WidgetRenderFragment {
+            entity,
+            order: 1,
+            target_camera: None,
+            items: vec![
+                DrawItem {
+                    clip,
+                    z: 1,
+                    primitive: Primitive::RoundedRect {
+                        rect: clip,
+                        radius: 3.0,
+                        color: initial,
+                    },
+                },
+                DrawItem {
+                    clip,
+                    z: 2,
+                    primitive: Primitive::Text {
+                        origin: [24.0, 0.0],
+                        text: "stable".into(),
+                        color: initial,
+                    },
+                },
+            ],
+        });
+        display.take_widget_fragment_changes();
+        let text_address = match &display.widget_fragments()[&entity].items[1].primitive {
+            Primitive::Text { text, .. } => text.as_ptr(),
+            _ => panic!("expected text"),
+        };
+        assert_eq!(
+            display.recolor_widget_fragment_rounded_rect(entity, 0, changed),
+            Some(true)
+        );
+        assert_eq!(display.take_widget_fragment_changes(), vec![entity]);
+        assert_eq!(display.item_count(), 2);
+        assert_eq!(
+            display.recolor_widget_fragment_rounded_rect(entity, 0, changed),
+            Some(false)
+        );
+        assert!(display.take_widget_fragment_changes().is_empty());
+        assert_eq!(
+            display.recolor_widget_fragment_rounded_rect(entity, 1, changed),
+            None
+        );
+        let new_text_address = match &display.widget_fragments()[&entity].items[1].primitive {
+            Primitive::Text { text, .. } => text.as_ptr(),
+            _ => panic!("expected text"),
+        };
+        assert_eq!(new_text_address, text_address);
     }
 }

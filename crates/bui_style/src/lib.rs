@@ -78,6 +78,7 @@ impl Plugin for StylePlugin {
             .init_resource::<UiStyleCollectorCursor>()
             .init_resource::<UiStyleResourceCursor>()
             .init_resource::<UiStyleTransitionOutputs>()
+            .init_resource::<UiStylePaintOnlyOutputs>()
             .init_resource::<UiRoutedEvents>()
             .add_systems(
                 Update,
@@ -148,6 +149,22 @@ struct UiStyleResourceCursor(Tick);
 /// remain visible to the style collector.
 #[derive(Resource, Debug, Default)]
 struct UiStyleTransitionOutputs(HashMap<Entity, Tick>);
+
+/// Exact computed-style writes that only advanced a background transition.
+/// Widget painting consumes these after the current paint pass.
+#[derive(Resource, Debug, Default)]
+pub struct UiStylePaintOnlyOutputs(HashMap<Entity, Tick>);
+
+impl UiStylePaintOnlyOutputs {
+    /// Whether this exact computed-style write only advanced a background transition.
+    pub fn background_only_at(&self, entity: Entity, changed: Tick) -> bool {
+        self.0.get(&entity) == Some(&changed)
+    }
+
+    pub fn clear(&mut self) {
+        self.0.clear();
+    }
+}
 
 #[derive(Resource, Default)]
 struct UiStyleSummaryGate {

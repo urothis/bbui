@@ -1,6 +1,200 @@
 use super::*;
 
 #[test]
+pub(super) fn background_transition_recolors_retained_checkbox_text() {
+    use bevy_time::Time;
+    use bui_core::CorePlugin;
+    use bui_layout::LayoutPlugin;
+    use bui_style::{StylePlugin, UiStyleTransitionState, UiTransitionSpec, UiTransitions};
+    use bui_text::TextPlugin;
+    use std::time::Duration;
+
+    let mut app = App::new();
+    app.add_plugins((
+        CorePlugin,
+        StylePlugin,
+        LayoutPlugin,
+        TextPlugin,
+        WidgetPlugin,
+    ));
+    app.insert_resource(Time::<()>::default());
+    let mut transitions = UiTransitions::default();
+    transitions.set(
+        UiStyleProperty::Background,
+        UiTransitionSpec::new(Duration::from_millis(1_200)),
+    );
+    let entity = app
+        .world_mut()
+        .spawn((
+            UiNode,
+            UiEnabled(true),
+            UiVisible(true),
+            UiStyleState::default(),
+            Checkbox::new("static label", false),
+            transitions,
+            UiLayoutResult {
+                window: Entity::PLACEHOLDER,
+                rect: UiRect::new(0.0, 0.0, 120.0, 24.0),
+                clip: None,
+                z: 1,
+                content_size: [120.0, 24.0],
+                dpi_scale: 1.0,
+            },
+        ))
+        .id();
+    let assert_matches_full_paint = |app: &App| {
+        let world = app.world();
+        let layout = world.get::<UiLayoutResult>(entity).unwrap();
+        let mut checkbox = world.get::<Checkbox>(entity).unwrap().clone();
+        checkbox.enabled &= is_interactable(world, entity);
+        let theme = styled_theme(world, entity, world.resource::<Theme>());
+        let expected = checkbox.draw_items_clipped(layout.rect, layout.clip, &theme, layout.z);
+        assert_eq!(
+            world.resource::<DisplayList>().widget_fragments()[&entity].items,
+            expected
+        );
+    };
+    for _ in 0..3 {
+        app.update();
+    }
+    set_ui_style_state(app.world_mut(), entity, UiStyleState::SELECTED, true);
+    app.update();
+    assert!(app.world().get::<UiStyleTransitionState>(entity).is_some());
+    let previous = app.world().resource::<DisplayList>().widget_fragments()[&entity]
+        .items
+        .clone();
+    app.world_mut()
+        .resource_mut::<Time>()
+        .advance_by(Duration::from_millis(16));
+    app.update();
+    assert_eq!(
+        app.world()
+            .resource::<WidgetPaintCache>()
+            .recolored_fragments,
+        1
+    );
+    let current = &app.world().resource::<DisplayList>().widget_fragments()[&entity].items;
+    assert_ne!(current[0], previous[0]);
+    assert_eq!(current[1], previous[1]);
+    assert_matches_full_paint(&app);
+    let text_pointer = match &current[1].primitive {
+        Primitive::Text { text, .. } => text.as_ptr(),
+        _ => panic!("checkbox label must remain text"),
+    };
+
+    app.world_mut()
+        .resource_mut::<Time>()
+        .advance_by(Duration::from_millis(16));
+    app.update();
+    assert_eq!(
+        app.world()
+            .resource::<WidgetPaintCache>()
+            .recolored_fragments,
+        1
+    );
+    let current = &app.world().resource::<DisplayList>().widget_fragments()[&entity].items;
+    let next_text_pointer = match &current[1].primitive {
+        Primitive::Text { text, .. } => text.as_ptr(),
+        _ => panic!("checkbox label must remain text"),
+    };
+    assert_eq!(
+        next_text_pointer, text_pointer,
+        "color ticks reuse the label allocation"
+    );
+
+    app.world_mut().get_mut::<Checkbox>(entity).unwrap().label = "new label".into();
+    app.world_mut()
+        .resource_mut::<Time>()
+        .advance_by(Duration::from_millis(16));
+    app.update();
+    assert_eq!(
+        app.world()
+            .resource::<WidgetPaintCache>()
+            .recolored_fragments,
+        0
+    );
+    let current = &app.world().resource::<DisplayList>().widget_fragments()[&entity].items;
+    assert!(matches!(&current[1].primitive, Primitive::Text { text, .. } if text == "new label"));
+
+    app.world_mut()
+        .get_mut::<UiLayoutResult>(entity)
+        .unwrap()
+        .rect
+        .x = 15.0;
+    app.world_mut()
+        .resource_mut::<Time>()
+        .advance_by(Duration::from_millis(16));
+    app.update();
+    assert_eq!(
+        app.world()
+            .resource::<WidgetPaintCache>()
+            .recolored_fragments,
+        0
+    );
+    let current = &app.world().resource::<DisplayList>().widget_fragments()[&entity].items;
+    assert!(matches!(current[0].primitive, Primitive::RoundedRect { rect, .. } if rect.x == 15.0));
+
+    app.world_mut().resource_mut::<Theme>().text = Rgba(0.1, 0.8, 0.2, 1.0);
+    app.world_mut()
+        .resource_mut::<Time>()
+        .advance_by(Duration::from_millis(16));
+    app.update();
+    assert_eq!(
+        app.world()
+            .resource::<WidgetPaintCache>()
+            .recolored_fragments,
+        0
+    );
+    let current = &app.world().resource::<DisplayList>().widget_fragments()[&entity].items;
+    assert!(
+        matches!(current[1].primitive, Primitive::Text { color, .. } if color == Rgba(0.1, 0.8, 0.2, 1.0))
+    );
+
+    for value in [CheckboxValue::On, CheckboxValue::Mixed] {
+        app.world_mut().get_mut::<Checkbox>(entity).unwrap().value = value;
+        app.update();
+        app.world_mut()
+            .resource_mut::<Time>()
+            .advance_by(Duration::from_millis(16));
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<WidgetPaintCache>()
+                .recolored_fragments,
+            1
+        );
+        assert_matches_full_paint(&app);
+    }
+
+    app.world_mut()
+        .resource_mut::<UiDirty>()
+        .mark(UiDirtyDomain::Paint, entity);
+    collect_widget_paint(app.world_mut());
+    assert_eq!(
+        app.world()
+            .resource::<WidgetPaintCache>()
+            .recolored_fragments,
+        0,
+        "a later explicit paint request cannot reuse a previous transition tick"
+    );
+    assert_matches_full_paint(&app);
+
+    app.world_mut()
+        .entity_mut(entity)
+        .insert(UiRole::new("filled-checkbox"));
+    app.world_mut()
+        .resource_mut::<Time>()
+        .advance_by(Duration::from_millis(16));
+    app.update();
+    assert_eq!(
+        app.world()
+            .resource::<WidgetPaintCache>()
+            .recolored_fragments,
+        0
+    );
+}
+
+#[test]
 pub(super) fn widget_paint_cache_skips_idle_and_invalidates_visual_and_layout_inputs() {
     let mut app = App::new();
     app.add_plugins(WidgetPlugin);

@@ -45,8 +45,8 @@ use bui_render::{
 };
 use bui_style::{
     EditorRole, Rgba, Theme, ThemeColorToken, ThemeMotionToken, UiClasses, UiComputedStyle,
-    UiInlineStyle, UiRole, UiStyleProperty, UiStyleSheet, UiStyleState, UiStyleValue,
-    set_ui_style_state,
+    UiInlineStyle, UiRole, UiStylePaintOnlyOutputs, UiStyleProperty, UiStyleSheet, UiStyleState,
+    UiStyleValue, set_ui_style_state,
 };
 use bui_text::{
     TextBuffer, TextLayout, UiReadOnly, UiTextBuffer, UiTextLayout, resolve_text_font,
@@ -764,6 +764,7 @@ struct WidgetPaintCache {
         HashMap<Entity, HashMap<NodeId, NodeGraphOutputLabelMeasurements>>,
     text_measurements: HashMap<Entity, (String, f32)>,
     fragments: HashSet<Entity>,
+    checkbox_static_stamps: HashMap<Entity, CheckboxPaintStaticStamp>,
     paint_ranks: HashMap<Entity, u64>,
     paint_order_keys: BTreeMap<u64, Entity>,
     paint_children: HashMap<Entity, Vec<Entity>>,
@@ -774,7 +775,18 @@ struct WidgetPaintCache {
     skipped_frames: u64,
     rebuilt_frames: u64,
     repainted_entities: usize,
+    recolored_fragments: usize,
     published_fragments: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CheckboxPaintStaticStamp {
+    checkbox: Tick,
+    layout: Tick,
+    theme: Tick,
+    effective_enabled: bool,
+    order: u64,
+    camera: Option<Entity>,
 }
 
 #[derive(Resource, Debug, Default)]

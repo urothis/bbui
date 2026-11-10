@@ -326,6 +326,17 @@ allocations**, and **2.71 MB**. Its idle update measured 20.79 µs. These are wh
 the remaining allocations cannot be attributed to style interpolation alone without phase
 profiling. Each active control still republishes its painted fragment as its color changes.
 
+An isolated branch experiment retains the ordinary checkbox's geometry and label during
+background-only transitions. It checks the exact computed-style transition tick and unchanged
+checkbox, layout, theme, order, and effective enabled state before changing the existing
+rounded-rectangle color. Other edits take the full paint path. With the corrected stress harness
+on the same machine, the 1,000-control case changed from **1.24 ms / 7,383 allocations / 2.26 MB**
+to **0.93 ms / 2,371 allocations / 0.330 MB** per animated frame. Five repeated optimized runs
+measured 0.918–0.944 ms; idle stayed near 20 µs. This is a 25% CPU reduction and 68% fewer
+allocations in the branch baseline comparison. The test compares retained output with a full
+repaint for off, on, and mixed checkboxes and verifies that changed labels, layout, theme, and
+roles use full repaint. These measurements exclude GPU submission.
+
 ## Virtualized Model Stress Measurements
 
 Run `cargo run --release -p bui_widgets --example widget_model_stress_bench --locked` to exercise

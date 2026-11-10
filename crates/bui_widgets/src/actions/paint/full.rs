@@ -15,6 +15,7 @@ pub(in crate::actions) fn collect_widget_paint_full(
         mut paint_children,
         mut paint_roots,
         mut paint_parents,
+        mut checkbox_static_stamps,
         parent_changes,
         children_changes,
         mut node_graph_chrome_stamps,
@@ -27,6 +28,7 @@ pub(in crate::actions) fn collect_widget_paint_full(
             std::mem::take(&mut cache.paint_children),
             std::mem::take(&mut cache.paint_roots),
             std::mem::take(&mut cache.paint_parents),
+            std::mem::take(&mut cache.checkbox_static_stamps),
             std::mem::take(&mut cache.pending_parent_changes),
             std::mem::take(&mut cache.pending_children_changes),
             std::mem::take(&mut cache.node_graph_chrome_stamps),
@@ -44,6 +46,7 @@ pub(in crate::actions) fn collect_widget_paint_full(
     };
     let mut removed_fragments = HashSet::new();
     if repaint_all {
+        checkbox_static_stamps.clear();
         removed_fragments = std::mem::take(&mut fragments);
         let order = widget_paint_order(world, &entities);
         paint_ranks = assign_even_paint_ranks(&order);
@@ -88,12 +91,9 @@ pub(in crate::actions) fn collect_widget_paint_full(
     }
     let mut changed_outputs = HashMap::new();
     let mut repainted_entities = 0;
+    let mut recolored_fragments = 0;
 
     for &entity in &entities {
-        let graph_root = world.get::<NodeGraph>(entity).is_some();
-        if !graph_root && fragments.remove(&entity) {
-            removed_fragments.insert(entity);
-        }
         if world.get::<UiLayoutResult>(entity).is_none() {
             if fragments.remove(&entity) {
                 removed_fragments.insert(entity);
@@ -156,6 +156,9 @@ pub(in crate::actions) fn collect_widget_paint_full(
                 .is_none()
             && world.get::<Tooltip>(entity).is_none()
         {
+            if fragments.remove(&entity) {
+                removed_fragments.insert(entity);
+            }
             continue;
         }
         let clip_rect = match layout.clip {
@@ -179,6 +182,35 @@ pub(in crate::actions) fn collect_widget_paint_full(
         let camera = world
             .get::<bevy_camera::Camera>(layout.window)
             .map(|_| layout.window);
+        let order = paint_ranks.get(&entity).copied().unwrap_or_default();
+        let effective_enabled = is_interactable(world, entity);
+        let checkbox_stamp = checkbox_static_stamp(world, entity, effective_enabled, order, camera);
+        if let Some(stamp) = checkbox_stamp {
+            if !repaint_all
+                && fragments.contains(&entity)
+                && checkbox_static_stamps.get(&entity) == Some(&stamp)
+                && let Some(changed) = recolor_retained_checkbox(
+                    world,
+                    entity,
+                    RetainedCheckboxContext {
+                        rect,
+                        clip,
+                        z,
+                        theme,
+                        effective_enabled,
+                        order,
+                        camera,
+                    },
+                )
+            {
+                repainted_entities += usize::from(changed);
+                recolored_fragments += usize::from(changed);
+                continue;
+            }
+            checkbox_static_stamps.insert(entity, stamp);
+        } else {
+            checkbox_static_stamps.remove(&entity);
+        }
         if let Some(graph) = world.get::<NodeGraph>(entity) {
             let state = world
                 .get::<NodeGraphEditorState>(entity)
@@ -208,7 +240,6 @@ pub(in crate::actions) fn collect_widget_paint_full(
         if fragments.remove(&entity) {
             removed_fragments.insert(entity);
         }
-        let order = paint_ranks.get(&entity).copied().unwrap_or_default();
         let mut fragment_guard = PaintFragmentGuard {
             fragment_entities: &mut fragments,
             changed_outputs: &mut changed_outputs,
@@ -226,7 +257,7 @@ pub(in crate::actions) fn collect_widget_paint_full(
         };
         let camera_items = &mut fragment.items;
         repainted_entities += 1;
-        let enabled = is_interactable(world, entity);
+        let enabled = effective_enabled;
 
         let mut paint = PaintEntityContext {
             world,
@@ -288,6 +319,7 @@ pub(in crate::actions) fn collect_widget_paint_full(
     for entity in removed_fragments {
         published_fragments += usize::from(display_list.remove_widget_fragment(entity));
     }
+    published_fragments += recolored_fragments;
     let mut cache = world.resource_mut::<WidgetPaintCache>();
     cache.fragments = fragments;
     let WidgetPaintCache {
@@ -296,16 +328,19 @@ pub(in crate::actions) fn collect_widget_paint_full(
         ..
     } = &mut *cache;
     text_measurements.retain(|entity, _| fragments.contains(entity));
+    checkbox_static_stamps.retain(|entity, _| fragments.contains(entity));
     cache.paint_ranks = paint_ranks;
     cache.paint_order_keys = paint_order_keys;
     cache.paint_children = paint_children;
     cache.paint_roots = paint_roots;
     cache.paint_parents = paint_parents;
+    cache.checkbox_static_stamps = checkbox_static_stamps;
     cache.node_graph_chrome_stamps = node_graph_chrome_stamps;
     cache
         .node_graph_output_measurements
         .retain(|owner, _| live_graph_owners.contains(owner));
     cache.rebuilt_frames = cache.rebuilt_frames.saturating_add(1);
     cache.repainted_entities = repainted_entities;
+    cache.recolored_fragments = recolored_fragments;
     cache.published_fragments = published_fragments;
 }

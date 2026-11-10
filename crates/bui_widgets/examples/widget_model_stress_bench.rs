@@ -283,13 +283,7 @@ fn measure(scene: &mut Scene, frames: usize, changed: bool) -> Measure {
             step_workload(scene, frame);
         }
         scene.app.update();
-        black_box(
-            scene
-                .app
-                .world()
-                .resource::<DisplayList>()
-                .item_count(),
-        );
+        black_box(scene.app.world().resource::<DisplayList>().item_count());
     }
     let micros_per_frame = start.elapsed().as_secs_f64() * 1_000_000.0 / frames as f64;
 
@@ -302,13 +296,7 @@ fn measure(scene: &mut Scene, frames: usize, changed: bool) -> Measure {
         }
         scene.app.update();
         peak_live = peak_live.max(live_bytes(ALLOCATOR.stats()));
-        black_box(
-            scene
-                .app
-                .world()
-                .resource::<DisplayList>()
-                .item_count(),
-        );
+        black_box(scene.app.world().resource::<DisplayList>().item_count());
     }
     let delta = ALLOCATOR.stats() - before;
     let count = delta.allocations + delta.reallocations;

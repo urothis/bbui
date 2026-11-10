@@ -11,6 +11,8 @@ pub fn advance_ui_style_transitions(world: &mut World) {
         return;
     }
     world.init_resource::<UiStyleTransitionOutputs>();
+    world.init_resource::<UiStylePaintOnlyOutputs>();
+    world.resource_mut::<UiStylePaintOnlyOutputs>().clear();
     let mut entity_query = world.query_filtered::<Entity, With<UiStyleTransitionState>>();
     let entities: Vec<_> = entity_query.iter(world).collect();
     let mut query = world.query::<(&mut UiStyleTransitionState, Option<&mut UiComputedStyle>)>();
@@ -38,6 +40,8 @@ pub fn advance_ui_style_transitions(world: &mut World) {
                 .keys()
                 .all(|property| paint_only_transition(*property));
         if paint_only {
+            let background_only =
+                state.tracks.len() == 1 && state.tracks.contains_key(&UiStyleProperty::Background);
             let Some(mut computed) = computed else {
                 continue;
             };
@@ -68,7 +72,7 @@ pub fn advance_ui_style_transitions(world: &mut World) {
                 finished_entities.push(entity);
             }
             if painted {
-                painted_entities.push(entity);
+                painted_entities.push((entity, background_only));
             }
         } else {
             for track in state.tracks.values_mut() {
@@ -79,18 +83,32 @@ pub fn advance_ui_style_transitions(world: &mut World) {
     }
     let output_ticks: Vec<_> = painted_entities
         .iter()
-        .filter_map(|entity| {
+        .filter_map(|(entity, background_only)| {
             world
                 .get_entity(*entity)
                 .ok()?
                 .get_change_ticks::<UiComputedStyle>()
-                .map(|ticks| (*entity, ticks.changed))
+                .map(|ticks| (*entity, ticks.changed, *background_only))
         })
         .collect();
-    world
-        .resource_mut::<UiStyleTransitionOutputs>()
-        .0
-        .extend(output_ticks);
+    {
+        let mut outputs = world.resource_mut::<UiStyleTransitionOutputs>();
+        outputs.0.extend(
+            output_ticks
+                .iter()
+                .map(|(entity, tick, _)| (*entity, *tick)),
+        );
+    }
+    {
+        let mut outputs = world.resource_mut::<UiStylePaintOnlyOutputs>();
+        outputs.0.extend(
+            output_ticks
+                .iter()
+                .filter_map(|(entity, tick, background_only)| {
+                    background_only.then_some((*entity, *tick))
+                }),
+        );
+    }
     for entity in finished_entities {
         world.entity_mut(entity).remove::<UiStyleTransitionState>();
     }
@@ -98,7 +116,7 @@ pub fn advance_ui_style_transitions(world: &mut World) {
         for entity in resolve_entities {
             dirty.mark(UiDirtyDomain::Style, entity);
         }
-        for entity in painted_entities {
+        for (entity, _) in painted_entities {
             dirty.mark(UiDirtyDomain::Paint, entity);
         }
     }
