@@ -765,7 +765,12 @@ fn graph_spatial_bounds_for_key(
                 point[0] -= offset[0];
                 point[1] -= offset[1];
             }
-            Some(node_graph_bezier_bounds(points, 8.0))
+            let mut bounds = node_graph_bezier_bounds(points, 8.0);
+            // Link controls use a minimum 16 px span before their 8 px padding.
+            // Keep the index conservative for nearly vertical or horizontal curves.
+            bounds.width = bounds.width.max(32.0);
+            bounds.height = bounds.height.max(32.0);
+            Some(bounds)
         }
         NodeGraphItemKey::Socket(_, _) => None,
     }
@@ -1286,4 +1291,48 @@ pub(super) fn node_graph_delta_view_items(
     }
 
     (items, replaced_keys)
+}
+
+#[cfg(test)]
+mod spatial_tests {
+    use super::*;
+
+    #[test]
+    fn near_vertical_link_index_covers_minimum_control_bounds() {
+        let mut graph = NodeGraph::default();
+        let from = graph.add_node(
+            "Source",
+            [0.0, 0.0],
+            vec![NodeSocket::output("out", SocketType::Float)],
+        );
+        let source_width = graph.nodes[0].size[0];
+        let to = graph.add_node(
+            "Sink",
+            [source_width, 0.0],
+            vec![NodeSocket::input("in", SocketType::Float)],
+        );
+        let link = graph.create_link(from, 0, to, 0).unwrap();
+        let nodes = graph
+            .nodes
+            .iter()
+            .enumerate()
+            .map(|(index, node)| (node.id, index))
+            .collect();
+        let links = graph
+            .links
+            .iter()
+            .enumerate()
+            .map(|(index, link)| (link.id, index))
+            .collect();
+        let bounds = graph_spatial_bounds_for_key(
+            &graph,
+            Rect::new(0.0, 0.0, 500.0, 300.0),
+            &Theme::default().spacing.node_graph,
+            &nodes,
+            &links,
+            NodeGraphItemKey::Link(link),
+        )
+        .unwrap();
+        assert!(bounds.width >= 32.0 && bounds.height >= 32.0);
+    }
 }
