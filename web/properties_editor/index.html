@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>BUI Properties Editor</title>
+  <style>
+    html, body { width: 100%; min-height: 100%; margin: 0; background: #181818; }
+    #app { position: relative; width: max(100%, 520px); height: max(100vh, 690px); overflow: hidden; }
+    #bui-canvas { display: block; width: 100%; height: 100%; outline: none; }
+    #status { position: absolute; top: 12px; left: 12px; padding: 8px 12px;
+      color: #eee; background: #303030; border-radius: 4px; font: 13px system-ui, sans-serif; }
+    #status[hidden] { display: none; }
+  </style>
+</head>
+<body>
+  <main id="app">
+    <canvas id="bui-canvas" tabindex="0" aria-label="BUI Properties Editor"></canvas>
+    <div id="status" role="status">Loading properties editor…</div>
+  </main>
+  <script type="module">
+    import init from "./pkg/properties_editor.js";
+    const status = document.getElementById("status");
+    try {
+      await init();
+      status.hidden = true;
+    } catch (error) {
+      status.textContent = `Could not start the properties editor: ${error}`;
+      console.error(error);
+    }
+  </script>
+</body>
+</html>

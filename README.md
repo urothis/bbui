@@ -81,7 +81,20 @@ Press F6 to switch Dark/Light themes and F7 to toggle reduced motion.
 
 ## Desktop targets
 
-The workspace targets Linux (X11 and Wayland), Windows, and macOS through Bevy 0.20.1. `.github/workflows/ci.yml` is configured to run formatting, strict Clippy, rustdoc, and all-target tests on those three desktop runners; a Linux Mesa Vulkan job runs offscreen GPU pixel checks. Local GPU tests use an image render target and do not need a visible desktop session. Android and WebAssembly are outside the current desktop support contract.
+The workspace targets Linux (X11 and Wayland), Windows, and macOS through Bevy 0.20.1. `.github/workflows/ci.yml` is configured to run formatting, strict Clippy, rustdoc, and all-target tests on those three desktop runners; a Linux Mesa Vulkan job runs offscreen GPU pixel checks. Local GPU tests use an image render target and do not need a visible desktop session. The properties editor also has a WebAssembly browser build. Android and the other examples are outside the current browser support contract.
+
+## Properties editor in a browser
+
+Install the `wasm32-unknown-unknown` Rust target, `wasm-bindgen-cli` version `0.2.130`, and `llvm-strip` from your LLVM tools package, then build and serve the example:
+
+```sh
+rustup target add wasm32-unknown-unknown
+cargo install --force wasm-bindgen-cli --version 0.2.130 --locked
+scripts/build_properties_editor_web.sh
+python3 -m http.server 8000 --directory target/web
+```
+
+Open `http://localhost:8000/properties_editor/` in a WebGL2-capable browser. The page resizes the Bevy canvas to the browser viewport and scrolls when the viewport is smaller than the editor's 520×690 baseline. The object, material, outliner, preferences, and graph tabs share the desktop example's controls. Serve the files over HTTP so the browser can load the generated JavaScript and WASM bundle. See the [browser screenshot](docs/visuals/examples/properties_editor_web.png) and [geometry nodes screenshot](docs/visuals/examples/properties_editor_web_nodes.png).
 
 ## Text editing
 

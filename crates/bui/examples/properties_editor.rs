@@ -667,6 +667,8 @@ fn main() {
             primary_window: Some(Window {
                 title: "BUI Properties Editor".into(),
                 resolution: WindowResolution::new(WIDTH as u32, HEIGHT as u32),
+                canvas: Some("#bui-canvas".into()),
+                fit_canvas_to_parent: true,
                 ..default()
             }),
             ..default()
