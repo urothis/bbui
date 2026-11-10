@@ -5,7 +5,13 @@ pub(in crate::actions) fn styled_theme(world: &World, entity: Entity, base: &The
     let Some(style) = world.get::<UiComputedStyle>(entity) else {
         return theme;
     };
-    if let Some(background) = style.color(UiStyleProperty::Background) {
+    // A graph canvas owns its hover interaction, not a generic hover surface.
+    // Keep explicit inline and stylesheet backgrounds available to graph users.
+    let graph_background_is_interaction = world.get::<NodeGraph>(entity).is_some()
+        && !node_graph_has_background_override(world, entity);
+    if let Some(background) = style.color(UiStyleProperty::Background)
+        && !graph_background_is_interaction
+    {
         theme.background = background;
         theme.surface = background;
         theme.surface_hover = background;

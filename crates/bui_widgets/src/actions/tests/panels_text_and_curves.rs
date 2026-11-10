@@ -742,6 +742,51 @@ pub(super) fn node_graph_canvas_uses_its_token_and_respects_explicit_background_
 }
 
 #[test]
+pub(super) fn node_graph_hover_does_not_recolor_its_grid_or_nodes() {
+    let theme = Theme::new(bui_style::ThemeKind::Dark);
+    let mut world = World::new();
+    let entity = world
+        .spawn((
+            NodeGraph::default(),
+            UiComputedStyle {
+                properties: HashMap::from([(
+                    UiStyleProperty::Background,
+                    UiStyleValue::Color(theme.surface_hover),
+                )]),
+            },
+        ))
+        .id();
+    let idle = styled_theme(&world, entity, &theme);
+    assert_eq!(idle.background, theme.background);
+    assert_eq!(idle.surface, theme.surface);
+    assert_eq!(
+        node_graph_canvas_surface(&world, entity, &theme),
+        theme.color(ThemeColorToken::NodeGraphSurface)
+    );
+
+    let custom_color = Rgba(0.36, 0.12, 0.18, 1.0);
+    let mut inline = UiInlineStyle::default();
+    inline.set(
+        UiStyleProperty::Background,
+        UiStyleValue::Color(custom_color),
+    );
+    world.entity_mut(entity).insert((
+        inline,
+        UiComputedStyle {
+            properties: HashMap::from([(
+                UiStyleProperty::Background,
+                UiStyleValue::Color(custom_color),
+            )]),
+        },
+    ));
+    assert_eq!(styled_theme(&world, entity, &theme).surface, custom_color);
+    assert_eq!(
+        node_graph_canvas_surface(&world, entity, &theme),
+        custom_color
+    );
+}
+
+#[test]
 pub(super) fn panel_pointer_click_toggles_only_from_header() {
     let mut app = App::new();
     app.add_plugins(WidgetPlugin);

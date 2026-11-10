@@ -581,8 +581,30 @@ pub(in crate::actions) fn node_graph_canvas_surface(
     let inline_background = world
         .get::<UiInlineStyle>(entity)
         .and_then(|style| style.0.get(&UiStyleProperty::Background));
-    let inline_override = inline_background.is_some();
+    if !node_graph_has_background_override(world, entity) {
+        return token_surface;
+    }
+    world
+        .get::<UiComputedStyle>(entity)
+        .and_then(|style| style.color(UiStyleProperty::Background))
+        .or_else(|| match inline_background {
+            Some(UiStyleValue::Color(color)) => Some(*color),
+            Some(UiStyleValue::ColorToken(token)) => Some(theme.color(*token)),
+            Some(_) | None => None,
+        })
+        .unwrap_or(token_surface)
+}
 
+pub(in crate::actions) fn node_graph_has_background_override(
+    world: &World,
+    entity: Entity,
+) -> bool {
+    if world
+        .get::<UiInlineStyle>(entity)
+        .is_some_and(|style| style.0.contains_key(&UiStyleProperty::Background))
+    {
+        return true;
+    }
     let role = world.get::<UiRole>(entity);
     let classes = world.get::<UiClasses>(entity);
     let mut state = world
@@ -608,7 +630,7 @@ pub(in crate::actions) fn node_graph_canvas_surface(
             }
         }
     }
-    let stylesheet_override = world.get_resource::<UiStyleSheet>().is_some_and(|sheet| {
+    world.get_resource::<UiStyleSheet>().is_some_and(|sheet| {
         sheet.rules.iter().any(|rule| {
             let selector = &rule.selector;
             rule.declaration
@@ -625,20 +647,7 @@ pub(in crate::actions) fn node_graph_canvas_surface(
                 && state.contains(selector.required_state)
                 && !state.intersects(selector.forbidden_state)
         })
-    });
-    if !inline_override && !stylesheet_override {
-        return token_surface;
-    }
-
-    world
-        .get::<UiComputedStyle>(entity)
-        .and_then(|style| style.color(UiStyleProperty::Background))
-        .or_else(|| match inline_background {
-            Some(UiStyleValue::Color(color)) => Some(*color),
-            Some(UiStyleValue::ColorToken(token)) => Some(theme.color(*token)),
-            Some(_) | None => None,
-        })
-        .unwrap_or(token_surface)
+    })
 }
 
 pub(in crate::actions) fn cached_node_graph_output_label_widths(
