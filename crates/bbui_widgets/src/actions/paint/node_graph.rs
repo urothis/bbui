@@ -599,9 +599,17 @@ pub(in crate::actions) fn node_graph_has_background_override(
     world: &World,
     entity: Entity,
 ) -> bool {
+    node_graph_has_style_override(world, entity, UiStyleProperty::Background)
+}
+
+pub(in crate::actions) fn node_graph_has_border_override(world: &World, entity: Entity) -> bool {
+    node_graph_has_style_override(world, entity, UiStyleProperty::BorderColor)
+}
+
+fn node_graph_has_style_override(world: &World, entity: Entity, property: UiStyleProperty) -> bool {
     if world
         .get::<UiInlineStyle>(entity)
-        .is_some_and(|style| style.0.contains_key(&UiStyleProperty::Background))
+        .is_some_and(|style| style.0.contains_key(&property))
     {
         return true;
     }
@@ -633,9 +641,7 @@ pub(in crate::actions) fn node_graph_has_background_override(
     world.get_resource::<UiStyleSheet>().is_some_and(|sheet| {
         sheet.rules.iter().any(|rule| {
             let selector = &rule.selector;
-            rule.declaration
-                .0
-                .contains_key(&UiStyleProperty::Background)
+            rule.declaration.0.contains_key(&property)
                 && selector
                     .role
                     .as_ref()

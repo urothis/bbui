@@ -25,7 +25,14 @@ pub(in crate::actions) fn styled_theme(world: &World, entity: Entity, base: &The
     if let Some(muted) = style.color(UiStyleProperty::MutedForeground) {
         theme.text_muted = muted;
     }
-    if let Some(border) = style.color(UiStyleProperty::BorderColor) {
+    // Focus changes the graph's computed border color. Its grid and unselected
+    // node outlines use Theme::border, so only explicit graph styles may
+    // override that color inside the canvas.
+    let graph_border_is_interaction =
+        world.get::<NodeGraph>(entity).is_some() && !node_graph_has_border_override(world, entity);
+    if let Some(border) = style.color(UiStyleProperty::BorderColor)
+        && !graph_border_is_interaction
+    {
         theme.border = border;
     }
     if let Some(accent) = style.color(UiStyleProperty::AccentColor) {
