@@ -1,0 +1,30 @@
+[package]
+name = "bbui_widgets"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+bevy_app = "=0.20.1"
+bevy_asset = "=0.20.1"
+bevy_camera = "=0.20.1"
+bevy_ecs.workspace = true
+bevy_image = "=0.20.1"
+bevy_tasks = "=0.20.1"
+bevy_time = "=0.20.1"
+bevy_text = { version = "=0.20.1", default-features = false }
+bbui_core = { path = "../bbui_core" }
+bbui_layout = { path = "../bbui_layout" }
+bbui_motion = { path = "../bbui_motion" }
+bbui_media = { path = "../bbui_media" }
+bbui_render = { path = "../bbui_render" }
+bbui_style = { path = "../bbui_style" }
+bbui_text = { path = "../bbui_text" }
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.154"
+
+[dev-dependencies]
+stats_alloc.workspace = true
+
+[lints]
+workspace = true

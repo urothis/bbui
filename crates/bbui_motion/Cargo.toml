@@ -1,0 +1,17 @@
+[package]
+name = "bbui_motion"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+bevy_app.workspace = true
+bevy_curve = "=0.20.1"
+bevy_ecs.workspace = true
+bevy_time.workspace = true
+bbui_core = { path = "../bbui_core" }
+indexmap = "=2.14.2"
+smallvec = "=1.16.5"
+
+[lints]
+workspace = true

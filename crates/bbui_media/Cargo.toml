@@ -1,0 +1,18 @@
+[package]
+name = "bbui_media"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+bevy.workspace = true
+image.workspace = true
+resvg.workspace = true
+oxideav-core = "=0.1.43"
+oxideav-mp4 = "=0.0.11"
+rust_h264 = "=0.6.1"
+vp8-decoder.workspace = true
+webm-iterable.workspace = true
+
+[lints]
+workspace = true

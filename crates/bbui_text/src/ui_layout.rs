@@ -1,0 +1,772 @@
+//! Bevy component and systems that connect text metrics to BBUI layout and widgets.
+
+use bbui_core::{
+    UiDirty, UiDirtyBatch, UiDirtyDomain, UiFocus, UiParent, ui_components_changed_since,
+};
+use bbui_layout::{
+    UiIntrinsicSize, UiLayoutNode, UiLayoutResult, UiLayoutRoot, UiLength, UiViewports,
+};
+use bbui_style::{Theme, UiComputedStyle, UiStyleProperty};
+use bevy_asset::Assets;
+use bevy_ecs::prelude::*;
+use bevy_ecs::{change_detection::Tick, component::ComponentId, system::SystemChangeTick};
+use bevy_math::Vec2;
+use bevy_text::{
+    Font, FontCx, Justify, LayoutCx, LetterSpacing, LineBreak, LineHeight, RemSize, TextFont,
+    TextPipeline,
+};
+use std::{collections::HashSet, ops::Range};
+
+use crate::{
+    BevyTextLayoutConfig, TextBuffer, TextCaretPosition, TextLayout, TextRange, TextRect,
+    resolve_text_font,
+};
+
+#[derive(Resource, Default)]
+pub(crate) struct TextWorkCache {
+    cursor: Tick,
+    focus_targets: HashSet<Entity>,
+    prepared_measure: bool,
+    prepared_layout: bool,
+    prepared_sync: bool,
+}
+
+#[derive(Resource, Default)]
+struct TextSummaryGate {
+    components: Vec<ComponentId>,
+    last: Tick,
+    initialized: bool,
+}
+
+pub(crate) fn collect_text_changes(world: &mut World) {
+    world.init_resource::<TextSummaryGate>();
+    world.init_resource::<TextWorkCache>();
+    world.init_resource::<UiDirty>();
+    let changed = world.resource_scope(|world, mut gate: Mut<TextSummaryGate>| {
+        if !gate.initialized {
+            gate.components = vec![
+                world.register_component::<TextBuffer>(),
+                world.register_component::<UiTextLayout>(),
+                world.register_component::<UiLayoutNode>(),
+                world.register_component::<UiLayoutResult>(),
+                world.register_component::<UiComputedStyle>(),
+                world.register_component::<UiParent>(),
+            ];
+            gate.initialized = true;
+        }
+        let now = world.read_change_tick();
+        let changed = ui_components_changed_since(world, &gate.components, gate.last)
+            || world
+                .get_resource_change_ticks::<Theme>()
+                .is_some_and(|ticks| ticks.is_changed(gate.last, now))
+            || world
+                .get_resource_change_ticks::<Assets<Font>>()
+                .is_some_and(|ticks| ticks.is_changed(gate.last, now))
+            || world
+                .get_resource_change_ticks::<UiViewports>()
+                .is_some_and(|ticks| ticks.is_changed(gate.last, now))
+            || world
+                .get_resource_change_ticks::<UiFocus>()
+                .is_some_and(|ticks| ticks.is_changed(gate.last, now));
+        gate.last = now;
+        changed
+    });
+    if changed {
+        if world.run_system_cached(collect_text_changes_query).is_err() {
+            for domain in [
+                UiDirtyDomain::TextMeasure,
+                UiDirtyDomain::TextLayout,
+                UiDirtyDomain::TextSync,
+            ] {
+                world.resource_mut::<UiDirty>().mark_all(domain);
+            }
+        }
+    } else {
+        let now = world.read_change_tick();
+        let mut cache = world.resource_mut::<TextWorkCache>();
+        cache.cursor = now;
+        cache.prepared_measure = true;
+        cache.prepared_layout = true;
+        cache.prepared_sync = true;
+    }
+    world.increment_change_tick();
+}
+
+#[expect(
+    clippy::type_complexity,
+    reason = "Bevy change query covers the text inputs"
+)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Bevy injects each tracked resource separately"
+)]
+pub(crate) fn collect_text_changes_query(
+    changed: Query<
+        (
+            Entity,
+            Option<Ref<TextBuffer>>,
+            Option<Ref<UiTextLayout>>,
+            Option<Ref<UiLayoutNode>>,
+            Option<Ref<UiLayoutResult>>,
+            Option<Ref<UiComputedStyle>>,
+            Option<Ref<UiParent>>,
+        ),
+        Or<(
+            Changed<TextBuffer>,
+            Changed<UiTextLayout>,
+            Changed<UiLayoutNode>,
+            Changed<UiLayoutResult>,
+            Changed<UiComputedStyle>,
+            Changed<UiParent>,
+        )>,
+    >,
+    theme: Res<Theme>,
+    fonts: Res<Assets<Font>>,
+    viewports: Option<Res<UiViewports>>,
+    focus: Option<Res<UiFocus>>,
+    mut cache: ResMut<TextWorkCache>,
+    tick: SystemChangeTick,
+    mut dirty: ResMut<UiDirty>,
+) {
+    let last = cache.cursor;
+    let now = tick.this_run();
+    if theme.last_changed().is_newer_than(last, now)
+        || fonts.last_changed().is_newer_than(last, now)
+        || viewports
+            .as_ref()
+            .is_some_and(|viewports| viewports.last_changed().is_newer_than(last, now))
+    {
+        for domain in [
+            UiDirtyDomain::TextMeasure,
+            UiDirtyDomain::TextLayout,
+            UiDirtyDomain::TextSync,
+        ] {
+            dirty.mark_all(domain);
+        }
+    }
+    let targets: HashSet<_> = focus
+        .iter()
+        .flat_map(|focus| focus.windows.values())
+        .filter_map(|state| state.focused)
+        .collect();
+    for entity in cache.focus_targets.symmetric_difference(&targets) {
+        dirty.mark(UiDirtyDomain::TextLayout, *entity);
+        dirty.mark(UiDirtyDomain::TextSync, *entity);
+    }
+    cache.focus_targets = targets;
+
+    for (entity, buffer, layout, node, result, style, parent) in &changed {
+        let measure_changed = [
+            buffer.as_ref().map(DetectChanges::last_changed),
+            layout.as_ref().map(DetectChanges::last_changed),
+            node.as_ref().map(DetectChanges::last_changed),
+            style.as_ref().map(DetectChanges::last_changed),
+            parent.as_ref().map(DetectChanges::last_changed),
+        ]
+        .into_iter()
+        .flatten()
+        .any(|changed| changed.is_newer_than(last, now));
+        let result_changed = result
+            .as_ref()
+            .is_some_and(|result| result.last_changed().is_newer_than(last, now));
+        if measure_changed {
+            dirty.mark(UiDirtyDomain::TextMeasure, entity);
+            dirty.mark(UiDirtyDomain::TextLayout, entity);
+            dirty.mark(UiDirtyDomain::TextSync, entity);
+        } else if result_changed {
+            dirty.mark(UiDirtyDomain::TextLayout, entity);
+        }
+    }
+    cache.cursor = now;
+    cache.prepared_measure = true;
+    cache.prepared_layout = true;
+    cache.prepared_sync = true;
+}
+
+/// Take the text-control synchronization work collected by the scheduled text phase.
+/// `None` means no collector prepared this world, so direct callers should run fully.
+pub fn take_text_sync(world: &mut World) -> Option<UiDirtyBatch> {
+    let prepared = world
+        .get_resource_mut::<TextWorkCache>()
+        .is_some_and(|mut cache| std::mem::take(&mut cache.prepared_sync));
+    prepared.then(|| {
+        world
+            .resource_mut::<UiDirty>()
+            .take(UiDirtyDomain::TextSync)
+    })
+}
+
+/// Collect text edits made after the regular text phase by widget systems.
+/// This pass reads change ticks without cloning or shaping unchanged buffers.
+pub fn collect_text_widget_changes(world: &mut World) {
+    world.init_resource::<UiDirty>();
+    world.init_resource::<TextWorkCache>();
+    let last = world.resource::<TextWorkCache>().cursor;
+    let tracked = [
+        world.register_component::<TextBuffer>(),
+        world.register_component::<UiTextLayout>(),
+    ];
+    if !ui_components_changed_since(world, &tracked, last) {
+        return;
+    }
+    let now = world.read_change_tick();
+    let mut query = world.query_filtered::<Entity, Or<(With<TextBuffer>, With<UiTextLayout>)>>();
+    let changed: Vec<_> = query
+        .iter(world)
+        .filter(|entity| {
+            let Ok(entity) = world.get_entity(*entity) else {
+                return false;
+            };
+            [
+                entity
+                    .get_change_ticks::<TextBuffer>()
+                    .map(|ticks| ticks.changed),
+                entity
+                    .get_change_ticks::<UiTextLayout>()
+                    .map(|ticks| ticks.changed),
+            ]
+            .into_iter()
+            .flatten()
+            .any(|changed| changed.is_newer_than(last, now))
+        })
+        .collect();
+    let mut dirty = world.resource_mut::<UiDirty>();
+    for entity in changed {
+        dirty.mark(UiDirtyDomain::TextLayout, entity);
+        dirty.mark(UiDirtyDomain::TextMeasure, entity);
+    }
+}
+
+fn settle_text_cursor(world: &mut World) {
+    let tick = world.read_change_tick();
+    if let Some(mut cache) = world.get_resource_mut::<TextWorkCache>() {
+        cache.cursor = tick;
+    }
+}
+
+/// Text drawing and editing state shared by layout, widgets, and paint.
+///
+/// Add this to an entity with a [`TextBuffer`]. BBUI shapes the visible text
+/// using Bevy's text pipeline, stores the shared [`TextLayout`], and publishes
+/// absolute logical-pixel caret/selection geometry. `prefix` supports widgets
+/// that paint a label before their editable value; `placeholder` is drawn only
+/// while the buffer is empty and is excluded from caret/selection positions.
+#[derive(Component, Debug, Clone)]
+#[component(summary_tick)]
+pub struct UiTextLayout {
+    /// Optional explicit Bevy font. If absent, the current theme's font size
+    /// and Bevy's default font handle are used.
+    pub font: Option<TextFont>,
+    /// Optional explicit Bevy line height. Defaults to the theme's relative
+    /// line height, matching BBUI renderer text.
+    pub line_height: Option<LineHeight>,
+    pub letter_spacing: LetterSpacing,
+    /// Optional explicit wrapping rule. Defaults to no wrapping for a single
+    /// line field and word wrapping for a multiline area.
+    pub line_break: Option<LineBreak>,
+    pub justify: Justify,
+    /// Optional explicit DPI scale; by default the owning layout root's scale
+    /// is used, matching Bevy's UI text pipeline.
+    pub scale_factor: Option<f32>,
+    /// Insets from the widget's content box to the rendered text origin.
+    pub inset: [f32; 2],
+    pub multiline: bool,
+    pub wrap: bool,
+    pub prefix: String,
+    pub placeholder: String,
+    /// Logical pixels scrolled away from the text origin. Positive values
+    /// move the visible content up and to the left.
+    pub scroll_offset: [f32; 2],
+    text_layout: Option<TextLayout>,
+    display_text: String,
+    text_origin: Option<[f32; 2]>,
+    prefix_bytes: usize,
+    value_len: usize,
+    preferred_visual_x: Option<f32>,
+    preferred_visual_position: Option<TextCaretPosition>,
+    replacement_range: Option<TextRange>,
+    preedit_range: Option<Range<usize>>,
+    preedit_caret: Option<usize>,
+    buffer_selection: Option<TextRange>,
+    scroll_viewport: Option<[f32; 2]>,
+    last_focused: Option<bool>,
+    shape_key: Option<ShapeKey>,
+    intrinsic_key: Option<ShapeKey>,
+    intrinsic_bounds: Option<crate::TextBounds>,
+    last_error: Option<String>,
+}
+
+impl Default for UiTextLayout {
+    fn default() -> Self {
+        Self {
+            font: None,
+            line_height: None,
+            letter_spacing: LetterSpacing::default(),
+            line_break: None,
+            justify: Justify::default(),
+            scale_factor: None,
+            inset: [6.0, 3.0],
+            multiline: false,
+            wrap: false,
+            prefix: String::new(),
+            placeholder: String::new(),
+            scroll_offset: [0.0, 0.0],
+            text_layout: None,
+            display_text: String::new(),
+            text_origin: None,
+            prefix_bytes: 0,
+            value_len: 0,
+            preferred_visual_x: None,
+            preferred_visual_position: None,
+            replacement_range: None,
+            preedit_range: None,
+            preedit_caret: None,
+            buffer_selection: None,
+            scroll_viewport: None,
+            last_focused: None,
+            shape_key: None,
+            intrinsic_key: None,
+            intrinsic_bounds: None,
+            last_error: None,
+        }
+    }
+}
+
+impl UiTextLayout {
+    pub fn text_field(label: impl Into<String>) -> Self {
+        let label = label.into();
+        Self {
+            prefix: if label.is_empty() {
+                String::new()
+            } else {
+                format!("{label}: ")
+            },
+            ..Self::default()
+        }
+    }
+
+    pub fn text_area(label: impl Into<String>, wrap: bool) -> Self {
+        let mut layout = Self::text_field(label);
+        layout.multiline = true;
+        layout.wrap = wrap;
+        layout
+    }
+
+    pub fn layout(&self) -> Option<&TextLayout> {
+        self.text_layout.as_ref()
+    }
+
+    pub fn display_text(&self) -> Option<&str> {
+        self.text_layout
+            .as_ref()
+            .map(|_| self.display_text.as_str())
+    }
+
+    pub fn text_origin(&self) -> Option<[f32; 2]> {
+        self.text_origin
+    }
+
+    pub fn last_error(&self) -> Option<&str> {
+        self.last_error.as_deref()
+    }
+
+    /// Byte range of the visible IME preedit in [`Self::display_text`].
+    /// The range includes any widget prefix in its offsets.
+    pub fn preedit_range(&self) -> Option<Range<usize>> {
+        self.preedit_range.clone()
+    }
+
+    /// Return the editable buffer byte offset under a logical window point.
+    pub fn hit_test(&self, position: [f32; 2]) -> Option<usize> {
+        self.hit_test_caret(position)
+            .map(|position| position.byte_index)
+    }
+
+    /// Return the editable insertion point under a logical window point,
+    /// including which side of a soft-wrap boundary the caret occupies.
+    pub fn hit_test_caret(&self, position: [f32; 2]) -> Option<TextCaretPosition> {
+        let layout = self.text_layout.as_ref()?;
+        let origin = self.text_origin?;
+        let scale = self.layout_scale_factor();
+        let position = layout.hit_test_position(
+            (position[0] - origin[0]) * scale,
+            (position[1] - origin[1]) * scale,
+        );
+        Some(self.display_position_to_buffer(position))
+    }
+
+    /// Place or extend a buffer selection at a logical window point.
+    pub fn place_caret(&self, buffer: &mut TextBuffer, position: [f32; 2], extend: bool) -> bool {
+        let Some(position) = self.hit_test_caret(position) else {
+            return false;
+        };
+        set_buffer_caret(buffer, position, extend)
+    }
+
+    /// Move the caret to the adjacent shaped visual line while retaining its
+    /// preferred horizontal position across repeated Up/Down keys. Returns
+    /// `None` when the text has not been shaped yet, allowing callers to use
+    /// logical newline navigation until geometry is available.
+    pub fn move_caret_visual_line(
+        &mut self,
+        buffer: &mut TextBuffer,
+        down: bool,
+        extend: bool,
+    ) -> Option<bool> {
+        if buffer.composition().is_some() {
+            return Some(false);
+        }
+        let layout = self.text_layout.as_ref()?;
+        let caret = layout.caret_rect_with_affinity(buffer.caret(), buffer.caret_affinity());
+        let current_position = TextCaretPosition {
+            byte_index: buffer.caret(),
+            affinity: buffer.caret_affinity(),
+        };
+        let preferred_x = if self.preferred_visual_position == Some(current_position) {
+            self.preferred_visual_x.unwrap_or(caret.x)
+        } else {
+            self.preferred_visual_x = Some(caret.x);
+            caret.x
+        };
+        let line_height = caret.height.max(1.0);
+        let target_y = if down {
+            caret.y + line_height * 1.5
+        } else {
+            caret.y - line_height * 0.5
+        };
+        let display_position = layout.hit_test_position(preferred_x, target_y);
+        let target_caret =
+            layout.caret_rect_with_affinity(display_position.byte_index, display_position.affinity);
+        if (down && target_caret.y <= caret.y + 0.01) || (!down && target_caret.y >= caret.y - 0.01)
+        {
+            self.preferred_visual_position = Some(current_position);
+            return Some(false);
+        }
+        let target = self.display_position_to_buffer(display_position);
+        if set_buffer_caret(buffer, target, extend) {
+            self.preferred_visual_position = Some(TextCaretPosition {
+                byte_index: buffer.caret(),
+                affinity: buffer.caret_affinity(),
+            });
+            Some(true)
+        } else {
+            self.preferred_visual_position = Some(TextCaretPosition {
+                byte_index: buffer.caret(),
+                affinity: buffer.caret_affinity(),
+            });
+            Some(false)
+        }
+    }
+
+    /// Move to the start or end of the shaped visual line containing the
+    /// caret. This respects soft wrapping as well as explicit newlines.
+    pub fn move_caret_visual_line_edge(
+        &mut self,
+        buffer: &mut TextBuffer,
+        end: bool,
+        extend: bool,
+    ) -> Option<bool> {
+        if buffer.composition().is_some() {
+            return Some(false);
+        }
+        let layout = self.text_layout.as_ref()?;
+        let caret = layout.caret_rect_with_affinity(buffer.caret(), buffer.caret_affinity());
+        let x = if end {
+            layout.bounds().width + 1.0
+        } else {
+            -1.0
+        };
+        let display_position = layout.hit_test_position(x, caret.y + caret.height * 0.5);
+        let target = self.display_position_to_buffer(display_position);
+        self.reset_visual_navigation();
+        Some(set_buffer_caret(buffer, target, extend))
+    }
+
+    /// Move left or right through the shaped visual caret order, including the
+    /// two visual positions at a soft-wrap boundary.
+    pub fn move_caret_visual_horizontal(
+        &mut self,
+        buffer: &mut TextBuffer,
+        right: bool,
+        extend: bool,
+    ) -> Option<bool> {
+        if buffer.composition().is_some() {
+            return Some(false);
+        }
+        let layout = self.text_layout.as_ref()?;
+        let selection = buffer.selection();
+        if !extend && !selection.is_empty() {
+            let target = if right {
+                selection.end
+            } else {
+                selection.start
+            };
+            let affinity = if buffer.caret() == target {
+                buffer.caret_affinity()
+            } else {
+                buffer.anchor_affinity()
+            };
+            self.reset_visual_navigation();
+            return Some(set_buffer_caret(
+                buffer,
+                TextCaretPosition {
+                    byte_index: target,
+                    affinity,
+                },
+                false,
+            ));
+        }
+        let position = TextCaretPosition {
+            byte_index: buffer.caret(),
+            affinity: buffer.caret_affinity(),
+        };
+        let target = layout.move_visual_caret(position, right)?;
+        self.reset_visual_navigation();
+        Some(set_buffer_caret(
+            buffer,
+            self.display_position_to_buffer(target),
+            extend,
+        ))
+    }
+
+    /// Clear the retained x coordinate used by visual Up/Down navigation.
+    pub fn reset_visual_navigation(&mut self) -> bool {
+        let x_changed = self.preferred_visual_x.take().is_some();
+        let caret_changed = self.preferred_visual_position.take().is_some();
+        x_changed || caret_changed
+    }
+
+    /// Caret geometry in absolute logical window pixels.
+    pub fn caret_rect(&self, buffer: &TextBuffer) -> Option<TextRect> {
+        let layout = self.text_layout.as_ref()?;
+        let origin = self.text_origin?;
+        let mut rect = layout.caret_rect_with_affinity(
+            self.display_caret(buffer),
+            self.display_caret_affinity(buffer),
+        );
+        scale_rect(&mut rect, 1.0 / self.layout_scale_factor());
+        translate(&mut rect, origin);
+        Some(rect)
+    }
+
+    /// Selection geometry in absolute logical window pixels.
+    pub fn selection_rects(&self, buffer: &TextBuffer) -> Vec<TextRect> {
+        let (Some(layout), Some(origin)) = (&self.text_layout, self.text_origin) else {
+            return Vec::new();
+        };
+        if self.preedit_range.is_some() {
+            return Vec::new();
+        }
+        let range = buffer.selection();
+        if range.is_empty() {
+            return Vec::new();
+        }
+        let start = self.prefix_bytes + range.start.min(self.value_len);
+        let end = self.prefix_bytes + range.end.min(self.value_len);
+        let mut rects = layout.selection_rects(start..end);
+        for rect in &mut rects {
+            scale_rect(rect, 1.0 / self.layout_scale_factor());
+            translate(rect, origin);
+        }
+        rects
+    }
+
+    /// Logical window rectangles occupied by the active IME preedit text.
+    /// Paint these as underlines to distinguish uncommitted text from the
+    /// surrounding value.
+    pub fn preedit_rects(&self) -> Vec<TextRect> {
+        let (Some(layout), Some(origin), Some(range)) =
+            (&self.text_layout, self.text_origin, &self.preedit_range)
+        else {
+            return Vec::new();
+        };
+        let mut rects = layout.selection_rects(range.clone());
+        for rect in &mut rects {
+            scale_rect(rect, 1.0 / self.layout_scale_factor());
+            translate(rect, origin);
+        }
+        rects
+    }
+
+    fn display_position_to_buffer(&self, mut position: TextCaretPosition) -> TextCaretPosition {
+        let display_byte = position.byte_index.saturating_sub(self.prefix_bytes);
+        let Some(replacement) = self.replacement_range else {
+            position.byte_index = display_byte.min(self.value_len);
+            return position;
+        };
+        let Some(preedit) = &self.preedit_range else {
+            position.byte_index = display_byte.min(self.value_len);
+            return position;
+        };
+        let start = preedit.start.saturating_sub(self.prefix_bytes);
+        let end = preedit.end.saturating_sub(self.prefix_bytes);
+        let mapped = if display_byte < start {
+            display_byte.min(replacement.start)
+        } else if display_byte <= end {
+            let preedit_offset = display_byte.saturating_sub(start);
+            if preedit_offset.saturating_mul(2) < end.saturating_sub(start) {
+                replacement.start
+            } else {
+                replacement.end
+            }
+        } else {
+            display_byte
+                .saturating_sub(end.saturating_sub(start))
+                .saturating_add(replacement.len())
+        };
+        position.byte_index = mapped.min(self.value_len);
+        position
+    }
+
+    fn layout_scale_factor(&self) -> f32 {
+        self.shape_key
+            .as_ref()
+            .map_or(1.0, |key| positive(key.scale_factor, 1.0))
+    }
+
+    fn visible_text(&self, buffer: &TextBuffer) -> VisibleText {
+        let mut text = String::with_capacity(
+            self.prefix.len()
+                + buffer.len_bytes()
+                + buffer.composition().map_or(0, |ime| ime.text.len()),
+        );
+        text.push_str(&self.prefix);
+        if let Some(composition) = buffer.composition() {
+            let replacement = buffer.selection();
+            text.push_str(&buffer.as_str()[..replacement.start]);
+            let preedit_start = text.len();
+            text.push_str(&composition.text);
+            let preedit_end = text.len();
+            text.push_str(&buffer.as_str()[replacement.end..]);
+            let preedit_caret = self.prefix.len()
+                + replacement.start
+                + composition
+                    .cursor_range
+                    .map_or(composition.text.len(), |range| range.end);
+            VisibleText {
+                text,
+                replacement_range: Some(replacement),
+                preedit_range: Some(preedit_start..preedit_end),
+                preedit_caret: Some(preedit_caret),
+            }
+        } else {
+            let value = if buffer.is_empty() {
+                &self.placeholder
+            } else {
+                buffer.as_str()
+            };
+            text.push_str(value);
+            VisibleText {
+                text,
+                replacement_range: None,
+                preedit_range: None,
+                preedit_caret: None,
+            }
+        }
+    }
+
+    fn display_caret(&self, buffer: &TextBuffer) -> usize {
+        self.preedit_caret
+            .unwrap_or(self.prefix_bytes + buffer.caret().min(self.value_len))
+    }
+
+    fn display_caret_affinity(&self, buffer: &TextBuffer) -> crate::CaretAffinity {
+        if self.preedit_caret.is_some() {
+            crate::CaretAffinity::Downstream
+        } else {
+            buffer.caret_affinity()
+        }
+    }
+
+    fn font(&self, theme: &Theme, computed: Option<&UiComputedStyle>) -> TextFont {
+        self.font.clone().unwrap_or_else(|| {
+            let size = computed
+                .and_then(|style| style.scalar(UiStyleProperty::FontSize))
+                .unwrap_or(theme.font_size);
+            crate::ui_default_text_font(positive(size, 14.0))
+        })
+    }
+
+    fn line_height(&self, theme: &Theme, computed: Option<&UiComputedStyle>) -> LineHeight {
+        self.line_height.unwrap_or_else(|| {
+            let relative = computed
+                .and_then(|style| style.scalar(UiStyleProperty::LineHeight))
+                .unwrap_or(theme.line_height);
+            LineHeight::RelativeToFont(positive(relative, 1.2))
+        })
+    }
+
+    fn line_break(&self) -> LineBreak {
+        self.line_break.unwrap_or(if self.multiline && self.wrap {
+            LineBreak::WordBoundary
+        } else {
+            LineBreak::NoWrap
+        })
+    }
+
+    fn cache_key(&self, text: &str, width: f32, context: ShapeContext) -> ShapeKey {
+        ShapeKey {
+            text: text.to_owned(),
+            width,
+            font: context.font,
+            line_height: context.line_height,
+            letter_spacing: self.letter_spacing,
+            line_break: self.line_break(),
+            justify: self.justify,
+            scale_factor: positive(self.scale_factor.unwrap_or(context.scale_factor), 1.0),
+            viewport_size: context.viewport_size,
+            rem_size: RemSize::default(),
+        }
+    }
+
+    fn config<'a>(key: &'a ShapeKey) -> BevyTextLayoutConfig<'a> {
+        BevyTextLayoutConfig {
+            font: &key.font,
+            line_height: key.line_height,
+            letter_spacing: key.letter_spacing,
+            line_break: key.line_break,
+            justify: key.justify,
+            scale_factor: key.scale_factor,
+            logical_viewport_size: key.viewport_size,
+            rem_size: key.rem_size,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct ShapeKey {
+    text: String,
+    width: f32,
+    font: TextFont,
+    line_height: LineHeight,
+    letter_spacing: LetterSpacing,
+    line_break: LineBreak,
+    justify: Justify,
+    scale_factor: f32,
+    viewport_size: Vec2,
+    rem_size: RemSize,
+}
+
+pub(super) struct ShapeContext {
+    font: TextFont,
+    line_height: LineHeight,
+    scale_factor: f32,
+    viewport_size: Vec2,
+}
+
+pub(super) struct VisibleText {
+    text: String,
+    replacement_range: Option<TextRange>,
+    preedit_range: Option<Range<usize>>,
+    preedit_caret: Option<usize>,
+}
+
+mod measure;
+pub use measure::measure_text_intrinsics;
+
+mod update;
+use update::*;
+pub use update::{update_text_layouts, update_text_layouts_if_dirty};
+
+mod helpers;
+use helpers::*;

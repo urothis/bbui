@@ -1,0 +1,16 @@
+[package]
+name = "bbui_layout"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+bevy_app.workspace = true
+bevy_ecs.workspace = true
+bbui_core = { path = "../bbui_core" }
+
+[dev-dependencies]
+stats_alloc.workspace = true
+
+[lints]
+workspace = true

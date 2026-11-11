@@ -1,0 +1,82 @@
+name: Rust
+on:
+  push:
+  pull_request:
+
+jobs:
+  checks:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+      CARGO_INCREMENTAL: 0
+    steps:
+      - uses: actions/checkout@v4
+      - name: Free Linux runner disk
+        if: runner.os == 'Linux'
+        run: |
+          df -h .
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android
+          df -h .
+      - name: Install Linux window dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libfontconfig-dev libx11-dev libwayland-dev libxkbcommon-dev libxkbcommon-x11-0 mesa-vulkan-drivers
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.99.0
+          components: rustfmt, clippy
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Check every runnable example
+        run: cargo check --workspace --examples --locked
+      - name: Run headless theme example
+        run: cargo run -p bbui_style --example theme_tokens --locked
+      - name: Check public API documentation links
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --workspace --no-deps --locked
+      - run: cargo test --workspace --all-targets --locked
+        env:
+          CARGO_BUILD_JOBS: 2
+
+  linux-gpu-readback:
+    runs-on: ubuntu-latest
+    env:
+      CARGO_PROFILE_TEST_DEBUG: 0
+      CARGO_INCREMENTAL: 0
+      CARGO_BUILD_JOBS: 2
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Mesa software Vulkan adapter
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libfontconfig-dev libx11-dev libwayland-dev libxkbcommon-dev libxkbcommon-x11-0 mesa-vulkan-drivers
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.99.0
+      - name: Run offscreen WGPU visual regressions
+        env:
+          WGPU_BACKEND: vulkan
+          BBUI_NODE_GRAPH_CAPTURE_DIR: ${{ github.workspace }}/node-graph-captures
+        run: >-
+          cargo test -p bbui --locked
+          --test gpu_readback
+          --test widget_gpu_readback
+          --test text_area_gpu_readback
+          --test canvas_gpu_readback
+          --test node_graph_gpu_readback
+          --test file_browser_preview_gpu
+          --test icon_asset_gpu_readback
+          --test numeric_expression_error_gpu
+          --test boxed_controls_gpu
+      - name: Upload NodeGraph GPU review captures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: node-graph-gpu-review-captures
+          path: node-graph-captures/*.png
+          if-no-files-found: warn

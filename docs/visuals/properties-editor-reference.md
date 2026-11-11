@@ -1,0 +1,7 @@
+# Properties editor reference
+
+The [standalone properties editor](examples/properties_editor.png) and [FPS world panel](examples/fps_world_ui.png) mount the same Rust widget composition from [`crates/bbui/examples/properties_editor/`](../../crates/bbui/examples/properties_editor/). Object, Modifiers, Material, Outliner, Preferences, and Geometry Nodes are real example pages; the FPS version adds a Shooting Range panel.
+
+The composition was informed by [BUI's component demo](https://github.com/ppmpreetham/BUI/blob/e981a6caea300629f3f1cad846d08785c5cde649/examples/components_demo.py#L35), its [container templates](https://github.com/ppmpreetham/BUI/blob/e981a6caea300629f3f1cad846d08785c5cde649/bindings/python/bui/components/containers.py#L46), and its [panel layout](https://github.com/ppmpreetham/BUI/blob/e981a6caea300629f3f1cad846d08785c5cde649/kit/intern/kit_widgets.c#L450). The reference hierarchy places Transform and Visibility under Object, with nested Mask and Motion Blur sections. Its frame uses side tabs, a menu bar, object selector, progress bar, and status line.
+
+BBUI's Rust implementation uses reusable `EditorChrome`, `EditorRole`, and theme tokens for the menu bar, side rail, panel levels, property rows, split fields, segmented toggles, progress track, and muted panel grips. These are framework components rather than copied pixels in the example. [Page captures](README.md#complete-compositions), [open popup captures](README.md#control-and-editor-examples), and [panel animations](README.md#animation-clips) show the current renderer output.

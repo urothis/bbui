@@ -1,0 +1,25 @@
+[package]
+name = "bbui_text"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+bevy_app.workspace = true
+bevy_asset = "=0.20.1"
+bevy_ecs.workspace = true
+bevy_math = "=0.20.1"
+bevy_text = { version = "=0.20.1", default-features = false }
+bevy_time.workspace = true
+parley = "=0.11.1"
+unicode-segmentation = "=1.13.3"
+bbui_core = { path = "../bbui_core" }
+bbui_layout = { path = "../bbui_layout" }
+bbui_style = { path = "../bbui_style" }
+
+[dev-dependencies]
+bevy.workspace = true
+ttf-parser = "=0.25.1"
+
+[lints]
+workspace = true

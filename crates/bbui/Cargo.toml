@@ -1,0 +1,33 @@
+[package]
+name = "bbui"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+bevy = { workspace = true, features = ["mesh_picking"] }
+accesskit.workspace = true
+bbui_core = { path = "../bbui_core" }
+bbui_layout = { path = "../bbui_layout" }
+bbui_motion = { path = "../bbui_motion" }
+bbui_style = { path = "../bbui_style" }
+bbui_text = { path = "../bbui_text" }
+bbui_render = { path = "../bbui_render" }
+bbui_media = { path = "../bbui_media" }
+bbui_widgets = { path = "../bbui_widgets" }
+bbui_macros = { path = "../bbui_macros" }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+bevy = { workspace = true, default-features = false, features = ["web", "webgpu"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+image.workspace = true
+criterion.workspace = true
+stats_alloc.workspace = true
+
+[[bench]]
+name = "performance"
+harness = false
+
+[lints]
+workspace = true
