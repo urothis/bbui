@@ -1,6 +1,41 @@
 use super::*;
 
 #[test]
+pub(super) fn backward_node_graph_link_leaves_output_and_enters_input_outward() {
+    let mut graph = NodeGraph::default();
+    let source = graph.add_node(
+        "Source",
+        [300.0, 0.0],
+        vec![NodeSocket::output("Exit", SocketType::Any)],
+    );
+    let target = graph.add_node(
+        "Target",
+        [0.0, 100.0],
+        vec![NodeSocket::input("Enter", SocketType::Any)],
+    );
+    let link_id = graph.create_link(source, 0, target, 0).unwrap();
+    let link = *graph.links.iter().find(|link| link.id == link_id).unwrap();
+    let points = node_graph_link_points(
+        &graph,
+        UiRect::new(0.0, 0.0, 800.0, 600.0),
+        link,
+        &Theme::default().spacing.node_graph,
+    )
+    .unwrap();
+
+    assert!(points[3][0] < points[0][0]);
+    assert!(
+        points[1][0] > points[0][0],
+        "output tangent must point away from its node"
+    );
+    assert!(
+        points[2][0] < points[3][0],
+        "input tangent must point away from its node"
+    );
+    assert!(bezier_point(points, 0.1)[0] > points[0][0]);
+}
+
+#[test]
 pub(super) fn collection_keyboard_rename_and_history_restore_serialized_model() {
     let mut app = App::new();
     app.add_plugins(WidgetPlugin);

@@ -164,13 +164,7 @@ pub(super) fn node_graph_link_points_between(
     let p0 = node_graph_socket_position(graph, rect, from, link.from_socket, spacing)?;
     let p3 = node_graph_socket_position(graph, rect, to, link.to_socket, spacing)?;
     let tangent = ((p3[0] - p0[0]).abs() * 0.5).max(spacing.connection_tangent_min * graph.zoom);
-    let direction = if p3[0] >= p0[0] { 1.0 } else { -1.0 };
-    Some([
-        p0,
-        [p0[0] + tangent * direction, p0[1]],
-        [p3[0] - tangent * direction, p3[1]],
-        p3,
-    ])
+    Some([p0, [p0[0] + tangent, p0[1]], [p3[0] - tangent, p3[1]], p3])
 }
 
 pub(super) fn node_graph_bezier_bounds(points: [[f32; 2]; 4], padding: f32) -> Rect {
