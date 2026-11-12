@@ -511,6 +511,39 @@ fn bevy_keyboard_and_ime_messages_preserve_composition_text() {
 }
 
 #[test]
+fn bevy_backspace_does_not_insert_its_control_character() {
+    let mut app = test_app();
+    let scene = spawn_scene(&mut app);
+    app.update();
+    app.world_mut()
+        .resource_mut::<UiFocus>()
+        .state_mut(scene.window)
+        .focused = Some(scene.text_field);
+    app.world_mut()
+        .get_mut::<TextBuffer>(scene.text_field)
+        .unwrap()
+        .select_all();
+
+    app.world_mut().write_message(KeyboardInput {
+        key_code: KeyCode::Backspace,
+        logical_key: bevy::input::keyboard::Key::Backspace,
+        state: ButtonState::Pressed,
+        text: Some("\u{8}".into()),
+        repeat: false,
+        window: scene.window,
+    });
+    app.update();
+
+    assert_eq!(
+        app.world()
+            .get::<TextBuffer>(scene.text_field)
+            .unwrap()
+            .as_str(),
+        ""
+    );
+}
+
+#[test]
 fn crosshair_surface_respects_occlusion_and_keeps_a_drag_outside_the_mesh() {
     let mut app = test_app();
     let scene = spawn_world_scene(&mut app);

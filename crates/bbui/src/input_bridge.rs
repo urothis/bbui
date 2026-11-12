@@ -237,6 +237,10 @@ pub fn bridge_bevy_input(
             && !ime_state.active.contains(&event.window)
             && !composed_this_frame.contains(&event.window)
             && let Some(text) = &event.text
+            // Some platforms provide control characters as text for editing
+            // keys (for example, Backspace supplies U+0008). The key event
+            // already performs the edit; inserting that text leaves a glyph.
+            && !text.chars().any(char::is_control)
         {
             queue.push(UiInputEvent::Text {
                 window: routed_window,
