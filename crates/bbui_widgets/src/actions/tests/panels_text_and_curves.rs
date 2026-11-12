@@ -953,6 +953,60 @@ pub(super) fn node_graph_hover_does_not_recolor_its_grid_or_nodes() {
 }
 
 #[test]
+pub(super) fn node_graph_focus_does_not_recolor_its_grid_or_unselected_nodes() {
+    let theme = Theme::new(bbui_style::ThemeKind::Dark);
+    let mut world = World::new();
+    let entity = world
+        .spawn((
+            NodeGraph::default(),
+            UiRole::new("node-graph"),
+            UiComputedStyle {
+                properties: HashMap::from([(
+                    UiStyleProperty::BorderColor,
+                    UiStyleValue::Color(theme.focus),
+                )]),
+            },
+        ))
+        .id();
+    assert_eq!(styled_theme(&world, entity, &theme).border, theme.border);
+
+    let custom_border = Rgba(0.36, 0.12, 0.18, 1.0);
+    let mut inline = UiInlineStyle::default();
+    inline.set(
+        UiStyleProperty::BorderColor,
+        UiStyleValue::Color(custom_border),
+    );
+    world.entity_mut(entity).insert((
+        inline,
+        UiComputedStyle {
+            properties: HashMap::from([(
+                UiStyleProperty::BorderColor,
+                UiStyleValue::Color(custom_border),
+            )]),
+        },
+    ));
+    assert_eq!(styled_theme(&world, entity, &theme).border, custom_border);
+
+    world.entity_mut(entity).remove::<UiInlineStyle>();
+    let mut declaration = UiStyleDeclaration::default();
+    declaration.set(
+        UiStyleProperty::BorderColor,
+        UiStyleValue::Color(custom_border),
+    );
+    world.insert_resource(UiStyleSheet {
+        rules: vec![UiStyleRule {
+            selector: UiStyleSelector {
+                role: Some("node-graph".to_owned()),
+                ..Default::default()
+            },
+            declaration,
+            priority: 0,
+        }],
+    });
+    assert_eq!(styled_theme(&world, entity, &theme).border, custom_border);
+}
+
+#[test]
 pub(super) fn panel_pointer_click_toggles_only_from_header() {
     let mut app = App::new();
     app.add_plugins(WidgetPlugin);
