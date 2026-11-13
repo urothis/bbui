@@ -278,6 +278,7 @@ pub(super) fn paint_editor_widgets(paint: &mut PaintEntityContext<'_>) -> bool {
                     .cloned()
                     .unwrap_or_default(),
                 output_label_widths: HashMap::new(),
+                registry: world.get_resource::<NodeGraphTypeRegistry>(),
                 canvas_surface,
                 label: world
                     .get::<Label>(entity)
@@ -335,7 +336,10 @@ pub(super) fn paint_editor_widgets(paint: &mut PaintEntityContext<'_>) -> bool {
                 node.sockets
                     .iter()
                     .enumerate()
-                    .filter(|(_, socket)| socket.direction == SocketDirection::Output)
+                    .filter(|(_, socket)| {
+                        socket.direction == SocketDirection::Output
+                            && socket.placement == SocketPlacement::Auto
+                    })
                     .map(|(index, socket)| (index, socket.name.clone()))
                     .collect::<Vec<_>>(),
             )
@@ -364,6 +368,7 @@ pub(super) fn paint_editor_widgets(paint: &mut PaintEntityContext<'_>) -> bool {
                 graph,
                 state: NodeGraphEditorState::default(),
                 output_label_widths,
+                registry: world.get_resource::<NodeGraphTypeRegistry>(),
                 canvas_surface: owner_theme.color(ThemeColorToken::NodeGraphSurface),
                 label: "Node graph",
                 rect: owner_layout.rect,
@@ -426,6 +431,7 @@ pub(super) fn paint_editor_widgets(paint: &mut PaintEntityContext<'_>) -> bool {
                 graph,
                 state: NodeGraphEditorState::default(),
                 output_label_widths: HashMap::new(),
+                registry: world.get_resource::<NodeGraphTypeRegistry>(),
                 canvas_surface: owner_theme.color(ThemeColorToken::NodeGraphSurface),
                 label: "Node graph",
                 rect: owner_layout.rect,

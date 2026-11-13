@@ -5,13 +5,17 @@
 //! Ctrl+Z, and Ctrl+Y edit the graph.
 
 use bbui::prelude::*;
-use bbui::widgets::{NodeCategory, NodeSocket, SocketType, WidgetEventQueue, WidgetNode};
+use bbui::widgets::{
+    NodeCategory, NodeGraphTypeRegistry, NodeSocket, NodeTypeDefinition, SocketId, SocketType,
+    SocketTypeDefinition, WidgetEvent, WidgetEventQueue, WidgetNode, WidgetValue,
+};
 use bbui_layout::{Rect, UiEdges};
 use bbui_render::{ClipRect, Primitive, UiPaint};
+use bbui_style::Rgba;
 use bevy::prelude::*;
 use bevy::window::{PrimaryWindow, WindowResolution};
 
-fn sample_graph() -> Result<NodeGraph, String> {
+fn sample_graph(registry: &NodeGraphTypeRegistry) -> Result<NodeGraph, String> {
     let mut graph = NodeGraph::default();
     let noise = graph.add_node_with_category(
         "Noise Texture",
@@ -36,11 +40,11 @@ fn sample_graph() -> Result<NodeGraph, String> {
     );
     let mix = graph.add_node_with_category(
         "Mix Color",
-        [625.0, 230.0],
+        [625.0, 160.0],
         vec![
             NodeSocket::input("A", SocketType::Color),
             NodeSocket::input("B", SocketType::Color),
-            NodeSocket::input("Blend 0.5", SocketType::Float),
+            NodeSocket::input("Factor", SocketType::Float),
             NodeSocket::output("Color", SocketType::Color),
         ],
         NodeCategory::Converter,
@@ -51,14 +55,32 @@ fn sample_graph() -> Result<NodeGraph, String> {
         vec![NodeSocket::input("Surface", SocketType::Color)],
         NodeCategory::Output,
     );
+    let bottom_ports = graph.add_defined_node(
+        registry,
+        "example:bottom_mix",
+        "Bottom Mix",
+        [625.0, 285.0],
+        serde_json::json!({"clamp": true}),
+    )?;
+    if let Some(node) = graph.nodes.iter_mut().find(|node| node.id == bottom_ports) {
+        node.size = [235.0, 180.0];
+    }
+    let preview = graph.add_node_with_category(
+        "Preview",
+        [925.0, 430.0],
+        vec![NodeSocket::input("Color", SocketType::Color)],
+        NodeCategory::Output,
+    );
     for (from, from_socket, to, to_socket) in [
         (noise, 0, color, 0),
         (color, 1, mix, 0),
         (base_color, 0, mix, 1),
         (mix, 3, output, 0),
+        (base_color, 0, bottom_ports, 0),
+        (bottom_ports, 1, preview, 0),
     ] {
         graph
-            .create_link(from, from_socket, to, to_socket)
+            .create_link_with_registry(registry, from, from_socket, to, to_socket)
             .map_err(|error| format!("sample graph link: {error:?}"))?;
     }
     // Center the sample network inside the editor viewport while keeping its model coordinates
@@ -68,6 +90,64 @@ fn sample_graph() -> Result<NodeGraph, String> {
 }
 
 fn setup(world: &mut World) {
+    {
+        let mut registry = world.resource_mut::<NodeGraphTypeRegistry>();
+        let tint = SocketType::custom("example:tint");
+        if let Err(error) = registry.register(SocketTypeDefinition::new(
+            "example:tint",
+            Rgba::new(0.48, 0.72, 1.0, 1.0),
+        )) {
+            eprintln!("sample socket type: {error}");
+            return;
+        }
+        registry.allow_conversion(SocketType::Color, tint.clone());
+        registry.allow_conversion(tint.clone(), SocketType::Color);
+        if let Err(error) = registry.register_node(
+            NodeTypeDefinition::new(
+                "example:bottom_mix",
+                1,
+                NodeCategory::Converter,
+                vec![
+                    NodeSocket::input("Color in", tint.clone())
+                        .with_id(SocketId(1))
+                        .bottom_left(),
+                    NodeSocket::output("Color out", tint)
+                        .with_id(SocketId(2))
+                        .bottom_right(),
+                    NodeSocket::input("Factor", SocketType::Float)
+                        .with_id(SocketId(3))
+                        .with_value(serde_json::json!(0.5)),
+                ],
+                |node| {
+                    WidgetNode::column([
+                        WidgetNode::label("Custom node body"),
+                        WidgetNode::checkbox(
+                            "Clamp",
+                            node.data
+                                .get("clamp")
+                                .and_then(serde_json::Value::as_bool)
+                                .unwrap_or(false),
+                        ),
+                    ])
+                },
+            )
+            .with_event_handler(|_, event, node| {
+                let WidgetEvent::ValueChanged {
+                    after: WidgetValue::Bool(clamp),
+                    ..
+                } = event
+                else {
+                    return None;
+                };
+                let mut data = node.data.clone();
+                data["clamp"] = (*clamp).into();
+                Some(data)
+            }),
+        ) {
+            eprintln!("sample node type: {error}");
+            return;
+        }
+    }
     world.spawn(Camera2d);
     let Ok(window) = world
         .query_filtered::<Entity, With<PrimaryWindow>>()
@@ -99,7 +179,7 @@ fn setup(world: &mut World) {
         ))
         .id();
 
-    let Ok(sample_graph) = sample_graph() else {
+    let Ok(sample_graph) = sample_graph(world.resource::<NodeGraphTypeRegistry>()) else {
         eprintln!("failed to build the sample node graph");
         return;
     };

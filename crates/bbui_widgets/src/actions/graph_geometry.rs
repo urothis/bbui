@@ -46,19 +46,29 @@ pub(super) fn node_graph_node_rect(
     let input_count = node
         .sockets
         .iter()
-        .filter(|socket| socket.direction == SocketDirection::Input)
+        .filter(|socket| {
+            socket.placement == SocketPlacement::Auto && socket.direction == SocketDirection::Input
+        })
         .count();
     let output_count = node
         .sockets
         .iter()
-        .filter(|socket| socket.direction == SocketDirection::Output)
+        .filter(|socket| {
+            socket.placement == SocketPlacement::Auto && socket.direction == SocketDirection::Output
+        })
         .count();
     let socket_rows = input_count.max(output_count) as f32;
+    let bottom_row = node
+        .sockets
+        .iter()
+        .any(|socket| socket.placement != SocketPlacement::Auto);
     let graph_height = if node.collapsed {
         spacing.header_height
     } else {
         node.size[1].max(
-            spacing.header_height + socket_rows * spacing.socket_spacing + spacing.body_padding,
+            spacing.header_height
+                + (socket_rows + if bottom_row { 1.0 } else { 0.0 }) * spacing.socket_spacing
+                + spacing.body_padding,
         )
     };
     let origin = node_graph_screen_position(graph, rect, node.position, spacing);
@@ -77,29 +87,60 @@ pub(super) fn node_graph_socket_position(
     socket_index: usize,
     spacing: &bbui_style::ThemeNodeGraphSpacing,
 ) -> Option<[f32; 2]> {
+    let node_rect = node_graph_node_rect(graph, rect, node, spacing);
+    node_graph_socket_position_in_rect(graph.zoom, node, node_rect, socket_index, spacing)
+}
+
+fn node_graph_socket_position_in_rect(
+    zoom: f32,
+    node: &crate::NodeModel,
+    node_rect: Rect,
+    socket_index: usize,
+    spacing: &bbui_style::ThemeNodeGraphSpacing,
+) -> Option<[f32; 2]> {
     let socket = node.sockets.get(socket_index)?;
+    if socket.placement != SocketPlacement::Auto {
+        let count = node
+            .sockets
+            .iter()
+            .filter(|candidate| candidate.placement == socket.placement)
+            .count();
+        let index = node.sockets[..socket_index]
+            .iter()
+            .filter(|candidate| candidate.placement == socket.placement)
+            .count();
+        let fraction = (index as f32 + 0.5) / count as f32;
+        let x = match socket.placement {
+            SocketPlacement::BottomLeft => 0.1 + 0.3 * fraction,
+            SocketPlacement::BottomRight => 0.6 + 0.3 * fraction,
+            SocketPlacement::Auto => return None,
+        };
+        return Some([
+            node_rect.x + node_rect.width * x,
+            node_rect.y + node_rect.height,
+        ]);
+    }
     let row = node.sockets[..socket_index]
         .iter()
-        .filter(|previous| previous.direction == socket.direction)
+        .filter(|previous| {
+            previous.placement == SocketPlacement::Auto && previous.direction == socket.direction
+        })
         .count();
-    let node_rect = node_graph_node_rect(graph, rect, node, spacing);
     let y = if node.collapsed {
-        node_rect.y + spacing.header_height * graph.zoom * 0.5
+        node_rect.y + spacing.header_height * zoom * 0.5
     } else {
         node_rect.y
             + (spacing.header_height
                 + row as f32 * spacing.socket_spacing
                 + spacing.socket_spacing * 0.5)
-                * graph.zoom
+                * zoom
     };
-    Some([
-        if socket.direction == SocketDirection::Input {
-            node_rect.x
-        } else {
-            node_rect.x + node_rect.width
-        },
-        y,
-    ])
+    let x = if socket.direction == SocketDirection::Input {
+        node_rect.x
+    } else {
+        node_rect.x + node_rect.width
+    };
+    Some([x, y])
 }
 
 pub(super) fn cache_node_graph_socket_positions(
@@ -109,36 +150,12 @@ pub(super) fn cache_node_graph_socket_positions(
     spacing: &bbui_style::ThemeNodeGraphSpacing,
     positions: &mut HashMap<(NodeId, usize), [f32; 2]>,
 ) {
-    let mut input_row = 0usize;
-    let mut output_row = 0usize;
-    for (socket_index, socket) in node.sockets.iter().enumerate() {
-        let row = match socket.direction {
-            SocketDirection::Input => {
-                let row = input_row;
-                input_row = input_row.saturating_add(1);
-                row
-            }
-            SocketDirection::Output => {
-                let row = output_row;
-                output_row = output_row.saturating_add(1);
-                row
-            }
-        };
-        let y = if node.collapsed {
-            node_rect.y + spacing.header_height * zoom * 0.5
-        } else {
-            node_rect.y
-                + (spacing.header_height
-                    + row as f32 * spacing.socket_spacing
-                    + spacing.socket_spacing * 0.5)
-                    * zoom
-        };
-        let x = if socket.direction == SocketDirection::Input {
-            node_rect.x
-        } else {
-            node_rect.x + node_rect.width
-        };
-        positions.insert((node.id, socket_index), [x, y]);
+    for socket_index in 0..node.sockets.len() {
+        if let Some(position) =
+            node_graph_socket_position_in_rect(zoom, node, node_rect, socket_index, spacing)
+        {
+            positions.insert((node.id, socket_index), position);
+        }
     }
 }
 
@@ -163,8 +180,28 @@ pub(super) fn node_graph_link_points_between(
 ) -> Option<[[f32; 2]; 4]> {
     let p0 = node_graph_socket_position(graph, rect, from, link.from_socket, spacing)?;
     let p3 = node_graph_socket_position(graph, rect, to, link.to_socket, spacing)?;
-    let tangent = ((p3[0] - p0[0]).abs() * 0.5).max(spacing.connection_tangent_min * graph.zoom);
-    Some([p0, [p0[0] + tangent, p0[1]], [p3[0] - tangent, p3[1]], p3])
+    let from_bottom = from.sockets.get(link.from_socket)?.placement != SocketPlacement::Auto;
+    let to_bottom = to.sockets.get(link.to_socket)?.placement != SocketPlacement::Auto;
+    let span = if from_bottom || to_bottom {
+        ((p3[0] - p0[0]).powi(2) + (p3[1] - p0[1]).powi(2)).sqrt()
+    } else {
+        (p3[0] - p0[0]).abs()
+    };
+    let tangent = (span * 0.5).max(spacing.connection_tangent_min * graph.zoom);
+    let from_normal = if from_bottom { [0.0, 1.0] } else { [1.0, 0.0] };
+    let to_normal = if to_bottom { [0.0, 1.0] } else { [-1.0, 0.0] };
+    Some([
+        p0,
+        [
+            p0[0] + tangent * from_normal[0],
+            p0[1] + tangent * from_normal[1],
+        ],
+        [
+            p3[0] + tangent * to_normal[0],
+            p3[1] + tangent * to_normal[1],
+        ],
+        p3,
+    ])
 }
 
 pub(super) fn node_graph_bezier_bounds(points: [[f32; 2]; 4], padding: f32) -> Rect {

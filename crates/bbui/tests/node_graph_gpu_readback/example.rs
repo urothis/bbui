@@ -427,7 +427,7 @@ fn node_graph_example_composition_renders_dark_and_light_review_captures() {
                     (socket.node_id, socket.socket_index),
                     (
                         [rect.x + rect.width * 0.5, rect.y + rect.height * 0.5],
-                        socket.socket_type,
+                        socket.socket_type.clone(),
                     ),
                 )
             })
@@ -437,7 +437,7 @@ fn node_graph_example_composition_renders_dark_and_light_review_captures() {
                 &pixels,
                 [WIDTH, HEIGHT],
                 [rect.x + rect.width * 0.5, rect.y + rect.height * 0.5],
-                socket_color(&theme, socket.socket_type),
+                socket_color(&theme, &socket.socket_type),
                 6,
                 20,
                 "typed socket circle",
@@ -487,7 +487,7 @@ fn node_graph_example_composition_renders_dark_and_light_review_captures() {
                 &pixels,
                 [WIDTH, HEIGHT],
                 [(from[0] + to[0]) * 0.5, (from[1] + to[1]) * 0.5],
-                socket_color(&theme, *socket_type),
+                socket_color(&theme, socket_type),
                 14,
                 24,
                 "link color follows its socket type",

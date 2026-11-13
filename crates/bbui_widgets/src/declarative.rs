@@ -26,6 +26,8 @@ use crate::{
 mod model;
 pub(crate) use model::IntrinsicLabelText;
 pub use model::*;
+mod tree;
+pub use tree::*;
 
 mod mount;
 pub(crate) use mount::sync_intrinsic_label_text;
@@ -33,6 +35,14 @@ use mount::*;
 
 mod reconcile;
 use reconcile::*;
+
+pub(crate) fn remove_widget_subtree(world: &mut World, entity: Entity) {
+    remove_subtree(world, entity);
+}
+
+pub(crate) fn default_widget_layout(node: &WidgetNode) -> UiLayoutNode {
+    layout_for(&node.spec)
+}
 
 mod view;
 pub use view::*;

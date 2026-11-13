@@ -8,6 +8,8 @@ var<uniform> points_23: vec4<f32>;
 var<uniform> color: vec4<f32>;
 @group(1) @binding(3)
 var<uniform> style: vec4<f32>;
+@group(1) @binding(4)
+var<uniform> end_color: vec4<f32>;
 
 fn bezier_point(t: f32) -> vec2<f32> {
     let inverse = 1.0 - t;
@@ -21,14 +23,14 @@ fn bezier_point(t: f32) -> vec2<f32> {
         + p3 * (t * t * t);
 }
 
-fn segment_distance(point: vec2<f32>, start_point: vec2<f32>, end_point: vec2<f32>) -> f32 {
+fn segment_distance_and_fraction(point: vec2<f32>, start_point: vec2<f32>, end_point: vec2<f32>) -> vec2<f32> {
     let segment = end_point - start_point;
     let length_squared = dot(segment, segment);
     if length_squared <= 0.000001 {
-        return length(point - start_point);
+        return vec2<f32>(length(point - start_point), 0.0);
     }
     let t = clamp(dot(point - start_point, segment) / length_squared, 0.0, 1.0);
-    return length(point - (start_point + segment * t));
+    return vec2<f32>(length(point - (start_point + segment * t)), t);
 }
 
 fn srgb_channel_to_linear(channel: f32) -> f32 {
@@ -51,14 +53,21 @@ fn fragment(input: UiVertexOutput) -> @location(0) vec4<f32> {
     let point = input.uv * input.size;
     var previous = bezier_point(0.0);
     var distance = 1.0e20;
+    var curve_fraction = 0.0;
     for (var index = 1; index <= 32; index = index + 1) {
         let current = bezier_point(f32(index) / 32.0);
-        distance = min(distance, segment_distance(point, previous, current));
+        let nearest = segment_distance_and_fraction(point, previous, current);
+        if nearest.x < distance {
+            distance = nearest.x;
+            curve_fraction = (f32(index - 1) + nearest.y) / 32.0;
+        }
         previous = current;
     }
 
     let half_width = style.x * 0.5;
     let antialias = clamp(fwidth(distance), 0.65, 1.25);
     let coverage = 1.0 - smoothstep(half_width - antialias, half_width + antialias, distance);
-    return vec4<f32>(srgb_to_linear(color.rgb), color.a * coverage);
+    let rgb = mix(srgb_to_linear(color.rgb), srgb_to_linear(end_color.rgb), curve_fraction);
+    let alpha = mix(color.a, end_color.a, curve_fraction);
+    return vec4<f32>(rgb, alpha * coverage);
 }

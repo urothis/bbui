@@ -26,7 +26,7 @@ pub mod sliders;
 pub use actions::{
     ClipboardRequest, ClipboardRequestQueue, CursorCaptureRequest, CursorCaptureRequestQueue,
     WidgetAction, WidgetActionKind, WidgetActionQueue, WidgetEvent, WidgetEventQueue,
-    WidgetInteractionState,
+    WidgetInteractionState, WidgetValue,
 };
 pub use canvas::CanvasObjectControl;
 pub use canvas::{Canvas, CanvasObject, CanvasShape};
@@ -49,8 +49,9 @@ pub use editor_chrome::EditorChrome;
 pub use editors::{
     ColorChannel, ColorRamp, ColorStop, CurveEditor, CurvePoint, HsvColorEditor,
     HsvColorEditorState, HsvColorField, Interpolation, LinkEndpoint, NodeCategory, NodeGraph,
-    NodeGraphError, NodeId, NodeLink, NodeModel, NodeSocket, SocketDirection, SocketType,
-    hsv_to_rgb, parse_hex_color, rgb_to_hsv,
+    NodeGraphError, NodeGraphTypeRegistry, NodeId, NodeLink, NodeModel, NodeSocket,
+    NodeTypeDefinition, SocketDirection, SocketEditorDefinition, SocketId, SocketPlacement,
+    SocketType, SocketTypeDefinition, hsv_to_rgb, parse_hex_color, rgb_to_hsv,
 };
 pub use file_browser::{
     Breadcrumb, FileBrowser, FileBrowserError, FileEntry, FileSort, FileView, PreviewKind,
@@ -70,11 +71,13 @@ pub mod prelude {
         Button, Canvas, Checkbox, ColorRamp, CurveEditor, DataTable, Dropdown,
         DropdownOptionControl, DropdownPopupState, HsvColorEditor, HsvColorField, IconButton,
         IconButtonAsset, IconButtonAssetState, IconButtonAssetStatus, LinkEndpoint, ListModel,
-        MenuSession, NodeCategory, NodeGraph, NodeGraphNodeControl, NodeGraphSocketControl, NodeId,
-        NodeLink, NodeModel, NodeSocket, NumberField, NumericExpressionVariables, NumericField,
-        Panel, PanelGroup, PanelOrderStore, PreviewGrid, RadioGroup, RadioOptionControl, Slider,
-        SocketDirection, SocketType, TextArea, TextField, TreeModel, WidgetActionQueue,
-        WidgetEventQueue, WidgetPlugin, WidgetTree,
+        MenuSession, NodeCategory, NodeGraph, NodeGraphNodeControl, NodeGraphSocketControl,
+        NodeGraphTypeRegistry, NodeId, NodeLink, NodeModel, NodeSocket, NodeTypeDefinition,
+        NumberField, NumericExpressionVariables, NumericField, Panel, PanelGroup, PanelOrderStore,
+        PreviewGrid, RadioGroup, RadioOptionControl, Slider, SocketDirection,
+        SocketEditorDefinition, SocketId, SocketPlacement, SocketType, SocketTypeDefinition,
+        TextArea, TextField, TreeModel, WidgetActionQueue, WidgetEventQueue, WidgetPlugin,
+        WidgetTree,
     };
 }
 
@@ -87,6 +90,7 @@ impl Plugin for WidgetPlugin {
             app.add_plugins(bbui_motion::MotionPlugin);
         }
         actions::install_widget_systems(app);
+        app.init_resource::<NodeGraphTypeRegistry>();
         file_previews::install(app);
         icon_assets::install(app);
         panels::install_panel_persistence(app);

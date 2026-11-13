@@ -476,6 +476,7 @@ dependencies = [
  "bevy",
  "criterion",
  "image",
+ "serde_json",
  "stats_alloc",
 ]
 

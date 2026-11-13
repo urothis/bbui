@@ -318,6 +318,11 @@ pub struct UiLayoutRoot {
     pub dpi_scale: f32,
 }
 
+/// Keep a layout root's explicit viewport when a window resize synchronization runs.
+/// Useful for independent widget trees embedded in a larger surface.
+#[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct UiFixedLayoutRoot;
+
 impl UiLayoutRoot {
     pub fn new(window: Entity, viewport: Rect, dpi_scale: f32) -> Self {
         Self {

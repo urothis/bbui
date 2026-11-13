@@ -180,16 +180,18 @@ fn assert_text_stays_inside_node_header(
     }
 }
 
-fn socket_color(theme: &Theme, socket_type: SocketType) -> Rgba {
+fn socket_color(theme: &Theme, socket_type: &SocketType) -> Rgba {
     match socket_type {
-        SocketType::Float => theme.color(ThemeColorToken::NodeGraphFloatSocket),
+        SocketType::Integer | SocketType::Float => {
+            theme.color(ThemeColorToken::NodeGraphFloatSocket)
+        }
         SocketType::Color => theme.color(ThemeColorToken::NodeGraphColorSocket),
         SocketType::Boolean => theme.color(ThemeColorToken::NodeGraphBooleanSocket),
         SocketType::Vector2 | SocketType::Vector3 => {
             theme.color(ThemeColorToken::NodeGraphVectorSocket)
         }
         SocketType::Text => theme.color(ThemeColorToken::NodeGraphTextSocket),
-        SocketType::Any => theme.text_muted,
+        SocketType::Any | SocketType::Custom(_) => theme.text_muted,
     }
 }
 

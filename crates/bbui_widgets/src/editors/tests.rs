@@ -1,4 +1,175 @@
 use super::*;
+use std::collections::HashMap;
+
+#[test]
+fn custom_socket_types_require_registration_and_explicit_conversions() {
+    let temperature = SocketType::custom("demo:temperature");
+    let mut registry = NodeGraphTypeRegistry::default();
+    assert!(!registry.can_connect(&temperature, &SocketType::Float));
+    registry
+        .register(SocketTypeDefinition::new(
+            "demo:temperature",
+            Rgba(0.8, 0.4, 0.1, 1.0),
+        ))
+        .unwrap();
+    assert!(registry.can_connect(&temperature, &temperature));
+    assert!(!registry.can_connect(&temperature, &SocketType::Float));
+    registry.allow_conversion(temperature.clone(), SocketType::Float);
+    assert!(registry.can_connect(&temperature, &SocketType::Float));
+    assert!(!registry.can_connect(&SocketType::Float, &temperature));
+
+    let mut graph = NodeGraph::default();
+    let source = graph.add_node(
+        "Source",
+        [0.0, 0.0],
+        vec![NodeSocket::output("Heat", temperature)],
+    );
+    let target = graph.add_node(
+        "Target",
+        [240.0, 0.0],
+        vec![NodeSocket::input("Value", SocketType::Float)],
+    );
+    assert_eq!(
+        graph.create_link(source, 0, target, 0),
+        Err(NodeGraphError::IncompatibleSockets)
+    );
+    graph
+        .create_link_with_registry(&registry, source, 0, target, 0)
+        .unwrap();
+    assert_eq!(
+        NodeGraph::from_json(&graph.to_json().unwrap()).unwrap(),
+        graph
+    );
+}
+
+#[test]
+fn socket_ids_keep_links_attached_through_schema_reordering() {
+    let mut graph = NodeGraph::default();
+    let source = graph.add_node(
+        "Source",
+        [0.0, 0.0],
+        vec![
+            NodeSocket::output("First", SocketType::Float).with_id(SocketId(10)),
+            NodeSocket::output("Second", SocketType::Float).with_id(SocketId(20)),
+        ],
+    );
+    let target = graph.add_node(
+        "Target",
+        [240.0, 0.0],
+        vec![NodeSocket::input("In", SocketType::Float)],
+    );
+    graph.create_link(source, 1, target, 0).unwrap();
+    assert_eq!(graph.links[0].from_socket_id, SocketId(20));
+    graph
+        .replace_node_sockets(
+            source,
+            vec![
+                NodeSocket::output("Second renamed", SocketType::Float).with_id(SocketId(20)),
+                NodeSocket::output("First", SocketType::Float).with_id(SocketId(10)),
+            ],
+            &HashMap::new(),
+        )
+        .unwrap();
+    assert_eq!(graph.links[0].from_socket, 0);
+    assert_eq!(graph.links[0].from_socket_id, SocketId(20));
+    let before = graph.clone();
+    assert_eq!(
+        graph.replace_node_sockets(
+            source,
+            vec![NodeSocket::output("Different", SocketType::Float).with_id(SocketId(30))],
+            &HashMap::new()
+        ),
+        Err(NodeGraphError::MissingSocket)
+    );
+    assert_eq!(graph, before);
+    graph
+        .replace_node_sockets(
+            source,
+            vec![NodeSocket::output("Replacement", SocketType::Float).with_id(SocketId(30))],
+            &HashMap::from([(SocketId(20), SocketId(30))]),
+        )
+        .unwrap();
+    assert_eq!(graph.links[0].from_socket_id, SocketId(30));
+}
+
+#[test]
+fn registered_node_migration_preserves_links_and_unknown_types() {
+    let mut registry = NodeGraphTypeRegistry::default();
+    let definition = NodeTypeDefinition::new(
+        "demo:source",
+        2,
+        NodeCategory::Input,
+        vec![NodeSocket::output("New", SocketType::Float).with_id(SocketId(20))],
+        |_| crate::WidgetNode::label("body"),
+    )
+    .with_migration(1, |node| {
+        node.sockets = vec![NodeSocket::output("New", SocketType::Float).with_id(SocketId(20))];
+        node.data = serde_json::json!({"version": 2});
+        Ok(())
+    });
+    registry.register_node(definition).unwrap();
+    assert!(
+        registry
+            .register_node(NodeTypeDefinition::new(
+                "demo:invalid",
+                1,
+                NodeCategory::General,
+                vec![NodeSocket::input("no id", SocketType::Float)],
+                |_| crate::WidgetNode::label("body"),
+            ))
+            .is_err()
+    );
+
+    let mut graph = NodeGraph::default();
+    let source = graph.add_node(
+        "Source",
+        [0.0, 0.0],
+        vec![NodeSocket::output("Old", SocketType::Float).with_id(SocketId(20))],
+    );
+    graph.nodes[0].type_id = Some("demo:source".into());
+    graph.nodes[0].schema_version = 1;
+    let sink = graph.add_node(
+        "Sink",
+        [200.0, 0.0],
+        vec![NodeSocket::input("In", SocketType::Float)],
+    );
+    graph.nodes[1].type_id = Some("unknown:plugin".into());
+    graph.create_link(source, 0, sink, 0).unwrap();
+    let unknown = SocketType::custom("unknown:payload");
+    let missing_source = graph.add_node(
+        "Missing source",
+        [0.0, 150.0],
+        vec![NodeSocket::output("Out", unknown.clone())],
+    );
+    let missing_sink = graph.add_node(
+        "Missing sink",
+        [200.0, 150.0],
+        vec![NodeSocket::input("In", unknown)],
+    );
+    graph
+        .create_link(missing_source, 0, missing_sink, 0)
+        .unwrap();
+    graph.migrate_registered_nodes(&registry).unwrap();
+    assert_eq!(graph.nodes[0].schema_version, 2);
+    assert_eq!(graph.nodes[0].data["version"], 2);
+    assert_eq!(graph.links[0].from_socket_id, SocketId(20));
+    assert_eq!(graph.nodes[1].type_id.as_deref(), Some("unknown:plugin"));
+    assert_eq!(graph.links.len(), 2);
+
+    let before = graph.clone();
+    let mut newer = NodeGraphTypeRegistry::default();
+    newer
+        .register_node(NodeTypeDefinition::new(
+            "demo:source",
+            3,
+            NodeCategory::Input,
+            vec![NodeSocket::output("New", SocketType::Float).with_id(SocketId(20))],
+            |_| crate::WidgetNode::label("body"),
+        ))
+        .unwrap();
+    assert!(graph.migrate_registered_nodes(&newer).is_err());
+    assert_eq!(graph, before);
+}
 
 #[test]
 fn color_ramp_edits_stops_and_samples_interpolation() {
@@ -167,7 +338,7 @@ fn node_graph_serialization_preserves_identity_selection_view_and_connections() 
     let source = graph.add_node(
         "Source",
         [24.0, 40.0],
-        vec![NodeSocket::output("value", SocketType::Float)],
+        vec![NodeSocket::output("value", SocketType::Float).bottom_right()],
     );
     let sink = graph.add_node(
         "Sink",
@@ -183,6 +354,14 @@ fn node_graph_serialization_preserves_identity_selection_view_and_connections() 
     let restored = NodeGraph::from_json(&graph.to_json().unwrap()).unwrap();
     assert_eq!(restored, graph);
     assert_eq!(restored.links[0].id, link);
+
+    let mut legacy: serde_json::Value = serde_json::from_str(&graph.to_json().unwrap()).unwrap();
+    legacy["nodes"][0]["sockets"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("placement");
+    let legacy = NodeGraph::from_json(&legacy.to_string()).unwrap();
+    assert_eq!(legacy.nodes[0].sockets[0].placement, SocketPlacement::Auto);
 
     let mut invalid = graph.clone();
     invalid.nodes[0].position[0] = f32::NAN;

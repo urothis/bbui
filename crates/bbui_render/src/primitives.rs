@@ -88,6 +88,13 @@ pub enum Primitive {
         width: f32,
         color: Rgba,
     },
+    /// A cubic Bezier path shaded from its first endpoint color to its last.
+    BezierGradient {
+        points: [[f32; 2]; 4],
+        width: f32,
+        start_color: Rgba,
+        end_color: Rgba,
+    },
     /// GPU-shaded hue ring and saturation/value disk with hue and saturation selectors.
     HsvWheel {
         rect: ClipRect,
@@ -230,6 +237,17 @@ impl UiPaint {
                 points: *points,
                 width: *width,
                 color: *color,
+            },
+            Primitive::BezierGradient {
+                points,
+                width,
+                start_color,
+                end_color,
+            } => Primitive::BezierGradient {
+                points: *points,
+                width: *width,
+                start_color: *start_color,
+                end_color: *end_color,
             },
             Primitive::HsvWheel {
                 hue_degrees,
