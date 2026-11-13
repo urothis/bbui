@@ -305,7 +305,7 @@ pub(super) fn spawn_primitive(
                 ));
             }
         }
-        Primitive::Bezier { .. } => {
+        Primitive::Bezier { .. } | Primitive::BezierGradient { .. } => {
             if let (Some(values), Some(material)) =
                 (bezier_material_values(item), context.bezier_material)
             {

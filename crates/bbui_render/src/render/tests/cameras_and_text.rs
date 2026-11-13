@@ -1,6 +1,28 @@
 use super::*;
 
 #[test]
+pub(super) fn bezier_gradient_keeps_distinct_endpoint_uniforms() {
+    let item = DrawItem {
+        clip: ClipRect {
+            x: 0.0,
+            y: 0.0,
+            width: 200.0,
+            height: 100.0,
+        },
+        z: 0,
+        primitive: Primitive::BezierGradient {
+            points: [[10.0, 20.0], [60.0, 20.0], [140.0, 80.0], [190.0, 80.0]],
+            width: 3.0,
+            start_color: Rgba(0.1, 0.2, 0.9, 1.0),
+            end_color: Rgba(0.9, 0.5, 0.1, 0.8),
+        },
+    };
+    let values = bezier_material_values(&item).unwrap();
+    assert_eq!(values.color, Vec4::new(0.1, 0.2, 0.9, 1.0));
+    assert_eq!(values.end_color, Vec4::new(0.9, 0.5, 0.1, 0.8));
+}
+
+#[test]
 pub(super) fn camera_presence_changes_invalidate_only_layouts_for_that_window() {
     const ITEMS_PER_WINDOW: usize = 32;
     let mut app = App::new();

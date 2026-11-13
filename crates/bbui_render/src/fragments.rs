@@ -662,7 +662,9 @@ pub(super) fn sync_widget_fragments(
                 _ => None,
             };
             let bezier_values = match (&item.primitive, clip_group) {
-                (Primitive::Bezier { .. }, Some(_)) => bezier_material_values(&item),
+                (Primitive::Bezier { .. } | Primitive::BezierGradient { .. }, Some(_)) => {
+                    bezier_material_values(&item)
+                }
                 _ => None,
             };
             let unchanged = cache.items.get(&key).is_some_and(|cached| {

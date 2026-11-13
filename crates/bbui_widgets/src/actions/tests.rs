@@ -72,29 +72,63 @@ fn sample_table(rows: usize) -> DataTable {
     }
 }
 
-#[path = "tests/virtual_views_and_ramp_input.rs"]
-mod virtual_views_and_ramp_input;
-use virtual_views_and_ramp_input::*;
-#[path = "tests/color_and_menu_paint.rs"]
-mod color_and_menu_paint;
-#[path = "tests/gestures_and_initial_paint.rs"]
-mod gestures_and_initial_paint;
-#[path = "tests/incremental_paint_and_theme.rs"]
-mod incremental_paint_and_theme;
-#[path = "tests/paint_and_text_editing.rs"]
-mod paint_and_text_editing;
-use paint_and_text_editing::*;
-#[path = "tests/collections_tables_and_graph.rs"]
-mod collections_tables_and_graph;
-#[path = "tests/curves_and_collections.rs"]
-mod curves_and_collections;
+#[path = "tests/browser_input.rs"]
+mod browser_input;
+#[path = "tests/checkbox_gestures.rs"]
+mod checkbox_gestures;
+#[path = "tests/collection_browser_input.rs"]
+mod collection_browser_input;
+#[path = "tests/collections_tree_preview.rs"]
+mod collections_tree_preview;
+#[path = "tests/color_editor_paint.rs"]
+mod color_editor_paint;
+#[path = "tests/curve_input.rs"]
+mod curve_input;
+#[path = "tests/data_table_views.rs"]
+mod data_table_views;
+#[path = "tests/editor_semantic_paint.rs"]
+mod editor_semantic_paint;
 #[path = "tests/file_browser_history.rs"]
 mod file_browser_history;
-#[path = "tests/menus_and_panels.rs"]
-mod menus_and_panels;
-#[path = "tests/options_and_menu_keyboard.rs"]
-mod options_and_menu_keyboard;
-#[path = "tests/panels_text_and_curves.rs"]
-mod panels_text_and_curves;
-#[path = "tests/table_graph_and_browser.rs"]
-mod table_graph_and_browser;
+#[path = "tests/focus_text_history.rs"]
+mod focus_text_history;
+#[path = "tests/graph_input.rs"]
+mod graph_input;
+#[path = "tests/graph_views_and_ports.rs"]
+mod graph_views_and_ports;
+#[path = "tests/incremental_paint_cache.rs"]
+mod incremental_paint_cache;
+#[path = "tests/initial_paint.rs"]
+mod initial_paint;
+#[path = "tests/menu_keyboard.rs"]
+mod menu_keyboard;
+#[path = "tests/menu_tooltip_routing.rs"]
+mod menu_tooltip_routing;
+#[path = "tests/numeric_slider_gestures.rs"]
+mod numeric_slider_gestures;
+#[path = "tests/option_controls.rs"]
+mod option_controls;
+#[path = "tests/paint_controls.rs"]
+mod paint_controls;
+#[path = "tests/paint_order_and_theme.rs"]
+mod paint_order_and_theme;
+#[path = "tests/panel_gestures.rs"]
+mod panel_gestures;
+#[path = "tests/panel_runtime.rs"]
+mod panel_runtime;
+#[path = "tests/ramp_input.rs"]
+mod ramp_input;
+#[path = "tests/table_input.rs"]
+mod table_input;
+#[path = "tests/text_editing_history.rs"]
+mod text_editing_history;
+#[path = "tests/textarea_layout_input.rs"]
+mod textarea_layout_input;
+#[path = "tests/tooltip_menu_paint.rs"]
+mod tooltip_menu_paint;
+#[path = "tests/virtual_view_sync.rs"]
+mod virtual_view_sync;
+
+use ramp_input::*;
+use text_editing_history::*;
+use virtual_view_sync::*;

@@ -311,7 +311,7 @@ pub(super) fn reconcile_node(
     Ok(entity)
 }
 
-fn remove_subtree(world: &mut World, entity: Entity) {
+pub(super) fn remove_subtree(world: &mut World, entity: Entity) {
     let children = world
         .get::<UiChildren>(entity)
         .map_or_else(Vec::new, |children| children.0.clone());

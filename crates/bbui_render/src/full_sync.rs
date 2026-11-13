@@ -401,7 +401,9 @@ pub(super) fn sync_display_list_full(sync: RendererSync, changes: bbui_core::UiD
             _ => None,
         };
         let bezier_values = match (&item.primitive, clip_group_entity) {
-            (Primitive::Bezier { .. }, Some(_)) => bezier_material_values(item),
+            (Primitive::Bezier { .. } | Primitive::BezierGradient { .. }, Some(_)) => {
+                bezier_material_values(item)
+            }
             _ => None,
         };
         let item_font_size = uses_theme_font_size(&item.primitive).then_some(text_font_size);
@@ -445,6 +447,7 @@ pub(super) fn sync_display_list_full(sync: RendererSync, changes: bbui_core::UiD
                         material.points_01 = values.points_01;
                         material.points_23 = values.points_23;
                         material.color = values.color;
+                        material.end_color = values.end_color;
                         material.style = values.style;
                         true
                     })
@@ -537,6 +540,7 @@ pub(super) fn sync_display_list_full(sync: RendererSync, changes: bbui_core::UiD
                     points_01: values.points_01,
                     points_23: values.points_23,
                     color: values.color,
+                    end_color: values.end_color,
                     style: values.style,
                 })
             })

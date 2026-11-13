@@ -17,6 +17,9 @@ pub use curve::*;
 mod node_graph;
 pub use node_graph::*;
 
+mod node_graph_registry;
+pub use node_graph_registry::*;
+
 #[cfg(test)]
 #[path = "editors/tests.rs"]
 mod tests;

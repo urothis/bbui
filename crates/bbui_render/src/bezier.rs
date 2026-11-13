@@ -48,18 +48,27 @@ pub(super) fn hsv_wheel_parameters(primitive: &Primitive) -> Option<(f32, f32, f
 }
 
 pub(super) fn bezier_material_values(item: &DrawItem) -> Option<BezierMaterialValues> {
-    let Primitive::Bezier {
-        points,
-        width,
-        color,
-    } = &item.primitive
-    else {
-        return None;
+    let (points, width, color, end_color) = match &item.primitive {
+        Primitive::Bezier {
+            points,
+            width,
+            color,
+        } => (points, width, color, color),
+        Primitive::BezierGradient {
+            points,
+            width,
+            start_color,
+            end_color,
+        } => (points, width, start_color, end_color),
+        _ => return None,
     };
     if !points.iter().flatten().all(|value| value.is_finite())
         || !width.is_finite()
         || *width <= 0.0
         || ![color.0, color.1, color.2, color.3]
+            .iter()
+            .all(|channel| channel.is_finite())
+        || ![end_color.0, end_color.1, end_color.2, end_color.3]
             .iter()
             .all(|channel| channel.is_finite())
     {
@@ -107,6 +116,12 @@ pub(super) fn bezier_material_values(item: &DrawItem) -> Option<BezierMaterialVa
             color.1.clamp(0.0, 1.0),
             color.2.clamp(0.0, 1.0),
             color.3.clamp(0.0, 1.0),
+        ),
+        end_color: Vec4::new(
+            end_color.0.clamp(0.0, 1.0),
+            end_color.1.clamp(0.0, 1.0),
+            end_color.2.clamp(0.0, 1.0),
+            end_color.3.clamp(0.0, 1.0),
         ),
         style: Vec4::new(*width, 0.0, 0.0, 0.0),
     })

@@ -233,7 +233,9 @@ pub(super) fn spawn_incremental_item(
         })
     });
     let bezier_values = match (&item.primitive, clip_group_entity) {
-        (Primitive::Bezier { .. }, Some(_)) => bezier_material_values(item),
+        (Primitive::Bezier { .. } | Primitive::BezierGradient { .. }, Some(_)) => {
+            bezier_material_values(item)
+        }
         _ => None,
     };
     let bezier_material = bezier_values.and_then(|values| {
@@ -242,6 +244,7 @@ pub(super) fn spawn_incremental_item(
                 points_01: values.points_01,
                 points_23: values.points_23,
                 color: values.color,
+                end_color: values.end_color,
                 style: values.style,
             })
         })

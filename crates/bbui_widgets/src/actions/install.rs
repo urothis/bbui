@@ -15,6 +15,7 @@ pub fn install_widget_systems(app: &mut App) {
         .init_resource::<WidgetControlOptionItems>()
         .init_resource::<WidgetDataTableItems>()
         .init_resource::<WidgetNodeGraphItems>()
+        .init_resource::<WidgetNodeGraphBodies>()
         .init_resource::<WidgetNodeGraphDeltas>()
         .init_resource::<WidgetMenuPopupStamps>()
         .init_resource::<WidgetMenuPopupGate>()
@@ -40,6 +41,7 @@ pub fn install_widget_systems(app: &mut App) {
                 process_routed_widget_events,
                 advance_tooltips,
                 apply_widget_actions,
+                sync_node_graph_socket_values,
                 sync_panel_animations,
                 collect_panel_descendant_invalidations,
                 sync_panel_children,
@@ -50,6 +52,7 @@ pub fn install_widget_systems(app: &mut App) {
                 sync_collection_views,
                 sync_data_table_views,
                 sync_node_graph_views,
+                sync_node_graph_bodies,
                 sync_text_controls,
                 refresh_text_layouts_after_sync,
                 collect_widget_paint_changes,
