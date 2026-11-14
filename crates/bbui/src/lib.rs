@@ -7,6 +7,7 @@ mod clipboard_bridge;
 mod cursor_bridge;
 mod input_bridge;
 mod window_layout;
+pub mod workspace;
 mod world_input;
 pub use world_input::{UiCrosshairPointer, WorldPointerState, bridge_world_pointer};
 
@@ -27,6 +28,7 @@ impl Plugin for BbuiPlugin {
         app.add_plugins(bbui_media::BbuiMediaPlugin);
         app.add_plugins(bbui_render::BbuiRenderPlugin);
         app.add_plugins(bbui_widgets::WidgetPlugin);
+        app.add_plugins(workspace::WorkspacePlugin);
         app.init_resource::<accessibility::BbuiFocusMirror>();
         app.init_resource::<accessibility::AccessibilityLinkSelection>();
         app.init_resource::<accessibility::AccessibilitySyncCache>();
@@ -105,9 +107,10 @@ impl Plugin for BbuiPlugin {
 pub mod prelude {
     pub use crate::BbuiPlugin;
     pub use crate::bbui;
+    pub use crate::workspace::{Workspace, WorkspaceAppearance, WorkspacePlugin};
     pub use bbui_core::{
-        UiDirty, UiDirtyBatch, UiDirtyDomain, UiEnabled, UiFocus, UiFocusable, UiKey,
-        UiLivePoliteness, UiLiveRegion, UiNode, UiSystems, UiVisible,
+        UiDirty, UiDirtyBatch, UiDirtyDomain, UiEnabled, UiFocus, UiFocusable, UiHistoryDelegate,
+        UiKey, UiLivePoliteness, UiLiveRegion, UiNode, UiSystems, UiVisible,
     };
     pub use bbui_layout::{
         Rect, UiAlign, UiEdges, UiFlexDirection, UiFlexItem, UiIntrinsicSize, UiJustify,
@@ -135,11 +138,13 @@ pub mod prelude {
     pub use bbui_widgets::actions::{menu_progress_binding, panel_progress_binding};
     pub use bbui_widgets::icon_assets::IconButtonAssetCache;
     pub use bbui_widgets::{
-        Button, Canvas, Checkbox, ColorRamp, CurveEditor, DataTable, Dropdown, FileBrowser,
-        HsvColorEditor, HsvColorField, IconButton, IconButtonAsset, IconButtonAssetState,
-        IconButtonAssetStatus, Label, ListItem, ListModel, NodeCategory, NodeGraph, NumberField,
-        NumericExpressionVariables, NumericField, Panel, PanelExpansionStore, PanelGroup,
-        PanelOrderStore, PreviewGrid, PreviewGridItem, Progress, RadioGroup, Slider, TableColumn,
-        TableRow, TextArea, TextField, Tooltip, TreeModel, WidgetContainer, WidgetNode, WidgetTree,
+        Button, Canvas, Checkbox, ColorRamp, CurveEditor, DataTable, DockNode, Dropdown,
+        FileBrowser, HsvColorEditor, HsvColorField, IconButton, IconButtonAsset,
+        IconButtonAssetState, IconButtonAssetStatus, Label, ListItem, ListModel, NodeCategory,
+        NodeGraph, NumberField, NumericExpressionVariables, NumericField, PaneId, Panel,
+        PanelExpansionStore, PanelGroup, PanelOrderStore, PreviewGrid, PreviewGridItem, Progress,
+        RadioGroup, Slider, SplitAxis, TabGroup, TabGroupOptions, TableColumn, TableRow, TextArea,
+        TextField, Tooltip, TreeModel, WidgetContainer, WidgetNode, WidgetTree, WorkspaceLayout,
+        WorkspaceOperation, WorkspaceWindow,
     };
 }

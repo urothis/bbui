@@ -2,6 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use crate::workspace::WorkspaceSplitterSemantic;
 use accesskit::{
     Action, ActionData, Color as AccessibleColor, HasPopup, Live, Node, Rect as AccessibleRect,
     Role, SortDirection, Toggled,

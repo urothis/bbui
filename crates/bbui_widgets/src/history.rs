@@ -1,8 +1,8 @@
 //! Transaction adapter between widget events and BBUI's shared undo history.
 
 use bbui_core::{
-    TextSelection, UiEditContext, UiFocus, UiFocusable, UiHistory, UiHistoryRestore, UiKey,
-    UiParent, UiSelectionSnapshot, UiValue, is_interactable_in_window,
+    TextSelection, UiEditContext, UiFocus, UiFocusable, UiHistory, UiHistoryDelegate,
+    UiHistoryRestore, UiKey, UiParent, UiSelectionSnapshot, UiValue, is_interactable_in_window,
 };
 use bbui_text::{TextBuffer, UiExternalClipboard, UiReadOnly, UiTextBuffer, UiTextUndoFallback};
 use bevy_ecs::prelude::*;
@@ -46,6 +46,9 @@ pub fn process_widget_undo_shortcuts(world: &mut World) {
         if !(modifiers.control || modifiers.super_key)
             || !matches!(key, bbui_core::UiKeyCode::Z | bbui_core::UiKeyCode::Y)
         {
+            continue;
+        }
+        if world.get::<UiHistoryDelegate>(target).is_some() {
             continue;
         }
         let text_buffer = world.get::<TextBuffer>(target).is_some()
