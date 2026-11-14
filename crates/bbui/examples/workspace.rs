@@ -6,23 +6,8 @@ use bbui::prelude::*;
 use bevy::prelude::*;
 use bevy::window::WindowResolution;
 
-fn mount_page(world: &mut World, parent: Entity, heading: &str, detail: &str) {
-    let node = WidgetNode::column([
-        WidgetNode::label(heading).with_height(UiLength::Px(34.0)),
-        WidgetNode::label(detail),
-        WidgetNode::label("F1 Document · F2 Preview · F3 Inspector · F4 Console"),
-        WidgetNode::text_area(
-            "Notes",
-            "This editable text keeps its live state when its pane moves.",
-        )
-        .with_width(UiLength::Fill(1.0))
-        .with_height(UiLength::Px(120.0)),
-    ])
-    .with_width(UiLength::Fill(1.0))
-    .with_height(UiLength::Fill(1.0))
-    .with_padding(UiEdges::all(14.0));
-    let _ = WidgetTree::new(node).spawn(world, Some(parent));
-}
+#[path = "workspace/content.rs"]
+mod content;
 
 fn first_group(node: &DockNode) -> Option<&str> {
     match node {
@@ -64,6 +49,7 @@ fn reopen(keys: Res<ButtonInput<KeyCode>>, mut workspace: ResMut<Workspace>) {
 
 fn setup(world: &mut World) {
     world.spawn(Camera2d);
+    content::configure_theme(&mut world.resource_mut::<Theme>());
     let layout = WorkspaceLayout::new(DockNode::Split {
         id: "main-split".into(),
         axis: SplitAxis::Horizontal,
@@ -87,36 +73,16 @@ fn setup(world: &mut World) {
         return;
     };
     workspace.register_pane("document", "Document", |world, parent| {
-        mount_page(
-            world,
-            parent,
-            "Document",
-            "Drag this tab to a pane edge or out of the window.",
-        );
+        content::mount(world, parent, "document");
     });
     workspace.register_pane("preview", "Preview", |world, parent| {
-        mount_page(
-            world,
-            parent,
-            "Preview",
-            "Switch tabs to reveal this retained pane.",
-        );
+        content::mount(world, parent, "preview");
     });
     workspace.register_pane("inspector", "Inspector", |world, parent| {
-        mount_page(
-            world,
-            parent,
-            "Inspector",
-            "Drag a tab here to combine panes.",
-        );
+        content::mount(world, parent, "inspector");
     });
     workspace.register_pane("console", "Console", |world, parent| {
-        mount_page(
-            world,
-            parent,
-            "Console",
-            "Drag the split divider to resize its neighbors.",
-        );
+        content::mount(world, parent, "console");
     });
     world.insert_resource(workspace);
 }

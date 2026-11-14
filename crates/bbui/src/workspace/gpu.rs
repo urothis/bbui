@@ -2,7 +2,7 @@
 
 use super::*;
 use bbui_style::{Theme, ThemeKind};
-use bbui_widgets::{DockNode, SplitAxis, TabGroup, WidgetNode, WidgetTree};
+use bbui_widgets::{DockNode, SplitAxis, TabGroup};
 use bevy::{
     app::PluginGroup,
     camera::RenderTarget,
@@ -23,6 +23,9 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
+
+#[path = "../../examples/workspace/content.rs"]
+mod content;
 
 const WIDTH: u32 = 720;
 const HEIGHT: u32 = 480;
@@ -142,14 +145,7 @@ fn capture_workspace_dark_and_light() {
         ("console", "Console"),
     ] {
         workspace.register_pane(id, title, move |world, parent| {
-            let node = WidgetNode::column([
-                WidgetNode::label(title),
-                WidgetNode::label("Drag tabs to dock, split, or detach."),
-                WidgetNode::text_area("Notes", "Workspace content keeps its state while moving."),
-            ])
-            .with_width(bbui_layout::UiLength::Fill(1.0))
-            .with_height(bbui_layout::UiLength::Fill(1.0));
-            WidgetTree::new(node).spawn(world, Some(parent)).unwrap();
+            content::mount(world, parent, id)
         });
     }
     app.insert_resource(workspace);
@@ -157,7 +153,9 @@ fn capture_workspace_dark_and_light() {
     std::fs::create_dir_all(&output).unwrap();
     let mut dark_pixel = 0_u8;
     for (index, kind) in [ThemeKind::Dark, ThemeKind::Light].into_iter().enumerate() {
-        *app.world_mut().resource_mut::<Theme>() = Theme::new(kind);
+        let mut theme = Theme::new(kind);
+        content::configure_theme(&mut theme);
+        *app.world_mut().resource_mut::<Theme>() = theme;
         for _ in 0..4 {
             app.update();
         }
@@ -179,7 +177,9 @@ fn capture_workspace_dark_and_light() {
         };
         save_png(output.join(format!("workspace-preview-{name}.png")), &bytes);
     }
-    *app.world_mut().resource_mut::<Theme>() = Theme::new(ThemeKind::Dark);
+    let mut theme = Theme::new(ThemeKind::Dark);
+    content::configure_theme(&mut theme);
+    *app.world_mut().resource_mut::<Theme>() = theme;
     app.world_mut()
         .resource_mut::<input::WorkspaceGesture>()
         .hover = Some(input::DropLocation {

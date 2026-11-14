@@ -55,14 +55,14 @@ pub(crate) struct WorkspaceSplitterSemantic {
 impl Default for WorkspaceAppearance {
     fn default() -> Self {
         Self {
-            tab_height: 30.0,
+            tab_height: 28.0,
             tab_min_width: 84.0,
             tab_max_width: 160.0,
-            close_width: 24.0,
-            splitter_thickness: 10.0,
+            close_width: 20.0,
+            splitter_thickness: 7.0,
             group_background: ThemeColorToken::Background,
-            tab_background: ThemeColorToken::Surface,
-            active_tab_background: ThemeColorToken::SelectedSurface,
+            tab_background: ThemeColorToken::EditorChromeSurface,
+            active_tab_background: ThemeColorToken::Surface,
             border: ThemeColorToken::Border,
             drop_preview: ThemeColorToken::Accent,
             drop_preview_alpha: 0.28,

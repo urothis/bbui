@@ -11,6 +11,25 @@ pub(super) fn paint_misc_controls(paint: &mut PaintEntityContext<'_>) -> bool {
     let base_theme = paint.base_theme;
     let camera_items = &mut *paint.output;
 
+    if let Some(role) = world.get::<UiRole>(entity).map(|role| role.0.as_str())
+        && matches!(role, "workspace-tab-bar" | "workspace-tab-group")
+    {
+        camera_items.push(item(
+            clip,
+            z,
+            Primitive::RoundedRect {
+                rect: ClipRect::from(rect),
+                radius: 0.0,
+                color: if role == "workspace-tab-bar" {
+                    theme.surface
+                } else {
+                    theme.background
+                },
+            },
+        ));
+        return true;
+    }
+
     if world
         .get::<UiRole>(entity)
         .is_some_and(|role| matches!(role.0.as_str(), EditorRole::MENU_BAR | EditorRole::TAB_RAIL))
