@@ -5,6 +5,24 @@ pub(super) fn node_for(world: &World, entity: Entity) -> Option<Node> {
     if world.get::<UiTabList>(entity).is_some() {
         return Some(Node::new(Role::TabList));
     }
+    if let Some(splitter) = world.get::<WorkspaceSplitterSemantic>(entity) {
+        let mut node = Node::new(Role::Splitter);
+        node.set_label("Resize workspace split");
+        node.set_numeric_value(f64::from(splitter.fraction) * 100.0);
+        node.set_min_numeric_value(0.0);
+        node.set_max_numeric_value(100.0);
+        node.set_numeric_value_step(5.0);
+        node.set_orientation(if splitter.axis == bbui_widgets::SplitAxis::Horizontal {
+            accesskit::Orientation::Vertical
+        } else {
+            accesskit::Orientation::Horizontal
+        });
+        node.add_action(Action::Focus);
+        node.add_action(Action::Increment);
+        node.add_action(Action::Decrement);
+        node.add_action(Action::SetValue);
+        return Some(node);
+    }
     if let Some(option) = world.get::<RadioOptionControl>(entity) {
         let mut node = Node::new(Role::RadioButton);
         node.set_label(option.label.clone());
@@ -535,8 +553,16 @@ pub(super) fn node_for(world: &World, entity: Entity) -> Option<Node> {
         return Some(node);
     }
     if let Some(button) = world.get::<Button>(entity) {
-        let mut node = Node::new(Role::Button);
+        let tab = world.get::<UiTab>(entity);
+        let mut node = Node::new(if tab.is_some() {
+            Role::Tab
+        } else {
+            Role::Button
+        });
         node.set_label(button.label.clone());
+        if let Some(tab) = tab {
+            node.set_selected(tab.selected);
+        }
         if !button.enabled {
             node.set_disabled();
         }

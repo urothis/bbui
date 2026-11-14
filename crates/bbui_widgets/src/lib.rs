@@ -22,6 +22,7 @@ pub mod menus;
 pub mod numeric;
 pub mod panels;
 pub mod sliders;
+pub mod workspace;
 
 pub use actions::{
     ClipboardRequest, ClipboardRequestQueue, CursorCaptureRequest, CursorCaptureRequestQueue,
@@ -65,19 +66,24 @@ pub use numeric::{
 };
 pub use panels::{Panel, PanelExpansionStore, PanelGroup, PanelOrderStore, PanelState};
 pub use sliders::Slider;
+pub use workspace::{
+    DockNode, PaneId, SplitAxis, TabGroup, TabGroupOptions, WorkspaceError, WorkspaceLayout,
+    WorkspaceOperation, WorkspaceWindow,
+};
 
 pub mod prelude {
     pub use crate::{
-        Button, Canvas, Checkbox, ColorRamp, CurveEditor, DataTable, Dropdown,
+        Button, Canvas, Checkbox, ColorRamp, CurveEditor, DataTable, DockNode, Dropdown,
         DropdownOptionControl, DropdownPopupState, HsvColorEditor, HsvColorField, IconButton,
         IconButtonAsset, IconButtonAssetState, IconButtonAssetStatus, LinkEndpoint, ListModel,
         MenuSession, NodeCategory, NodeGraph, NodeGraphNodeControl, NodeGraphSocketControl,
         NodeGraphTypeRegistry, NodeId, NodeLink, NodeModel, NodeSocket, NodeTypeDefinition,
-        NumberField, NumericExpressionVariables, NumericField, Panel, PanelGroup, PanelOrderStore,
-        PreviewGrid, RadioGroup, RadioOptionControl, Slider, SocketDirection,
+        NumberField, NumericExpressionVariables, NumericField, PaneId, Panel, PanelGroup,
+        PanelOrderStore, PreviewGrid, RadioGroup, RadioOptionControl, Slider, SocketDirection,
         SocketEditorDefinition, SocketId, SocketPlacement, SocketType, SocketTypeDefinition,
-        TextArea, TextField, TreeModel, WidgetActionQueue, WidgetEventQueue, WidgetPlugin,
-        WidgetTree,
+        SplitAxis, TabGroup, TabGroupOptions, TextArea, TextField, TreeModel, WidgetActionQueue,
+        WidgetEventQueue, WidgetPlugin, WidgetTree, WorkspaceLayout, WorkspaceOperation,
+        WorkspaceWindow,
     };
 }
 

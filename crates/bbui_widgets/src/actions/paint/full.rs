@@ -116,8 +116,15 @@ pub(in crate::actions) fn collect_widget_paint_full(
         };
         let role = world.get::<UiRole>(entity).map(|role| role.0.as_str());
         let is_box = role == Some("box");
-        let editor_frame =
-            role.is_some_and(|role| matches!(role, EditorRole::MENU_BAR | EditorRole::TAB_RAIL));
+        let editor_frame = role.is_some_and(|role| {
+            matches!(
+                role,
+                EditorRole::MENU_BAR
+                    | EditorRole::TAB_RAIL
+                    | "workspace-tab-bar"
+                    | "workspace-tab-group"
+            )
+        });
         if !is_box
             && !editor_frame
             && world.get::<Checkbox>(entity).is_none()

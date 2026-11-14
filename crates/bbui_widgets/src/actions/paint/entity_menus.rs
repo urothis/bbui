@@ -12,7 +12,82 @@ pub(super) fn paint_buttons_and_menus(paint: &mut PaintEntityContext<'_>) -> boo
     let enabled = paint.enabled;
     let camera_items = &mut *paint.output;
 
-    if let Some(button) = world.get::<Button>(entity) {
+    if let Some(button) = world.get::<Button>(entity).cloned() {
+        let role = world.get::<UiRole>(entity).map(|role| role.0.clone());
+        if matches!(
+            role.as_deref(),
+            Some("workspace-tab" | "workspace-tab-close" | "workspace-splitter")
+        ) {
+            let splitter = role.as_deref() == Some("workspace-splitter");
+            let selected = world
+                .get::<bbui_core::UiTab>(entity)
+                .is_some_and(|tab| tab.selected);
+            let color = if splitter {
+                theme.border
+            } else if button.status == crate::WidgetStatus::Hovered {
+                theme.surface_hover
+            } else {
+                theme.surface
+            };
+            camera_items.push(item(
+                clip,
+                z,
+                Primitive::RoundedRect {
+                    rect: ClipRect::from(rect),
+                    radius: 0.0,
+                    color,
+                },
+            ));
+            if selected {
+                camera_items.push(item(
+                    clip,
+                    z.saturating_add(1),
+                    Primitive::RoundedRect {
+                        rect: ClipRect {
+                            x: rect.x,
+                            y: rect.y + rect.height - 2.0,
+                            width: rect.width,
+                            height: 2.0,
+                        },
+                        radius: 0.0,
+                        color: base_theme.accent,
+                    },
+                ));
+            }
+            if !splitter {
+                let text_x = if role.as_deref() == Some("workspace-tab-close") {
+                    rect.x
+                        + (rect.width - measured_text_width(world, entity, &button.label, theme))
+                            * 0.5
+                } else {
+                    rect.x + 9.0
+                };
+                camera_items.push(item(
+                    clip,
+                    z.saturating_add(2),
+                    styled_text_primitive_for_entity(
+                        world,
+                        entity,
+                        clip,
+                        TextPlacement {
+                            origin: [
+                                text_x,
+                                rect.y + (rect.height - theme.font_size * theme.line_height) * 0.5,
+                            ],
+                            text: button.label.clone(),
+                        },
+                        if role.as_deref() == Some("workspace-tab-close") {
+                            theme.text_muted
+                        } else {
+                            theme.text
+                        },
+                        theme,
+                        false,
+                    ),
+                ));
+            }
+            return true;
+        }
         let background = if !enabled || !button.enabled {
             theme.color(ThemeColorToken::ButtonDisabledSurface)
         } else if button.status == crate::WidgetStatus::Hovered {
