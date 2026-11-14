@@ -22,6 +22,10 @@ pub(crate) fn sync_workspace(world: &mut World) {
             let _ = workspace.apply(WorkspaceOperation::CloseWindow { window: id.clone() });
             workspace.windows.remove(&id);
             if let Some(camera) = workspace.cameras.remove(&id) {
+                world
+                    .resource_mut::<bbui_render::WindowCameraTargets>()
+                    .0
+                    .retain(|_, target| *target != camera);
                 world.despawn(camera);
             }
             workspace.dirty = true;
@@ -75,6 +79,10 @@ pub(crate) fn sync_workspace(world: &mut World) {
                 despawn_tree(world, root);
             }
             if let Some(camera) = workspace.cameras.remove(&id) {
+                world
+                    .resource_mut::<bbui_render::WindowCameraTargets>()
+                    .0
+                    .retain(|_, target| *target != camera);
                 world.despawn(camera);
             }
             if let Some(window) = workspace.windows.remove(&id)
@@ -105,6 +113,10 @@ pub(crate) fn sync_workspace(world: &mut World) {
                     .id();
                 workspace.windows.insert(entry.id.clone(), window);
                 workspace.cameras.insert(entry.id.clone(), camera);
+                world
+                    .resource_mut::<bbui_render::WindowCameraTargets>()
+                    .0
+                    .insert(window, camera);
                 window
             };
             let declaration = WidgetTree::new(chrome(&entry.root, &workspace));

@@ -53,6 +53,7 @@ pub(super) struct DropLocation {
 pub(super) struct WorkspaceGesture {
     active: Option<Gesture>,
     pub hover: Option<DropLocation>,
+    cross_window_hover: Option<Entity>,
     cross_window_events: Vec<UiRoutedEvent>,
 }
 

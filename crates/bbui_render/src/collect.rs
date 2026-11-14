@@ -13,6 +13,7 @@ pub(super) fn collect_render_changes(
     images: Res<ImageRegistry>,
     mut cache: ResMut<RenderCache>,
     target_camera: Res<RenderTargetCamera>,
+    window_cameras: Res<WindowCameraTargets>,
     theme: Option<Res<Theme>>,
     changed_paints: Query<Entity, Or<(Changed<UiLayoutResult>, Changed<UiPaint>)>>,
     changed_parents: Query<Entity, Changed<UiParent>>,
@@ -79,6 +80,7 @@ pub(super) fn collect_render_changes(
     let full_change = display_list.has_pending_full_change()
         || image_full_change
         || target_camera.is_changed()
+        || window_cameras.is_changed()
         || theme.as_ref().is_some_and(DetectChanges::is_changed);
     let changed_paint_entities: Vec<_> = changed_paints.iter().collect();
     let removed_paint_entities: Vec<_> = removed_paints.read().collect();

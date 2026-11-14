@@ -187,8 +187,14 @@ pub(in crate::actions) fn collect_widget_paint_full(
         let entity_theme = styled_theme(world, entity, &base_theme);
         let theme = &entity_theme;
         let camera = world
-            .get::<bevy_camera::Camera>(layout.window)
-            .map(|_| layout.window);
+            .get_resource::<bbui_render::WindowCameraTargets>()
+            .and_then(|targets| targets.0.get(&layout.window).copied())
+            .filter(|camera| world.get::<bevy_camera::Camera>(*camera).is_some())
+            .or_else(|| {
+                world
+                    .get::<bevy_camera::Camera>(layout.window)
+                    .map(|_| layout.window)
+            });
         let order = paint_ranks.get(&entity).copied().unwrap_or_default();
         let effective_enabled = is_interactable(world, entity);
         let checkbox_stamp = checkbox_static_stamp(world, entity, effective_enabled, order, camera);

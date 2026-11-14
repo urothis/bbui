@@ -72,13 +72,13 @@ pub(crate) fn process_workspace_input(world: &mut World) {
     if !world.contains_resource::<Workspace>() {
         return;
     }
-    let mut events = world
+    let routed = world
         .get_resource::<UiRoutedEvents>()
         .map(|routed| routed.events.clone())
         .unwrap_or_default();
-    let cross_events =
+    let mut events =
         std::mem::take(&mut world.resource_mut::<WorkspaceGesture>().cross_window_events);
-    events.extend(cross_events);
+    events.extend(routed);
     let grid_drop = events.iter().any(|event| matches!(event, UiRoutedEvent::PointerUpWithModifiers { modifiers, .. } if modifiers.shift));
     world.resource_scope(|world, mut gesture: Mut<WorkspaceGesture>| {
         world.resource_scope(|world, mut workspace: Mut<Workspace>| {
@@ -93,6 +93,7 @@ pub(crate) fn process_workspace_input(world: &mut World) {
                     } => {
                         gesture.active = pointer_down(world, &workspace, window, target, position);
                         gesture.hover = None;
+                        gesture.cross_window_hover = None;
                     }
                     UiRoutedEvent::PointerMoved {
                         window, position, ..
@@ -143,10 +144,15 @@ pub(crate) fn process_workspace_input(world: &mut World) {
                                     Gesture::Tab {
                                         pane,
                                         group,
+                                        start,
                                         dragging,
                                         ..
                                     } => {
-                                        if dragging {
+                                        if dragging
+                                            || (position[0] - start[0])
+                                                .hypot(position[1] - start[1])
+                                                > 6.0
+                                        {
                                             let destination =
                                                 drop_location(world, &workspace, window, position);
                                             commit_drop(
@@ -173,6 +179,7 @@ pub(crate) fn process_workspace_input(world: &mut World) {
                             }
                         }
                         gesture.hover = None;
+                        gesture.cross_window_hover = None;
                         workspace.dirty = true;
                     }
                     UiRoutedEvent::Click {

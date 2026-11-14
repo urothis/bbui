@@ -124,6 +124,7 @@ impl Plugin for BbuiRenderPlugin {
             .init_resource::<UiDirty>()
             .init_resource::<ImageRegistry>()
             .init_resource::<RenderTargetCamera>()
+            .init_resource::<WindowCameraTargets>()
             .init_resource::<RenderCache>()
             .init_resource::<RenderSyncStats>()
             .add_systems(
@@ -603,6 +604,7 @@ struct RendererSync<'w, 's> {
     bezier_batch_materials: Option<ResMut<'w, Assets<BezierBatchMaterial>>>,
     shader_buffers: Option<ResMut<'w, Assets<ShaderBuffer>>>,
     target_camera: Res<'w, RenderTargetCamera>,
+    window_cameras: Res<'w, WindowCameraTargets>,
     theme: Option<Res<'w, Theme>>,
     camera_query: bevy::ecs::system::Query<'w, 's, (), bevy::ecs::query::With<Camera>>,
     paint_query: bevy::ecs::system::Query<
@@ -618,6 +620,19 @@ struct RendererSync<'w, 's> {
     dirty: ResMut<'w, UiDirty>,
     cache: ResMut<'w, RenderCache>,
     stats: ResMut<'w, RenderSyncStats>,
+}
+
+fn camera_for_window(
+    window: Entity,
+    camera_query: &bevy::ecs::system::Query<'_, '_, (), bevy::ecs::query::With<Camera>>,
+    window_cameras: &WindowCameraTargets,
+) -> Option<Entity> {
+    window_cameras
+        .0
+        .get(&window)
+        .copied()
+        .filter(|camera| camera_query.get(*camera).is_ok())
+        .or_else(|| camera_query.get(window).ok().map(|_| window))
 }
 
 mod collect;

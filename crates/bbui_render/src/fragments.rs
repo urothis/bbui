@@ -15,6 +15,7 @@ pub(super) fn sync_widget_fragments(
         mut bezier_batch_materials,
         mut shader_buffers,
         target_camera,
+        window_cameras,
         theme,
         camera_query,
         paint_query,
@@ -329,7 +330,7 @@ pub(super) fn sync_widget_fragments(
                     RenderKey::LayoutEntity(entity) => match paint_query.get(entity) {
                         Ok((_, layout, paint)) => (
                             Some(paint.draw_item(&layout)),
-                            camera_query.get(layout.window).ok().map(|_| layout.window),
+                            camera_for_window(layout.window, &camera_query, &window_cameras),
                             None,
                             hierarchy_depth(entity, &cache.parents_by_entity),
                         ),
@@ -597,7 +598,7 @@ pub(super) fn sync_widget_fragments(
             if !cache.layout_order.contains_key(&entity) {
                 continue;
             }
-            let target = camera_query.get(layout.window).ok().map(|_| layout.window);
+            let target = camera_for_window(layout.window, &camera_query, &window_cameras);
             let item = paint.draw_item(&layout);
             update_layout_window(&mut cache, entity, Some(layout.window));
             if let Some(batch_key) = cache.bezier_batch_for_key.get(&key).copied() {

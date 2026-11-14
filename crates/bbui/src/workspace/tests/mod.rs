@@ -45,4 +45,5 @@ fn push_pointer(app: &mut App, event: UiInputEvent) {
 }
 
 mod lifecycle;
+mod native_windows;
 mod pointer;
