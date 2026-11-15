@@ -1,6 +1,6 @@
 # Visual gallery
 
-These are captures from runnable Bevy examples. Open the [contact sheet](example_gallery.png) to scan the set, then use the full-resolution links below for review. They are visual references; GPU readback tests use tolerant pixel and geometry assertions.
+These are captures from runnable Bevy examples and BBUI's offscreen GPU tests. Open the [contact sheet](example_gallery.png) to scan the set, then use the full-resolution links below for review. They are visual references; GPU readback tests use tolerant pixel and geometry assertions.
 
 ## Complete compositions
 
@@ -11,6 +11,7 @@ These are captures from runnable Bevy examples. Open the [contact sheet](example
 | Browser/WebGPU | [Properties editor](examples/properties_editor_web.png) · [Geometry Nodes](examples/properties_editor_web_nodes.png) |
 | Full showcase | [Showcase](examples/showcase.png) · [layout gallery](examples/layout_gallery.png) |
 | Live themes | [Theme gallery](examples/theme_gallery.png) |
+| Docking workspace | [Dark](examples/workspace-dark.png) · [Light](examples/workspace-light.png) · [edge drop preview](examples/workspace-drop.png) |
 
 The [properties editor source map](properties-editor-reference.md) records the composition and visual reference. The desktop and FPS examples use the same shared widget tree.
 
@@ -50,3 +51,5 @@ DISPLAY=:99 python3 scripts/capture_animations.py --profile release
 ```
 
 `capture_examples.py` requires `xwininfo` and `xwd`; input captures also require `libXtst`. Animated WebP capture requires Pillow with WebP support. The scripts live in [`scripts/`](../../scripts/) and accept individual example names for a targeted recapture.
+
+The workspace captures come from `cargo test -p bbui workspace::gpu::capture_workspace_dark_and_light --lib -- --ignored`; copy the resulting `target/workspace-preview-*.png` files into `docs/visuals/examples/` after visual review.

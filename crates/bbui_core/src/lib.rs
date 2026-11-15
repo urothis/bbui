@@ -117,6 +117,11 @@ pub struct UiTab {
     pub selected: bool,
 }
 
+/// Lets a focused composite control handle Ctrl+Z/Y through its own transaction history.
+#[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[component(summary_tick)]
+pub struct UiHistoryDelegate;
+
 impl UiLiveRegion {
     pub const fn polite() -> Self {
         Self {

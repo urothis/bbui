@@ -222,6 +222,11 @@ pub struct UiInputQueue {
 }
 
 impl UiInputQueue {
+    /// Inspect pending platform input before routing consumes this frame's queue.
+    pub fn iter(&self) -> impl Iterator<Item = &UiInputEvent> {
+        self.events.iter()
+    }
+
     pub fn push(&mut self, event: UiInputEvent) {
         self.events.push_back(event);
     }

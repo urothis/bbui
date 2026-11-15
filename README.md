@@ -16,7 +16,7 @@ Panels, menus, fields, graphs, and tables are real widgets with pointer, keyboar
 | --- | --- | --- |
 | ![Transform panel collapsing while the next panel moves with it](docs/visuals/animations/properties_transform.webp) | ![Linear and eased keyframe tracks](docs/visuals/animations/keyframe_curves.webp) | ![Dark and Light themes switching at runtime](docs/visuals/animations/theme_switch.webp) |
 
-[All example screenshots and animations](docs/visuals/README.md) · [Controls](docs/visuals/examples/controls.png) · [Menus](docs/visuals/examples/menus.png) · [Accessibility](docs/accessibility.md) · [Performance](docs/performance.md)
+[All example screenshots and animations](docs/visuals/README.md) · [Workspace](docs/workspace.md) · [Controls](docs/visuals/examples/controls.png) · [Menus](docs/visuals/examples/menus.png) · [Accessibility](docs/accessibility.md) · [Performance](docs/performance.md)
 
 ## Try it
 
@@ -26,6 +26,7 @@ Requires Rust 1.99 and Bevy 0.20.1. From this repository:
 cargo run -p bbui --example properties_editor
 cargo run -p bbui --example fps_world_ui
 cargo run -p bbui --example theme_gallery
+cargo run -p bbui --example workspace
 ```
 
 For your own app, start with [installing BBUI and mounting a widget tree](docs/getting-started.md). The [widget guide](docs/widgets.md) covers events and keyed updates; the [world-space guide](docs/world-space.md) covers the camera, texture, and mesh setup.

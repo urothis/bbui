@@ -73,6 +73,7 @@ jobs:
           --test icon_asset_gpu_readback
           --test numeric_expression_error_gpu
           --test boxed_controls_gpu
+          -- --test-threads=1
       - name: Upload NodeGraph GPU review captures
         if: always()
         uses: actions/upload-artifact@v4
