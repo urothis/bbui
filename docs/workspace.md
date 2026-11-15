@@ -39,3 +39,7 @@ All edits use `WorkspaceOperation` and the same validation path, including progr
 After a successful layout change, BBUI emits a Bevy `WorkspaceEvent` message. Read it with `MessageReader<WorkspaceEvent>` in an application system. Its variants report tab selection, pane opening and closing, reordering, moving, docking, grid placement, split resizing, group option changes, and layout restoration. Applications can react to these completed changes and read `workspace.layout()` for the current arrangement. Cancelled, rejected, and unchanged edits emit no change event.
 
 Serialize `workspace.layout()` with Serde to persist the arrangement. Use `Workspace::restore` for a saved `WorkspaceLayout`; it validates the version and IDs before replacing the live layout.
+
+## Performance measurements
+
+Run `cargo bench -p bbui --bench performance --locked -- workspace` to measure workspace layout operations and headless Bevy updates. The cases cover idle frames, tab selection, pane moves, committed splitter resizing, pointer-driven splitter dragging, and chrome refresh at 2, 8, and 32 groups with three panes each. These are CPU measurements; they do not include GPU rendering or application pane content.
