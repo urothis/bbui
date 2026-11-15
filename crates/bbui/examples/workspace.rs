@@ -1,5 +1,5 @@
 //! Run with `cargo run -p bbui --example workspace`.
-//! Drag a tab to another group, to a group edge to split, or outside to detach.
+//! Drag a tab to another group or to a group edge to split.
 //! Drag a divider to resize. Close buttons unmount panes; F1–F4 reopen them.
 
 use bbui::prelude::*;
@@ -30,14 +30,7 @@ fn reopen(keys: Res<ButtonInput<KeyCode>>, mut workspace: ResMut<Workspace>) {
     let Some(pane) = pane else {
         return;
     };
-    let Some(group) = workspace
-        .layout()
-        .windows
-        .iter()
-        .find(|window| window.id == "main")
-        .and_then(|window| first_group(&window.root))
-        .map(str::to_owned)
-    else {
+    let Some(group) = first_group(&workspace.layout().root).map(str::to_owned) else {
         return;
     };
     let _ = workspace.apply(WorkspaceOperation::Open {

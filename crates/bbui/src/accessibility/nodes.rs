@@ -563,6 +563,9 @@ pub(super) fn node_for(world: &World, entity: Entity) -> Option<Node> {
         if let Some(tab) = tab {
             node.set_selected(tab.selected);
         }
+        if let Some(dock) = world.get::<WorkspaceDockSemantic>(entity) {
+            node.set_description(dock.0.clone());
+        }
         if !button.enabled {
             node.set_disabled();
         }

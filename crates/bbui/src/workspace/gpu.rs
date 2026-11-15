@@ -137,7 +137,7 @@ fn capture_workspace_dark_and_light() {
         ],
     });
     let mut workspace = Workspace::new(layout).unwrap();
-    workspace.windows.insert("main".into(), camera);
+    workspace.window = Some(camera);
     for (id, title) in [
         ("document", "Document"),
         ("preview", "Preview"),

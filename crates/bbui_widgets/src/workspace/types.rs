@@ -34,11 +34,6 @@ pub enum WorkspaceOperation {
         group: String,
         columns: usize,
     },
-    Detach {
-        pane: PaneId,
-        window: String,
-        group: String,
-    },
     Resize {
         split: String,
         shares: Vec<f32>,
@@ -47,16 +42,72 @@ pub enum WorkspaceOperation {
         group: String,
         options: TabGroupOptions,
     },
-    CloseWindow {
-        window: String,
+}
+
+/// A completed workspace change. BBUI has already updated its layout.
+#[derive(Debug, Clone, PartialEq)]
+pub enum WorkspaceEvent {
+    PaneOpened {
+        pane: PaneId,
+        group: String,
+        index: usize,
     },
+    TabSelected {
+        pane: PaneId,
+        group: String,
+    },
+    PaneClosed {
+        pane: PaneId,
+        group: String,
+    },
+    TabReordered {
+        pane: PaneId,
+        group: String,
+        index: usize,
+    },
+    PaneMoved {
+        pane: PaneId,
+        from: String,
+        to: String,
+        index: usize,
+    },
+    PaneDocked {
+        pane: PaneId,
+        target: String,
+        group: String,
+        axis: SplitAxis,
+        after: bool,
+    },
+    PaneGridded {
+        pane: PaneId,
+        target: String,
+        group: String,
+        columns: usize,
+    },
+    SplitResized {
+        split: String,
+        shares: Vec<f32>,
+    },
+    GroupOptionsChanged {
+        group: String,
+        options: TabGroupOptions,
+    },
+    LayoutRestored {
+        source: WorkspaceRestoreSource,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkspaceRestoreSource {
+    Restore,
+    Undo,
+    Redo,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkspaceError {
     UnknownPane,
     UnknownGroup,
-    UnknownWindow,
     DropRejected,
     DuplicateOrEmptyId,
     InvalidSelection,
@@ -69,7 +120,6 @@ impl std::fmt::Display for WorkspaceError {
         formatter.write_str(match self {
             Self::UnknownPane => "unknown pane",
             Self::UnknownGroup => "unknown tab group or split",
-            Self::UnknownWindow => "unknown workspace window",
             Self::DropRejected => "workspace operation rejected",
             Self::DuplicateOrEmptyId => "duplicate or empty workspace identifier",
             Self::InvalidSelection => "active tab is missing from its group",

@@ -1,5 +1,17 @@
 use super::*;
 
+fn workspace_chrome(world: &World, entity: Entity) -> bool {
+    world.get::<UiRole>(entity).is_some_and(|role| {
+        matches!(
+            role.0.as_str(),
+            "workspace-tab"
+                | "workspace-tab-close"
+                | "workspace-pane-handle"
+                | "workspace-splitter"
+        )
+    })
+}
+
 pub fn process_routed_widget_events(world: &mut World) {
     let events = world
         .get_resource::<UiRoutedEvents>()
@@ -315,6 +327,9 @@ pub fn process_routed_widget_events(world: &mut World) {
                 click_count,
                 position,
             } => {
+                if workspace_chrome(world, target) {
+                    continue;
+                }
                 if suppress_checkbox_clicks.remove(&target) {
                     continue;
                 }
@@ -422,6 +437,9 @@ pub fn process_routed_widget_events(world: &mut World) {
                 repeat: _,
                 modifiers,
             } => {
+                if workspace_chrome(world, target) {
+                    continue;
+                }
                 world
                     .resource_mut::<WidgetInteractionState>()
                     .modifiers

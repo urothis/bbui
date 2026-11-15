@@ -144,7 +144,7 @@ pub mod prelude {
         NodeGraph, NumberField, NumericExpressionVariables, NumericField, PaneId, Panel,
         PanelExpansionStore, PanelGroup, PanelOrderStore, PreviewGrid, PreviewGridItem, Progress,
         RadioGroup, Slider, SplitAxis, TabGroup, TabGroupOptions, TableColumn, TableRow, TextArea,
-        TextField, Tooltip, TreeModel, WidgetContainer, WidgetNode, WidgetTree, WorkspaceLayout,
-        WorkspaceOperation, WorkspaceWindow,
+        TextField, Tooltip, TreeModel, WidgetContainer, WidgetNode, WidgetTree, WorkspaceEvent,
+        WorkspaceLayout, WorkspaceOperation, WorkspaceRestoreSource,
     };
 }

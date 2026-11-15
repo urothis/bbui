@@ -1,73 +1,5 @@
 use super::*;
 
-struct DropRequest {
-    pane: PaneId,
-    source: String,
-    destination: Option<DropLocation>,
-    window: Entity,
-    position: [f32; 2],
-    grid: bool,
-}
-
-fn commit_drop(world: &World, workspace: &mut Workspace, request: DropRequest) {
-    let operation = match request.destination {
-        Some(location) if location.edge == DropEdge::Center && request.grid => {
-            WorkspaceOperation::Grid {
-                pane: request.pane,
-                target: location.group,
-                id: workspace.next_key("grid"),
-                group: workspace.next_key("group"),
-                columns: 2,
-            }
-        }
-        Some(location) if location.edge == DropEdge::Center => {
-            let index = insertion_index(
-                world,
-                workspace,
-                request.window,
-                request.position,
-                &location.group,
-            );
-            WorkspaceOperation::Move {
-                pane: request.pane,
-                group: location.group,
-                index,
-            }
-        }
-        Some(location) => {
-            if location.group == request.source
-                && workspace
-                    .layout
-                    .group(&request.source)
-                    .is_some_and(|group| group.panes.len() == 1)
-            {
-                return;
-            }
-            let (axis, after) = match location.edge {
-                DropEdge::Left => (SplitAxis::Horizontal, false),
-                DropEdge::Right => (SplitAxis::Horizontal, true),
-                DropEdge::Top => (SplitAxis::Vertical, false),
-                DropEdge::Bottom => (SplitAxis::Vertical, true),
-                DropEdge::Center => return,
-            };
-            WorkspaceOperation::Split {
-                pane: request.pane,
-                target: location.group,
-                id: workspace.next_key("split"),
-                group: workspace.next_key("group"),
-                axis,
-                after,
-            }
-        }
-        None => WorkspaceOperation::Detach {
-            pane: request.pane,
-            window: workspace.next_key("window"),
-            group: workspace.next_key("group"),
-        },
-    };
-    let _ = workspace.apply(operation);
-}
-
 pub(crate) fn process_workspace_input(world: &mut World) {
     if !world.contains_resource::<Workspace>() {
         return;
@@ -76,9 +8,7 @@ pub(crate) fn process_workspace_input(world: &mut World) {
         .get_resource::<UiRoutedEvents>()
         .map(|routed| routed.events.clone())
         .unwrap_or_default();
-    let mut events =
-        std::mem::take(&mut world.resource_mut::<WorkspaceGesture>().cross_window_events);
-    events.extend(routed);
+    let events = routed;
     let grid_drop = events.iter().any(|event| matches!(event, UiRoutedEvent::PointerUpWithModifiers { modifiers, .. } if modifiers.shift));
     world.resource_scope(|world, mut gesture: Mut<WorkspaceGesture>| {
         world.resource_scope(|world, mut workspace: Mut<Workspace>| {
@@ -91,9 +21,11 @@ pub(crate) fn process_workspace_input(world: &mut World) {
                         position,
                         ..
                     } => {
+                        if gesture.keyboard.is_some() {
+                            keyboard::cancel(world, &mut workspace, &mut gesture);
+                        }
                         gesture.active = pointer_down(world, &workspace, window, target, position);
                         gesture.hover = None;
-                        gesture.cross_window_hover = None;
                     }
                     UiRoutedEvent::PointerMoved {
                         window, position, ..
@@ -179,7 +111,6 @@ pub(crate) fn process_workspace_input(world: &mut World) {
                             }
                         }
                         gesture.hover = None;
-                        gesture.cross_window_hover = None;
                         workspace.dirty = true;
                     }
                     UiRoutedEvent::Click {
@@ -200,6 +131,9 @@ pub(crate) fn process_workspace_input(world: &mut World) {
                         ..
                     } => {
                         let _ = target;
+                        if gesture.keyboard.is_some() {
+                            keyboard::cancel(world, &mut workspace, &mut gesture);
+                        }
                         if let Some(Gesture::Splitter(splitter)) = gesture.active.take() {
                             workspace.cancel_preview(splitter.before);
                         }
@@ -226,65 +160,84 @@ pub(crate) fn process_workspace_input(world: &mut World) {
                         target,
                         key,
                         pressed: true,
+                        modifiers,
                         ..
-                    } => match workspace.targets.get(&target).cloned() {
-                        Some(WorkspaceTarget::Tab { group, pane }) => {
-                            if matches!(key, UiKeyCode::Enter | UiKeyCode::Space) {
-                                let _ = workspace.apply(WorkspaceOperation::Select { group, pane });
-                            } else if matches!(key, UiKeyCode::Delete) {
-                                let _ = workspace.apply(WorkspaceOperation::Close { pane });
-                            } else if matches!(key, UiKeyCode::ArrowLeft | UiKeyCode::ArrowRight)
-                                && let Some(group_view) = workspace.layout.group(&group)
-                            {
-                                let current = group_view
-                                    .panes
-                                    .iter()
-                                    .position(|id| id == &pane)
-                                    .unwrap_or(0);
-                                let next = if key == UiKeyCode::ArrowLeft {
-                                    current.saturating_sub(1)
-                                } else {
-                                    (current + 1).min(group_view.panes.len() - 1)
-                                };
-                                let pane = group_view.panes[next].clone();
-                                let _ = workspace.apply(WorkspaceOperation::Select { group, pane });
-                            }
+                    } => {
+                        if keyboard::handle(
+                            world,
+                            &mut workspace,
+                            &mut gesture,
+                            target,
+                            key,
+                            modifiers,
+                        ) {
+                            continue;
                         }
-                        Some(WorkspaceTarget::Close { pane })
-                            if matches!(key, UiKeyCode::Enter | UiKeyCode::Space) =>
-                        {
-                            let _ = workspace.apply(WorkspaceOperation::Close { pane });
-                        }
-                        Some(WorkspaceTarget::Splitter { id, index })
-                            if matches!(
-                                key,
-                                UiKeyCode::ArrowLeft
-                                    | UiKeyCode::ArrowRight
-                                    | UiKeyCode::ArrowUp
-                                    | UiKeyCode::ArrowDown
-                            ) =>
-                        {
-                            if let Some((_, shares)) = find_split(&workspace.layout, &id)
-                                && index + 1 < shares.len()
-                            {
-                                let mut next = shares.to_vec();
-                                let signed: f32 =
-                                    if matches!(key, UiKeyCode::ArrowLeft | UiKeyCode::ArrowUp) {
-                                        -0.1
+                        match workspace.targets.get(&target).cloned() {
+                            Some(WorkspaceTarget::Tab { group, pane }) => {
+                                if matches!(key, UiKeyCode::Enter | UiKeyCode::Space) {
+                                    let _ =
+                                        workspace.apply(WorkspaceOperation::Select { group, pane });
+                                } else if matches!(key, UiKeyCode::Delete) {
+                                    let _ = workspace.apply(WorkspaceOperation::Close { pane });
+                                } else if matches!(
+                                    key,
+                                    UiKeyCode::ArrowLeft | UiKeyCode::ArrowRight
+                                ) && let Some(group_view) = workspace.layout.group(&group)
+                                {
+                                    let current = group_view
+                                        .panes
+                                        .iter()
+                                        .position(|id| id == &pane)
+                                        .unwrap_or(0);
+                                    let next = if key == UiKeyCode::ArrowLeft {
+                                        current.saturating_sub(1)
                                     } else {
-                                        0.1
+                                        (current + 1).min(group_view.panes.len() - 1)
                                     };
-                                let change = signed.clamp(0.1 - next[index], next[index + 1] - 0.1);
-                                next[index] += change;
-                                next[index + 1] -= change;
-                                let _ = workspace.apply(WorkspaceOperation::Resize {
-                                    split: id,
-                                    shares: next,
-                                });
+                                    let pane = group_view.panes[next].clone();
+                                    let _ =
+                                        workspace.apply(WorkspaceOperation::Select { group, pane });
+                                }
                             }
+                            Some(WorkspaceTarget::Close { pane })
+                                if matches!(key, UiKeyCode::Enter | UiKeyCode::Space) =>
+                            {
+                                let _ = workspace.apply(WorkspaceOperation::Close { pane });
+                            }
+                            Some(WorkspaceTarget::Splitter { id, index })
+                                if matches!(
+                                    key,
+                                    UiKeyCode::ArrowLeft
+                                        | UiKeyCode::ArrowRight
+                                        | UiKeyCode::ArrowUp
+                                        | UiKeyCode::ArrowDown
+                                ) =>
+                            {
+                                if let Some((_, shares)) = find_split(&workspace.layout, &id)
+                                    && index + 1 < shares.len()
+                                {
+                                    let mut next = shares.to_vec();
+                                    let signed: f32 =
+                                        if matches!(key, UiKeyCode::ArrowLeft | UiKeyCode::ArrowUp)
+                                        {
+                                            -0.1
+                                        } else {
+                                            0.1
+                                        };
+                                    let change =
+                                        signed.clamp(0.1 - next[index], next[index + 1] - 0.1);
+                                    next[index] += change;
+                                    next[index + 1] -= change;
+                                    let _ = workspace.apply(WorkspaceOperation::Resize {
+                                        split: id,
+                                        shares: next,
+                                    });
+                                }
+                            }
+                            _ => {}
                         }
-                        _ => {}
-                    },
+                    }
                     _ => {}
                 }
             }

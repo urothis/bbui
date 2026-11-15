@@ -1,28 +1,5 @@
 use super::*;
 
-pub(super) fn window_title(workspace: &Workspace, node: &DockNode) -> String {
-    match node {
-        DockNode::Tabs(group) => group
-            .active
-            .as_ref()
-            .or_else(|| group.panes.first())
-            .map(|pane| {
-                workspace
-                    .registrations
-                    .get(pane)
-                    .map_or(pane.0.as_str(), |entry| entry.title.as_str())
-            })
-            .unwrap_or("Workspace")
-            .to_owned(),
-        DockNode::Split { children, .. } | DockNode::Grid { children, .. } => {
-            children.first().map_or_else(
-                || "Workspace".to_owned(),
-                |child| window_title(workspace, child),
-            )
-        }
-    }
-}
-
 pub(super) fn despawn_tree(world: &mut World, entity: Entity) {
     let children = world
         .get::<UiChildren>(entity)
@@ -58,14 +35,12 @@ pub(super) fn open_panes(layout: &WorkspaceLayout) -> HashSet<PaneId> {
         }
     }
     let mut result = HashSet::new();
-    for window in &layout.windows {
-        collect(&window.root, &mut result);
-    }
+    collect(&layout.root, &mut result);
     result
 }
 
-pub(super) fn pane_destinations(layout: &WorkspaceLayout) -> Vec<(PaneId, String, bool, String)> {
-    fn collect(node: &DockNode, window: &str, result: &mut Vec<(PaneId, String, bool, String)>) {
+pub(super) fn pane_destinations(layout: &WorkspaceLayout) -> Vec<(PaneId, String, bool)> {
+    fn collect(node: &DockNode, result: &mut Vec<(PaneId, String, bool)>) {
         match node {
             DockNode::Tabs(group) => {
                 for pane in &group.panes {
@@ -73,33 +48,19 @@ pub(super) fn pane_destinations(layout: &WorkspaceLayout) -> Vec<(PaneId, String
                         pane.clone(),
                         group.id.clone(),
                         group.active.as_ref() == Some(pane),
-                        window.to_owned(),
                     ));
                 }
             }
             DockNode::Split { children, .. } | DockNode::Grid { children, .. } => {
                 for child in children {
-                    collect(child, window, result);
+                    collect(child, result);
                 }
             }
         }
     }
     let mut result = Vec::new();
-    for window in &layout.windows {
-        collect(&window.root, &window.id, &mut result);
-    }
+    collect(&layout.root, &mut result);
     result
-}
-
-pub(super) fn is_below(world: &World, entity: Entity, root: Entity) -> bool {
-    let mut current = Some(entity);
-    while let Some(at) = current {
-        if at == root {
-            return true;
-        }
-        current = world.get::<UiParent>(at).map(|parent| parent.0);
-    }
-    false
 }
 
 pub(super) fn collect_targets(

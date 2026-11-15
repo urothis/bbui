@@ -90,18 +90,6 @@ pub(super) fn camera_presence_changes_invalidate_only_layouts_for_that_window() 
         None
     );
     assert_eq!(cached_single_node(cache, stable_key), stable_node);
-
-    let detached_camera = app.world_mut().spawn(Camera::default()).id();
-    app.world_mut()
-        .resource_mut::<WindowCameraTargets>()
-        .0
-        .insert(second_window, detached_camera);
-    app.update();
-    assert_eq!(
-        app.world().resource::<RenderCache>().items[&stable_key].target_camera,
-        Some(detached_camera),
-        "a native window must render through its own camera"
-    );
 }
 
 #[test]

@@ -29,7 +29,6 @@ pub struct TabGroupOptions {
     pub reorderable: bool,
     pub movable: bool,
     pub accepts_drops: bool,
-    pub detachable: bool,
 }
 
 impl Default for TabGroupOptions {
@@ -39,7 +38,6 @@ impl Default for TabGroupOptions {
             reorderable: true,
             movable: true,
             accepts_drops: true,
-            detachable: true,
         }
     }
 }

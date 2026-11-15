@@ -67,8 +67,8 @@ pub use numeric::{
 pub use panels::{Panel, PanelExpansionStore, PanelGroup, PanelOrderStore, PanelState};
 pub use sliders::Slider;
 pub use workspace::{
-    DockNode, PaneId, SplitAxis, TabGroup, TabGroupOptions, WorkspaceError, WorkspaceLayout,
-    WorkspaceOperation, WorkspaceWindow,
+    DockNode, PaneId, SplitAxis, TabGroup, TabGroupOptions, WorkspaceError, WorkspaceEvent,
+    WorkspaceLayout, WorkspaceOperation, WorkspaceRestoreSource,
 };
 
 pub mod prelude {
@@ -82,8 +82,8 @@ pub mod prelude {
         PanelOrderStore, PreviewGrid, RadioGroup, RadioOptionControl, Slider, SocketDirection,
         SocketEditorDefinition, SocketId, SocketPlacement, SocketType, SocketTypeDefinition,
         SplitAxis, TabGroup, TabGroupOptions, TextArea, TextField, TreeModel, WidgetActionQueue,
-        WidgetEventQueue, WidgetPlugin, WidgetTree, WorkspaceLayout, WorkspaceOperation,
-        WorkspaceWindow,
+        WidgetEventQueue, WidgetPlugin, WidgetTree, WorkspaceEvent, WorkspaceLayout,
+        WorkspaceOperation, WorkspaceRestoreSource,
     };
 }
 

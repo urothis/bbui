@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn move_split_detach_and_close_validate() {
+fn move_split_and_close_validate() {
     let mut layout = WorkspaceLayout::new(DockNode::Tabs(TabGroup::new(
         "a",
         vec!["one".into(), "two".into()],
@@ -17,19 +17,9 @@ fn move_split_detach_and_close_validate() {
         })
         .unwrap();
     layout
-        .apply(WorkspaceOperation::Detach {
-            pane: "two".into(),
-            window: "floating".into(),
-            group: "c".into(),
-        })
+        .apply(WorkspaceOperation::Close { pane: "two".into() })
         .unwrap();
-    assert_eq!(layout.windows.len(), 2);
-    layout
-        .apply(WorkspaceOperation::CloseWindow {
-            window: "floating".into(),
-        })
-        .unwrap();
-    assert_eq!(layout.windows.len(), 1);
+    assert!(layout.group("b").is_none());
     layout.validate().unwrap();
 }
 
@@ -97,8 +87,8 @@ fn last_pane_closes_and_reopens_from_an_empty_main_workspace() {
     layout
         .apply(WorkspaceOperation::Close { pane: "b".into() })
         .unwrap();
-    assert!(matches!(layout.windows[0].root, DockNode::Tabs(_)));
-    let DockNode::Tabs(group) = &layout.windows[0].root else {
+    assert!(matches!(layout.root, DockNode::Tabs(_)));
+    let DockNode::Tabs(group) = &layout.root else {
         return;
     };
     let empty_group = group.id.clone();

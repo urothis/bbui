@@ -12,130 +12,51 @@ pub(crate) fn sync_workspace(world: &mut World) {
             workspace.painted_background = Some(background);
             workspace.dirty = true;
         }
-        let closed: Vec<String> = workspace
-            .windows
-            .iter()
-            .filter(|(id, entity)| id.as_str() != "main" && world.get::<Window>(**entity).is_none())
-            .map(|(id, _)| id.clone())
-            .collect();
-        for id in closed {
-            let _ = workspace.apply(WorkspaceOperation::CloseWindow { window: id.clone() });
-            workspace.windows.remove(&id);
-            if let Some(camera) = workspace.cameras.remove(&id) {
-                world
-                    .resource_mut::<bbui_render::WindowCameraTargets>()
-                    .0
-                    .retain(|_, target| *target != camera);
-                world.despawn(camera);
-            }
-            workspace.dirty = true;
-        }
         if !workspace.dirty {
             return;
         }
 
-        // Keep live pane wrappers out of any chrome subtree about to be reconciled or removed.
-        let mut focus_moves = HashMap::new();
-        for (pane, entity) in &workspace.live_panes {
-            if let Some(old_window) = world
-                .get::<bbui_layout::UiLayoutResult>(*entity)
-                .map(|result| result.window)
-                && let Some(focused) = world
-                    .get_resource::<UiFocus>()
-                    .and_then(|focus| focus.state(old_window))
-                    .and_then(|state| state.focused)
-                && is_below(world, focused, *entity)
-            {
-                focus_moves.insert(pane.clone(), (old_window, focused));
-            }
-        }
+        let focused_workspace_target = workspace.window.and_then(|window| {
+            world
+                .get_resource::<UiFocus>()
+                .and_then(|focus| focus.state(window))
+                .and_then(|state| state.focused)
+                .and_then(|entity| workspace.targets.get(&entity).cloned())
+        });
+
+        // Preserve pane entities while chrome is reconciled around them.
         for entity in workspace.live_panes.values().copied() {
             if world.get_entity(entity).is_ok() {
                 detach_from_parent(world, entity);
             }
         }
 
-        if !workspace.windows.contains_key("main") {
+        if workspace.window.is_none() {
             let mut query = world.query_filtered::<Entity, With<PrimaryWindow>>();
-            let Some(main) = query.iter(world).next() else {
+            let Some(window) = query.iter(world).next() else {
                 return;
             };
-            workspace.windows.insert("main".into(), main);
+            workspace.window = Some(window);
         }
-        let wanted: HashSet<String> = workspace
-            .layout
-            .windows
-            .iter()
-            .map(|window| window.id.clone())
-            .collect();
-        let obsolete: Vec<String> = workspace
-            .roots
-            .keys()
-            .filter(|id| !wanted.contains(*id))
-            .cloned()
-            .collect();
-        for id in obsolete {
-            if let Some(root) = workspace.roots.remove(&id) {
-                despawn_tree(world, root);
+        let Some(window) = workspace.window else {
+            return;
+        };
+        let declaration = WidgetTree::new(chrome(&workspace.layout.root, &workspace));
+        if let Some(root) = workspace.root {
+            if declaration.reconcile(world, root).is_err() {
+                return;
             }
-            if let Some(camera) = workspace.cameras.remove(&id) {
-                world
-                    .resource_mut::<bbui_render::WindowCameraTargets>()
-                    .0
-                    .retain(|_, target| *target != camera);
-                world.despawn(camera);
-            }
-            if let Some(window) = workspace.windows.remove(&id)
-                && id != "main"
-            {
-                world.despawn(window);
-            }
-        }
-
-        let entries: Vec<_> = workspace.layout.windows.clone();
-        for entry in entries {
-            let window = if let Some(window) = workspace.windows.get(&entry.id).copied() {
-                window
-            } else {
-                let window = world
-                    .spawn(Window {
-                        title: format!("{} — BBUI", window_title(&workspace, &entry.root)),
-                        resolution: WindowResolution::new(720, 480),
-                        ..default()
-                    })
-                    .id();
-                let camera = world
-                    .spawn((
-                        Camera2d,
-                        Camera::default(),
-                        RenderTarget::Window(WindowRef::Entity(window)),
-                    ))
-                    .id();
-                workspace.windows.insert(entry.id.clone(), window);
-                workspace.cameras.insert(entry.id.clone(), camera);
-                world
-                    .resource_mut::<bbui_render::WindowCameraTargets>()
-                    .0
-                    .insert(window, camera);
-                window
-            };
-            let declaration = WidgetTree::new(chrome(&entry.root, &workspace));
-            if let Some(root) = workspace.roots.get(&entry.id).copied() {
-                if declaration.reconcile(world, root).is_err() {
-                    continue;
-                }
-            } else if let Ok(root) = declaration.spawn(world, None) {
-                let dimensions = world
-                    .get::<Window>(window)
-                    .map(|window| [window.resolution.width(), window.resolution.height()])
-                    .unwrap_or([720.0, 480.0]);
-                world.entity_mut(root).insert(UiLayoutRoot::new(
-                    window,
-                    Rect::new(0.0, 0.0, dimensions[0], dimensions[1]),
-                    1.0,
-                ));
-                workspace.roots.insert(entry.id.clone(), root);
-            }
+        } else if let Ok(root) = declaration.spawn(world, None) {
+            let dimensions = world
+                .get::<Window>(window)
+                .map(|window| [window.resolution.width(), window.resolution.height()])
+                .unwrap_or([720.0, 480.0]);
+            world.entity_mut(root).insert(UiLayoutRoot::new(
+                window,
+                Rect::new(0.0, 0.0, dimensions[0], dimensions[1]),
+                1.0,
+            ));
+            workspace.root = Some(root);
         }
 
         let present = open_panes(&workspace.layout);
@@ -158,10 +79,38 @@ pub(crate) fn sync_workspace(world: &mut World) {
         }
         let keys = keyed_entities(world);
         let mut targets = HashMap::new();
-        for window in &workspace.layout.windows {
-            collect_targets(&window.root, &keys, &mut targets);
-        }
+        collect_targets(&workspace.layout.root, &keys, &mut targets);
         workspace.targets = targets;
+        if let Some(target) = focused_workspace_target {
+            let focused = match &target {
+                WorkspaceTarget::Tab { group, pane } => Some((group.as_str(), pane)),
+                WorkspaceTarget::Close { pane } => Some(("", pane)),
+                _ => None,
+            };
+            if let Some((group, pane)) = focused {
+                let fallback = workspace
+                    .layout
+                    .group(group)
+                    .and_then(|tabs| tabs.active.as_ref())
+                    .cloned()
+                    .or_else(|| {
+                        pane_destinations(&workspace.layout)
+                            .into_iter()
+                            .find(|(_, _, active)| *active)
+                            .map(|(pane, _, _)| pane)
+                    });
+                let next = workspace.targets.iter().find_map(|(entity, target)| {
+                    matches!(target, WorkspaceTarget::Tab { pane: candidate, .. } if candidate == pane)
+                        .then_some(*entity)
+                }).or_else(|| fallback.as_ref().and_then(|pane| workspace.targets.iter().find_map(|(entity, target)| {
+                    matches!(target, WorkspaceTarget::Tab { pane: candidate, .. } if candidate == pane)
+                        .then_some(*entity)
+                })));
+                let mut focus = world.resource_mut::<UiFocus>();
+                focus.state_mut(window).focused = next;
+                focus.focused = next;
+            }
+        }
         for (entity, target) in &workspace.targets {
             if matches!(target, WorkspaceTarget::Group { .. }) {
                 world
@@ -179,6 +128,16 @@ pub(crate) fn sync_workspace(world: &mut World) {
             }
         }
         for (entity, target) in &workspace.targets {
+            if matches!(target, WorkspaceTarget::Tab { .. })
+                && world.get::<WorkspaceDockSemantic>(*entity).is_none()
+            {
+                world.entity_mut(*entity).insert(WorkspaceDockSemantic(
+                    "Ctrl+Space to move this tab".to_owned(),
+                ));
+                world
+                    .resource_mut::<UiDirty>()
+                    .mark(UiDirtyDomain::Accessibility, *entity);
+            }
             if matches!(
                 target,
                 WorkspaceTarget::Tab { .. }
@@ -207,7 +166,7 @@ pub(crate) fn sync_workspace(world: &mut World) {
             }
         }
         sync_preview(world, &mut workspace);
-        for (pane, group, active, window_id) in pane_destinations(&workspace.layout) {
+        for (pane, group, active) in pane_destinations(&workspace.layout) {
             let Some(host) = keys.get(&format!("ws:content:{group}")).copied() else {
                 continue;
             };
@@ -240,19 +199,6 @@ pub(crate) fn sync_workspace(world: &mut World) {
                 entity
             };
             let _ = set_parent(world, wrapper, host);
-            if active
-                && let Some((old_window, focused)) = focus_moves.get(&pane).copied()
-                && let Some(new_window) = workspace.windows.get(&window_id).copied()
-                && old_window != new_window
-            {
-                let mut focus = world.resource_mut::<UiFocus>();
-                let selection = focus.state_mut(old_window).selection.take();
-                focus.state_mut(old_window).focused = None;
-                focus.state_mut(new_window).focused = Some(focused);
-                focus.state_mut(new_window).selection = selection;
-                focus.focused = Some(focused);
-                focus.active_window = Some(new_window);
-            }
             if world
                 .get::<UiVisible>(wrapper)
                 .is_none_or(|visible| visible.0 != active)

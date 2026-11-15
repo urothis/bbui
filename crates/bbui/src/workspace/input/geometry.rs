@@ -23,10 +23,7 @@ pub(crate) fn find_split<'a>(
     layout: &'a WorkspaceLayout,
     id: &str,
 ) -> Option<(SplitAxis, &'a [f32])> {
-    layout
-        .windows
-        .iter()
-        .find_map(|window| split(&window.root, id))
+    split(&layout.root, id)
 }
 
 pub(super) fn drop_location(

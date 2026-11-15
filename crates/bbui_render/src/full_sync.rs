@@ -10,7 +10,6 @@ pub(super) fn sync_display_list_full(sync: RendererSync, changes: bbui_core::UiD
         mut bezier_batch_materials,
         mut shader_buffers,
         target_camera,
-        window_cameras,
         theme,
         camera_query,
         paint_query,
@@ -106,7 +105,7 @@ pub(super) fn sync_display_list_full(sync: RendererSync, changes: bbui_core::UiD
     }
     for (entity, layout, _) in &paint_query {
         update_layout_window(&mut cache, entity, Some(layout.window));
-        let camera = camera_for_window(layout.window, &camera_query, &window_cameras);
+        let camera = camera_query.get(layout.window).ok().map(|_| layout.window);
         desired.push(DesiredItem {
             key: RenderKey::LayoutEntity(entity),
             z: layout.z,

@@ -106,13 +106,7 @@ pub fn bridge_bevy_input(
         let Ok(window) = windows.get(event.window) else {
             continue;
         };
-        // X11 can deliver the release to the source window after the cursor
-        // leaves it. Keep that release so captured drags can finish outside.
-        let Some(position) = window
-            .cursor_position()
-            .map(|position| position.to_array())
-            .or_else(|| (event.state == ButtonState::Released).then_some([-1.0, -1.0]))
-        else {
+        let Some(position) = window.cursor_position() else {
             continue;
         };
         let button = match event.button {
@@ -127,7 +121,7 @@ pub fn bridge_bevy_input(
             window: event.window,
             button,
             pressed: event.state == ButtonState::Pressed,
-            position,
+            position: position.to_array(),
             time_seconds: now,
             modifiers,
         });

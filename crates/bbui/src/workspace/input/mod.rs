@@ -1,5 +1,8 @@
 use super::*;
-use bbui_core::{UiKeyCode, UiPointerButton, UiRoutedEvent, UiRoutedEvents};
+use bbui_core::{
+    UiInputEvent, UiInputQueue, UiKeyCode, UiModifiers, UiPointerButton, UiRoutedEvent,
+    UiRoutedEvents,
+};
 use bbui_layout::UiLayoutResult;
 use bbui_widgets::{DockNode, SplitAxis};
 
@@ -53,14 +56,34 @@ pub(super) struct DropLocation {
 pub(super) struct WorkspaceGesture {
     active: Option<Gesture>,
     pub hover: Option<DropLocation>,
-    cross_window_hover: Option<Entity>,
-    cross_window_events: Vec<UiRoutedEvent>,
+    keyboard: Option<keyboard::KeyboardDock>,
 }
 
+mod docking;
 mod geometry;
 mod handlers;
-pub(super) use bridge::bridge_cross_window_input;
+mod keyboard;
+use docking::*;
 pub(super) use geometry::find_split;
 use geometry::*;
 pub(super) use handlers::process_workspace_input;
-mod bridge;
+
+pub(super) fn cancel_tab_drag_on_window_leave(
+    queue: Res<UiInputQueue>,
+    mut gesture: ResMut<WorkspaceGesture>,
+    mut workspace: Option<ResMut<Workspace>>,
+) {
+    let Some(Gesture::Tab { window, .. }) = gesture.active.as_ref() else {
+        return;
+    };
+    if queue
+        .iter()
+        .any(|event| matches!(event, UiInputEvent::PointerLeave { window: left } if left == window))
+    {
+        gesture.active = None;
+        gesture.hover = None;
+        if let Some(workspace) = workspace.as_mut() {
+            workspace.dirty = true;
+        }
+    }
+}

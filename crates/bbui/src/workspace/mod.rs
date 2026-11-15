@@ -7,10 +7,14 @@ use std::{
 
 use bbui_core::history::History;
 use bbui_style::{Rgba, ThemeColorToken};
-use bbui_widgets::{PaneId, WorkspaceError, WorkspaceLayout, WorkspaceOperation};
+use bbui_widgets::{
+    PaneId, WorkspaceError, WorkspaceEvent, WorkspaceLayout, WorkspaceOperation,
+    WorkspaceRestoreSource,
+};
 use bevy::prelude::*;
 
 mod accessibility;
+mod events;
 #[cfg(all(test, target_os = "linux"))]
 mod gpu;
 mod input;
@@ -52,6 +56,9 @@ pub(crate) struct WorkspaceSplitterSemantic {
     pub fraction: f32,
 }
 
+#[derive(Component, Debug, Clone, PartialEq)]
+pub(crate) struct WorkspaceDockSemantic(pub String);
+
 impl Default for WorkspaceAppearance {
     fn default() -> Self {
         Self {
@@ -78,9 +85,9 @@ pub struct Workspace {
     appearance: WorkspaceAppearance,
     registrations: HashMap<PaneId, PaneRegistration>,
     history: History<WorkspaceLayout>,
-    windows: HashMap<String, Entity>,
-    cameras: HashMap<String, Entity>,
-    roots: HashMap<String, Entity>,
+    pending_events: Vec<WorkspaceEvent>,
+    window: Option<Entity>,
+    root: Option<Entity>,
     live_panes: HashMap<PaneId, Entity>,
     rebuild_panes: HashSet<PaneId>,
     targets: HashMap<Entity, input::WorkspaceTarget>,
@@ -98,9 +105,9 @@ impl Workspace {
             appearance: WorkspaceAppearance::default(),
             registrations: HashMap::new(),
             history: History::default(),
-            windows: HashMap::new(),
-            cameras: HashMap::new(),
-            roots: HashMap::new(),
+            pending_events: Vec::new(),
+            window: None,
+            root: None,
             live_panes: HashMap::new(),
             rebuild_panes: HashSet::new(),
             targets: HashMap::new(),
@@ -167,8 +174,13 @@ impl Workspace {
             return Err(WorkspaceError::DropRejected);
         }
         let before = self.layout.clone();
-        self.layout.apply(operation)?;
+        self.layout.apply(operation.clone())?;
         if self.layout != before {
+            self.pending_events.push(events::event_for_operation(
+                &operation,
+                &before,
+                &self.layout,
+            ));
             let _ = self.history.begin("Workspace layout");
             let _ = self
                 .history
@@ -181,9 +193,15 @@ impl Workspace {
 
     pub fn restore(&mut self, layout: WorkspaceLayout) -> Result<(), WorkspaceError> {
         layout.validate()?;
+        let changed = self.layout != layout;
         self.layout = layout;
         self.history = History::default();
         self.dirty = true;
+        if changed {
+            self.pending_events.push(WorkspaceEvent::LayoutRestored {
+                source: WorkspaceRestoreSource::Restore,
+            });
+        }
         Ok(())
     }
 
@@ -199,6 +217,9 @@ impl Workspace {
         if let Some((_, layout)) = changes.into_iter().next() {
             self.layout = layout;
             self.dirty = true;
+            self.pending_events.push(WorkspaceEvent::LayoutRestored {
+                source: WorkspaceRestoreSource::Undo,
+            });
             true
         } else {
             false
@@ -212,6 +233,9 @@ impl Workspace {
         if let Some((_, layout)) = changes.into_iter().next() {
             self.layout = layout;
             self.dirty = true;
+            self.pending_events.push(WorkspaceEvent::LayoutRestored {
+                source: WorkspaceRestoreSource::Redo,
+            });
             true
         } else {
             false
@@ -226,18 +250,27 @@ impl Workspace {
 
     fn finish_preview(&mut self, before: WorkspaceLayout) {
         if before != self.layout {
+            let resize = events::changed_split(&before, &self.layout);
             let _ = self.history.begin("Resize workspace split");
             let _ = self
                 .history
                 .record("workspace", before, self.layout.clone());
             let _ = self.history.commit();
+            if let Some((split, shares)) = resize {
+                self.pending_events
+                    .push(WorkspaceEvent::SplitResized { split, shares });
+            }
         }
     }
 
     fn next_key(&mut self, prefix: &str) -> String {
-        let key = format!("workspace:{prefix}:{}", self.next_id);
-        self.next_id += 1;
-        key
+        loop {
+            let key = format!("workspace:{prefix}:{}", self.next_id);
+            self.next_id += 1;
+            if events::find_node(&self.layout.root, &key).is_none() {
+                return key;
+            }
+        }
     }
 }
 
@@ -257,7 +290,7 @@ impl Plugin for WorkspacePlugin {
             )
             .add_systems(
                 Update,
-                input::bridge_cross_window_input
+                input::cancel_tab_drag_on_window_leave
                     .in_set(bbui_core::UiSystems::Input)
                     .after(crate::input_bridge::bridge_bevy_input)
                     .before(bbui_core::process_ui_input),
@@ -266,6 +299,13 @@ impl Plugin for WorkspacePlugin {
                 Update,
                 input::process_workspace_input
                     .in_set(bbui_core::UiSystems::Widgets)
+                    .before(bbui_widgets::actions::process_routed_widget_events),
+            )
+            .add_systems(
+                Update,
+                events::flush_workspace_events
+                    .in_set(bbui_core::UiSystems::Widgets)
+                    .after(input::process_workspace_input)
                     .before(bbui_widgets::actions::process_routed_widget_events),
             );
     }

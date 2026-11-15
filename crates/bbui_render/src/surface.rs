@@ -9,11 +9,6 @@ use super::*;
 #[derive(Default, Resource)]
 pub struct RenderTargetCamera(pub Option<Entity>);
 
-/// Maps a native window entity to the Bevy camera that renders its BBUI content.
-/// The primary window can keep using Bevy's default UI camera.
-#[derive(Default, Resource)]
-pub struct WindowCameraTargets(pub HashMap<Entity, Entity>);
-
 /// Describes the mapping between a world-space mesh surface and its offscreen BBUI camera.
 ///
 /// Attach this component to a mesh whose local plane lies on XY at `z = 0`, centered at the

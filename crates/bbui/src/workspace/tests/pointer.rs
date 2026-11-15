@@ -1,5 +1,6 @@
 use super::*;
 use accesskit::{Action, ActionRequest as AccessKitActionRequest, NodeId, Role, TreeId};
+use bbui_widgets::{WidgetEvent, WidgetEventQueue, WorkspaceEvent};
 use bevy::a11y::{AccessibilityNode, ActionRequest};
 
 #[test]
@@ -24,7 +25,7 @@ fn chrome_uses_shared_layout_and_pointer_drag_moves_pane() {
     assert!(app.world().resource::<DisplayList>().widget_items().iter().any(|item| {
         matches!(&item.primitive, Primitive::TextWrapped { text, .. } if text.contains("Missing: a"))
     }));
-    let window = app.world().resource::<Workspace>().windows["main"];
+    let window = app.world().resource::<Workspace>().window.unwrap();
     let start = center(&app, tab);
     let destination = center(&app, right);
     push_pointer(
@@ -72,38 +73,38 @@ fn chrome_uses_shared_layout_and_pointer_drag_moves_pane() {
             .panes
             .contains(&PaneId::from("a"))
     );
+    let events = app.world_mut().resource_mut::<WidgetEventQueue>().take();
+    assert!(events.iter().any(|event| matches!(event,
+        WidgetEvent::Workspace(WorkspaceEvent::PaneMoved { pane, from, to, .. })
+            if pane == &PaneId::from("a") && from == "left" && to == "right"
+    )));
 }
 
 #[test]
-fn pointer_drag_can_dock_into_another_bevy_window() {
+fn leaving_native_window_cancels_a_tab_drag() {
     let mut app = app();
     app.insert_resource(
-        Workspace::new(WorkspaceLayout::new(DockNode::Tabs(TabGroup::new(
-            "main-group",
-            vec!["a".into(), "b".into()],
-        ))))
+        Workspace::new(WorkspaceLayout::new(DockNode::Split {
+            id: "split".into(),
+            axis: SplitAxis::Horizontal,
+            shares: vec![1.0, 1.0],
+            children: vec![
+                DockNode::Tabs(TabGroup::new("left", vec!["a".into()])),
+                DockNode::Tabs(TabGroup::new("right", vec!["b".into()])),
+            ],
+        }))
         .unwrap(),
     );
     app.update();
-    app.world_mut()
-        .resource_mut::<Workspace>()
-        .apply(WorkspaceOperation::Detach {
-            pane: "b".into(),
-            window: "floating".into(),
-            group: "floating-group".into(),
-        })
-        .unwrap();
-    app.update();
-    let tab = keyed(app.world_mut(), "ws:tab:main-group:a");
-    let destination = keyed(app.world_mut(), "ws:group:floating-group");
-    let main_window = app.world().resource::<Workspace>().windows["main"];
-    let floating_window = app.world().resource::<Workspace>().windows["floating"];
+    let tab = keyed(app.world_mut(), "ws:tab:left:a");
+    let right = keyed(app.world_mut(), "ws:group:right");
+    let window = app.world().resource::<Workspace>().window.unwrap();
     let start = center(&app, tab);
-    let end = center(&app, destination);
+    let end = center(&app, right);
     push_pointer(
         &mut app,
         UiInputEvent::PointerMove {
-            window: main_window,
+            window,
             position: start,
             time_seconds: 0.0,
         },
@@ -111,7 +112,7 @@ fn pointer_drag_can_dock_into_another_bevy_window() {
     push_pointer(
         &mut app,
         UiInputEvent::PointerButton {
-            window: main_window,
+            window,
             button: UiPointerButton::Primary,
             pressed: true,
             position: start,
@@ -121,29 +122,30 @@ fn pointer_drag_can_dock_into_another_bevy_window() {
     push_pointer(
         &mut app,
         UiInputEvent::PointerMove {
-            window: floating_window,
+            window,
             position: end,
             time_seconds: 0.2,
         },
     );
+    push_pointer(&mut app, UiInputEvent::PointerLeave { window });
     push_pointer(
         &mut app,
         UiInputEvent::PointerButton {
-            window: floating_window,
+            window,
             button: UiPointerButton::Primary,
             pressed: false,
             position: end,
             time_seconds: 0.3,
         },
     );
-    assert!(
+    assert_eq!(
         app.world()
             .resource::<Workspace>()
             .layout
-            .group("floating-group")
+            .group("left")
             .unwrap()
-            .panes
-            .contains(&PaneId::from("a"))
+            .panes,
+        vec![PaneId::from("a")]
     );
 }
 
@@ -160,7 +162,7 @@ fn dropping_on_a_tab_reorders_instead_of_splitting() {
     app.update();
     let a = keyed(app.world_mut(), "ws:tab:editors:a");
     let b = keyed(app.world_mut(), "ws:tab:editors:b");
-    let window = app.world().resource::<Workspace>().windows["main"];
+    let window = app.world().resource::<Workspace>().window.unwrap();
     let start = center(&app, a);
     let mut end = center(&app, b);
     end[0] += app.world().get::<UiLayoutResult>(b).unwrap().rect.width * 0.25;
@@ -258,10 +260,16 @@ fn tabs_and_splitters_expose_and_accept_accessibility_actions() {
             .active,
         Some("preview".into())
     );
-    let DockNode::Split { shares, .. } =
-        &app.world().resource::<Workspace>().layout.windows[0].root
-    else {
+    let DockNode::Split { shares, .. } = &app.world().resource::<Workspace>().layout.root else {
         panic!("expected split")
     };
     assert!(shares[0] > 1.0);
+    let events = app.world_mut().resource_mut::<WidgetEventQueue>().take();
+    assert!(events.iter().any(|event| matches!(event,
+        WidgetEvent::Workspace(WorkspaceEvent::TabSelected { pane, .. })
+            if pane == &PaneId::from("preview")
+    )));
+    assert!(events.iter().any(|event| matches!(event,
+        WidgetEvent::Workspace(WorkspaceEvent::SplitResized { split, .. }) if split == "split"
+    )));
 }

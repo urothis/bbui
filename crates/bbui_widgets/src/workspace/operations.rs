@@ -14,17 +14,12 @@ impl WorkspaceLayout {
     fn apply_inner(&mut self, operation: WorkspaceOperation) -> Result<(), WorkspaceError> {
         match operation {
             WorkspaceOperation::Open { pane, group, index } => {
-                if self
-                    .windows
-                    .iter()
-                    .any(|window| containing_group(&window.root, &pane).is_some())
-                {
+                if containing_group(&self.root, &pane).is_some() {
                     return Err(WorkspaceError::DuplicateOrEmptyId);
                 }
                 let destination = self
-                    .windows
-                    .iter_mut()
-                    .find_map(|window| window.root.group_mut(&group))
+                    .root
+                    .group_mut(&group)
                     .ok_or(WorkspaceError::UnknownGroup)?;
                 destination
                     .panes
@@ -33,9 +28,8 @@ impl WorkspaceLayout {
             }
             WorkspaceOperation::Select { group, pane } => {
                 let group = self
-                    .windows
-                    .iter_mut()
-                    .find_map(|window| window.root.group_mut(&group))
+                    .root
+                    .group_mut(&group)
                     .ok_or(WorkspaceError::UnknownGroup)?;
                 if !group.panes.contains(&pane) {
                     return Err(WorkspaceError::UnknownPane);
@@ -43,11 +37,7 @@ impl WorkspaceLayout {
                 group.active = Some(pane);
             }
             WorkspaceOperation::Close { pane } => {
-                if !self
-                    .windows
-                    .iter_mut()
-                    .any(|window| window.root.remove_pane(&pane))
-                {
+                if !self.root.remove_pane(&pane) {
                     return Err(WorkspaceError::UnknownPane);
                 }
                 self.compact();
@@ -57,11 +47,8 @@ impl WorkspaceLayout {
                 if !destination.options.accepts_drops {
                     return Err(WorkspaceError::DropRejected);
                 }
-                let source = self
-                    .windows
-                    .iter()
-                    .find_map(|window| containing_group(&window.root, &pane))
-                    .ok_or(WorkspaceError::UnknownPane)?;
+                let source =
+                    containing_group(&self.root, &pane).ok_or(WorkspaceError::UnknownPane)?;
                 if source.id == group && !source.options.reorderable {
                     return Err(WorkspaceError::DropRejected);
                 }
@@ -78,17 +65,12 @@ impl WorkspaceLayout {
                 } else {
                     index
                 };
-                if !self
-                    .windows
-                    .iter_mut()
-                    .any(|window| window.root.remove_pane(&pane))
-                {
+                if !self.root.remove_pane(&pane) {
                     return Err(WorkspaceError::UnknownPane);
                 }
                 let destination = self
-                    .windows
-                    .iter_mut()
-                    .find_map(|window| window.root.group_mut(&group))
+                    .root
+                    .group_mut(&group)
                     .ok_or(WorkspaceError::UnknownGroup)?;
                 destination
                     .panes
@@ -106,11 +88,7 @@ impl WorkspaceLayout {
             } => {
                 self.take_for_new_group(&pane, &target)?;
                 let fresh = TabGroup::new(group, vec![pane]);
-                if !self.windows.iter_mut().any(|window| {
-                    window
-                        .root
-                        .insert_split(&target, &id, axis, after, fresh.clone())
-                }) {
+                if !self.root.insert_split(&target, &id, axis, after, fresh) {
                     return Err(WorkspaceError::UnknownGroup);
                 }
                 self.compact();
@@ -126,11 +104,8 @@ impl WorkspaceLayout {
                     return Err(WorkspaceError::InvalidContainer);
                 }
                 self.take_for_new_group(&pane, &target)?;
-                let root = self
-                    .windows
-                    .iter_mut()
-                    .find_map(|window| find_node_mut(&mut window.root, &target))
-                    .ok_or(WorkspaceError::UnknownGroup)?;
+                let root =
+                    find_node_mut(&mut self.root, &target).ok_or(WorkspaceError::UnknownGroup)?;
                 let old = std::mem::replace(root, DockNode::Tabs(TabGroup::new("", Vec::new())));
                 *root = DockNode::Grid {
                     id,
@@ -139,37 +114,9 @@ impl WorkspaceLayout {
                 };
                 self.compact();
             }
-            WorkspaceOperation::Detach {
-                pane,
-                window,
-                group,
-            } => {
-                let source = self
-                    .windows
-                    .iter()
-                    .find_map(|entry| containing_group(&entry.root, &pane))
-                    .ok_or(WorkspaceError::UnknownPane)?;
-                if !source.options.detachable || !source.options.movable {
-                    return Err(WorkspaceError::DropRejected);
-                }
-                if self.windows.iter().any(|entry| entry.id == window) {
-                    return Err(WorkspaceError::DuplicateOrEmptyId);
-                }
-                self.windows.iter_mut().for_each(|entry| {
-                    entry.root.remove_pane(&pane);
-                });
-                self.compact();
-                self.windows.push(WorkspaceWindow {
-                    id: window,
-                    root: DockNode::Tabs(TabGroup::new(group, vec![pane])),
-                });
-            }
             WorkspaceOperation::Resize { split, shares } => {
-                let node = self
-                    .windows
-                    .iter_mut()
-                    .find_map(|window| find_node_mut(&mut window.root, &split))
-                    .ok_or(WorkspaceError::UnknownGroup)?;
+                let node =
+                    find_node_mut(&mut self.root, &split).ok_or(WorkspaceError::UnknownGroup)?;
                 let DockNode::Split {
                     shares: current, ..
                 } = node
@@ -179,21 +126,10 @@ impl WorkspaceLayout {
                 *current = shares;
             }
             WorkspaceOperation::SetGroupOptions { group, options } => {
-                self.windows
-                    .iter_mut()
-                    .find_map(|window| window.root.group_mut(&group))
+                self.root
+                    .group_mut(&group)
                     .ok_or(WorkspaceError::UnknownGroup)?
                     .options = options;
-            }
-            WorkspaceOperation::CloseWindow { window } => {
-                if window == "main" {
-                    return Err(WorkspaceError::DropRejected);
-                }
-                let before = self.windows.len();
-                self.windows.retain(|entry| entry.id != window);
-                if self.windows.len() == before {
-                    return Err(WorkspaceError::UnknownWindow);
-                }
             }
         }
         Ok(())
@@ -204,40 +140,23 @@ impl WorkspaceLayout {
         if !target_group.options.accepts_drops {
             return Err(WorkspaceError::DropRejected);
         }
-        let source = self
-            .windows
-            .iter()
-            .find_map(|entry| containing_group(&entry.root, pane))
-            .ok_or(WorkspaceError::UnknownPane)?;
+        let source = containing_group(&self.root, pane).ok_or(WorkspaceError::UnknownPane)?;
         if !source.options.movable {
             return Err(WorkspaceError::DropRejected);
         }
-        if !self
-            .windows
-            .iter_mut()
-            .any(|window| window.root.remove_pane(pane))
-        {
+        if !self.root.remove_pane(pane) {
             return Err(WorkspaceError::UnknownPane);
         }
         Ok(())
     }
 
     fn compact(&mut self) {
-        let mut index = 0;
-        while index < self.windows.len() {
-            let root = &mut self.windows[index].root;
-            let id = match root {
-                DockNode::Tabs(group) => group.id.clone(),
-                DockNode::Split { id, .. } | DockNode::Grid { id, .. } => id.clone(),
-            };
-            if root.compact() {
-                index += 1;
-            } else if self.windows[index].id == "main" {
-                self.windows[index].root = DockNode::Tabs(TabGroup::new(id, Vec::new()));
-                index += 1;
-            } else {
-                self.windows.remove(index);
-            }
+        let id = match &self.root {
+            DockNode::Tabs(group) => group.id.clone(),
+            DockNode::Split { id, .. } | DockNode::Grid { id, .. } => id.clone(),
+        };
+        if !self.root.compact() {
+            self.root = DockNode::Tabs(TabGroup::new(id, Vec::new()));
         }
     }
 }
