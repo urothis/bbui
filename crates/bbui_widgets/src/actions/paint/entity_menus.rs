@@ -22,35 +22,14 @@ pub(super) fn paint_buttons_and_menus(paint: &mut PaintEntityContext<'_>) -> boo
             let selected = world
                 .get::<bbui_core::UiTab>(entity)
                 .is_some_and(|tab| tab.selected);
-            let color = if splitter {
-                theme.border
-            } else if button.status == crate::WidgetStatus::Hovered {
-                theme.surface_hover
-            } else {
-                theme.surface
-            };
-            camera_items.push(item(
-                clip,
-                z,
-                Primitive::RoundedRect {
-                    rect: ClipRect::from(rect),
-                    radius: 0.0,
-                    color,
-                },
-            ));
-            if selected {
+            if splitter {
                 camera_items.push(item(
                     clip,
-                    z.saturating_add(1),
+                    z,
                     Primitive::RoundedRect {
-                        rect: ClipRect {
-                            x: rect.x,
-                            y: rect.y + rect.height - 2.0,
-                            width: rect.width,
-                            height: 2.0,
-                        },
+                        rect: ClipRect::from(rect),
                         radius: 0.0,
-                        color: base_theme.accent,
+                        color: theme.border,
                     },
                 ));
             }
@@ -78,8 +57,10 @@ pub(super) fn paint_buttons_and_menus(paint: &mut PaintEntityContext<'_>) -> boo
                         },
                         if role.as_deref() == Some("workspace-tab-close") {
                             theme.text_muted
-                        } else {
+                        } else if selected || button.status == crate::WidgetStatus::Hovered {
                             theme.text
+                        } else {
+                            base_theme.text_muted
                         },
                         theme,
                         false,

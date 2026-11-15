@@ -40,21 +40,17 @@ pub(super) fn chrome(node: &DockNode, workspace: &Workspace) -> WidgetNode {
                     .with_tab_selected(selected)
                     .with_role("workspace-tab")
                     .with_width(UiLength::Px(tab_width - close_width))
-                    .with_height(UiLength::Px(appearance.tab_height.max(18.0)))
-                    .with_style(style(
-                        if selected {
-                            appearance.active_tab_background
-                        } else {
-                            appearance.tab_background
-                        },
-                        None,
-                    ));
+                    .with_height(UiLength::Px(appearance.tab_height.max(18.0)));
                 let close = WidgetNode::button("×")
                     .with_key(format!("ws:close:{}", pane.0))
                     .with_role("workspace-tab-close")
                     .with_width(UiLength::Px(close_width))
                     .with_height(UiLength::Px(appearance.tab_height.max(18.0)))
-                    .with_accessible_name(format!("Close {}", pane.0))
+                    .with_accessible_name(format!("Close {}", pane.0));
+                WidgetNode::row([tab, close])
+                    .with_key(format!("ws:tab-pair:{}", pane.0))
+                    .with_role("workspace-tab-pair")
+                    .with_tab_selected(selected)
                     .with_style(style(
                         if selected {
                             appearance.active_tab_background
@@ -62,9 +58,7 @@ pub(super) fn chrome(node: &DockNode, workspace: &Workspace) -> WidgetNode {
                             appearance.tab_background
                         },
                         None,
-                    ));
-                WidgetNode::row([tab, close])
-                    .with_key(format!("ws:tab-pair:{}", pane.0))
+                    ))
                     .with_gap(0.0)
             });
             let mut children = Vec::new();

@@ -69,7 +69,7 @@ impl Default for WorkspaceAppearance {
             splitter_thickness: 7.0,
             group_background: ThemeColorToken::Background,
             tab_background: ThemeColorToken::EditorChromeSurface,
-            active_tab_background: ThemeColorToken::Surface,
+            active_tab_background: ThemeColorToken::Background,
             border: ThemeColorToken::Border,
             drop_preview: ThemeColorToken::Accent,
             drop_preview_alpha: 0.28,

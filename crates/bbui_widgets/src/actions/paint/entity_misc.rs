@@ -12,21 +12,59 @@ pub(super) fn paint_misc_controls(paint: &mut PaintEntityContext<'_>) -> bool {
     let camera_items = &mut *paint.output;
 
     if let Some(role) = world.get::<UiRole>(entity).map(|role| role.0.as_str())
-        && matches!(role, "workspace-tab-bar" | "workspace-tab-group")
+        && matches!(
+            role,
+            "workspace-tab-bar" | "workspace-tab-pair" | "workspace-tab-group"
+        )
     {
+        let pair = role == "workspace-tab-pair";
+        let selected = pair
+            && world
+                .get::<bbui_core::UiTab>(entity)
+                .is_some_and(|tab| tab.selected);
         camera_items.push(item(
             clip,
             z,
             Primitive::RoundedRect {
                 rect: ClipRect::from(rect),
-                radius: 0.0,
-                color: if role == "workspace-tab-bar" {
+                radius: if selected { theme.corner_radius } else { 0.0 },
+                color: if role != "workspace-tab-group" {
                     theme.surface
                 } else {
                     theme.background
                 },
             },
         ));
+        if selected {
+            camera_items.push(item(
+                clip,
+                z.saturating_add(1),
+                Primitive::RoundedRect {
+                    rect: ClipRect {
+                        x: rect.x,
+                        y: rect.y + rect.height - theme.corner_radius.min(rect.height),
+                        width: rect.width,
+                        height: theme.corner_radius.min(rect.height),
+                    },
+                    radius: 0.0,
+                    color: theme.surface,
+                },
+            ));
+            camera_items.push(item(
+                clip,
+                z.saturating_add(2),
+                Primitive::RoundedRect {
+                    rect: ClipRect {
+                        x: rect.x + 2.0,
+                        y: rect.y,
+                        width: (rect.width - 4.0).max(0.0),
+                        height: 2.0,
+                    },
+                    radius: 1.0,
+                    color: base_theme.accent,
+                },
+            ));
+        }
         return true;
     }
 

@@ -36,6 +36,8 @@ The host owns document data. Moving a pane keeps its mounted entity and transien
 
 All edits use `WorkspaceOperation` and the same validation path, including programmatic edits. `Workspace::set_close_guard` can reject an explicit close request. `Workspace::appearance` and `set_appearance` configure theme tokens and chrome dimensions. Workspace chrome also has roles such as `workspace-tab`, `workspace-tab-bar`, and `workspace-tab-group` for styling and accessibility.
 
+The default active tab shares its pane's background and has a slim accent along its top edge. Inactive tabs sit on the darker tab rail. `WorkspaceAppearance` exposes the active, inactive, and pane background tokens for other themes.
+
 After a successful layout change, BBUI emits a Bevy `WorkspaceEvent` message. Read it with `MessageReader<WorkspaceEvent>` in an application system. Its variants report tab selection, pane opening and closing, reordering, moving, docking, grid placement, split resizing, group option changes, and layout restoration. Applications can react to these completed changes and read `workspace.layout()` for the current arrangement. Cancelled, rejected, and unchanged edits emit no change event.
 
 Serialize `workspace.layout()` with Serde to persist the arrangement. Use `Workspace::restore` for a saved `WorkspaceLayout`; it validates the version and IDs before replacing the live layout.

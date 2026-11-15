@@ -122,6 +122,7 @@ pub(in crate::actions) fn collect_widget_paint_full(
                 EditorRole::MENU_BAR
                     | EditorRole::TAB_RAIL
                     | "workspace-tab-bar"
+                    | "workspace-tab-pair"
                     | "workspace-tab-group"
             )
         });
