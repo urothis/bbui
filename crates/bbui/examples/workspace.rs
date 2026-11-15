@@ -40,6 +40,12 @@ fn reopen(keys: Res<ButtonInput<KeyCode>>, mut workspace: ResMut<Workspace>) {
     });
 }
 
+fn report_workspace_events(mut events: MessageReader<WorkspaceEvent>) {
+    for event in events.read() {
+        info!("Workspace changed: {event:?}");
+    }
+}
+
 fn setup(world: &mut World) {
     world.spawn(Camera2d);
     content::configure_theme(&mut world.resource_mut::<Theme>());
@@ -92,6 +98,6 @@ fn main() {
         }))
         .add_plugins(BbuiPlugin)
         .add_systems(Startup, setup)
-        .add_systems(Update, reopen)
+        .add_systems(Update, (reopen, report_workspace_events))
         .run();
 }

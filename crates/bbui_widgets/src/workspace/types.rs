@@ -1,4 +1,5 @@
 use super::*;
+use bevy_ecs::message::Message;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum WorkspaceOperation {
@@ -45,16 +46,17 @@ pub enum WorkspaceOperation {
 }
 
 /// A completed workspace change. BBUI has already updated its layout.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Message, Debug, Clone, PartialEq)]
 pub enum WorkspaceEvent {
     PaneOpened {
         pane: PaneId,
         group: String,
         index: usize,
     },
-    TabSelected {
-        pane: PaneId,
+    TabSelectionChanged {
         group: String,
+        previous: Option<PaneId>,
+        current: Option<PaneId>,
     },
     PaneClosed {
         pane: PaneId,

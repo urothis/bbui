@@ -1,17 +1,12 @@
 use super::*;
 use bbui_core::{UiKeyCode, UiModifiers};
-use bbui_widgets::{WidgetEvent, WidgetEventQueue, WorkspaceEvent, WorkspaceRestoreSource};
+use bbui_widgets::{WorkspaceEvent, WorkspaceRestoreSource};
 use bevy::a11y::AccessibilityNode;
 
 fn changes(app: &mut App) -> Vec<WorkspaceEvent> {
     app.world_mut()
-        .resource_mut::<WidgetEventQueue>()
-        .take()
-        .into_iter()
-        .filter_map(|event| match event {
-            WidgetEvent::Workspace(change) => Some(change),
-            _ => None,
-        })
+        .resource_mut::<Messages<WorkspaceEvent>>()
+        .drain()
         .collect()
 }
 
@@ -54,9 +49,10 @@ fn completed_edits_emit_detailed_events_only_after_a_change() {
     app.update();
     assert_eq!(
         changes(&mut app),
-        vec![WorkspaceEvent::TabSelected {
+        vec![WorkspaceEvent::TabSelectionChanged {
             group: "editors".into(),
-            pane: "b".into(),
+            previous: Some("a".into()),
+            current: Some("b".into()),
         }]
     );
 
@@ -84,9 +80,16 @@ fn completed_edits_emit_detailed_events_only_after_a_change() {
     app.update();
     assert_eq!(
         changes(&mut app),
-        vec![WorkspaceEvent::LayoutRestored {
-            source: WorkspaceRestoreSource::Undo,
-        }]
+        vec![
+            WorkspaceEvent::LayoutRestored {
+                source: WorkspaceRestoreSource::Undo,
+            },
+            WorkspaceEvent::TabSelectionChanged {
+                group: "editors".into(),
+                previous: Some("b".into()),
+                current: Some("a".into()),
+            },
+        ]
     );
 
     app.world_mut()
@@ -105,6 +108,26 @@ fn completed_edits_emit_detailed_events_only_after_a_change() {
             group: "editors".into(),
             index: 1,
         }]
+    );
+
+    app.world_mut()
+        .resource_mut::<Workspace>()
+        .apply(WorkspaceOperation::Close { pane: "a".into() })
+        .unwrap();
+    app.update();
+    assert_eq!(
+        changes(&mut app),
+        vec![
+            WorkspaceEvent::PaneClosed {
+                pane: "a".into(),
+                group: "editors".into(),
+            },
+            WorkspaceEvent::TabSelectionChanged {
+                group: "editors".into(),
+                previous: Some("a".into()),
+                current: Some("b".into()),
+            },
+        ]
     );
 }
 
@@ -148,12 +171,24 @@ fn keyboard_move_mode_docks_and_reports_the_result() {
     );
     assert_eq!(
         changes(&mut app),
-        vec![WorkspaceEvent::PaneMoved {
-            pane: "a".into(),
-            from: "left".into(),
-            to: "right".into(),
-            index: 1,
-        }]
+        vec![
+            WorkspaceEvent::PaneMoved {
+                pane: "a".into(),
+                from: "left".into(),
+                to: "right".into(),
+                index: 1,
+            },
+            WorkspaceEvent::TabSelectionChanged {
+                group: "left".into(),
+                previous: Some("a".into()),
+                current: Some("b".into()),
+            },
+            WorkspaceEvent::TabSelectionChanged {
+                group: "right".into(),
+                previous: Some("c".into()),
+                current: Some("a".into()),
+            },
+        ]
     );
     app.update();
     let moved_tab = keyed(app.world_mut(), "ws:tab:right:a");
@@ -204,7 +239,11 @@ fn keyboard_move_mode_can_create_a_split_or_cancel() {
         DockNode::Split { .. }
     ));
     let events = changes(&mut app);
-    assert!(matches!(events.as_slice(), [WorkspaceEvent::PaneDocked {
+    assert!(matches!(events.first(), Some(WorkspaceEvent::PaneDocked {
         pane, target, axis: SplitAxis::Horizontal, after: false, ..
-    }] if pane == &PaneId::from("a") && target == "editors"));
+    }) if pane == &PaneId::from("a") && target == "editors"));
+    assert!(events.iter().any(|event| matches!(event,
+        WorkspaceEvent::TabSelectionChanged { group, previous: Some(previous), current: Some(current) }
+            if group == "editors" && previous == &PaneId::from("a") && current == &PaneId::from("b")
+    )));
 }

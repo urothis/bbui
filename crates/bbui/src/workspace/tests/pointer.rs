@@ -1,6 +1,6 @@
 use super::*;
 use accesskit::{Action, ActionRequest as AccessKitActionRequest, NodeId, Role, TreeId};
-use bbui_widgets::{WidgetEvent, WidgetEventQueue, WorkspaceEvent};
+use bbui_widgets::WorkspaceEvent;
 use bevy::a11y::{AccessibilityNode, ActionRequest};
 
 #[test]
@@ -73,9 +73,13 @@ fn chrome_uses_shared_layout_and_pointer_drag_moves_pane() {
             .panes
             .contains(&PaneId::from("a"))
     );
-    let events = app.world_mut().resource_mut::<WidgetEventQueue>().take();
+    let events: Vec<_> = app
+        .world_mut()
+        .resource_mut::<Messages<WorkspaceEvent>>()
+        .drain()
+        .collect();
     assert!(events.iter().any(|event| matches!(event,
-        WidgetEvent::Workspace(WorkspaceEvent::PaneMoved { pane, from, to, .. })
+        WorkspaceEvent::PaneMoved { pane, from, to, .. }
             if pane == &PaneId::from("a") && from == "left" && to == "right"
     )));
 }
@@ -264,12 +268,15 @@ fn tabs_and_splitters_expose_and_accept_accessibility_actions() {
         panic!("expected split")
     };
     assert!(shares[0] > 1.0);
-    let events = app.world_mut().resource_mut::<WidgetEventQueue>().take();
+    let events: Vec<_> = app
+        .world_mut()
+        .resource_mut::<Messages<WorkspaceEvent>>()
+        .drain()
+        .collect();
     assert!(events.iter().any(|event| matches!(event,
-        WidgetEvent::Workspace(WorkspaceEvent::TabSelected { pane, .. })
-            if pane == &PaneId::from("preview")
+        WorkspaceEvent::TabSelectionChanged { current: Some(pane), .. } if pane == &PaneId::from("preview")
     )));
     assert!(events.iter().any(|event| matches!(event,
-        WidgetEvent::Workspace(WorkspaceEvent::SplitResized { split, .. }) if split == "split"
+        WorkspaceEvent::SplitResized { split, .. } if split == "split"
     )));
 }

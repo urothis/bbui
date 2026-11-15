@@ -176,7 +176,7 @@ impl Workspace {
         let before = self.layout.clone();
         self.layout.apply(operation.clone())?;
         if self.layout != before {
-            self.pending_events.push(events::event_for_operation(
+            self.pending_events.extend(events::events_for_operation(
                 &operation,
                 &before,
                 &self.layout,
@@ -194,6 +194,7 @@ impl Workspace {
     pub fn restore(&mut self, layout: WorkspaceLayout) -> Result<(), WorkspaceError> {
         layout.validate()?;
         let changed = self.layout != layout;
+        let before = self.layout.clone();
         self.layout = layout;
         self.history = History::default();
         self.dirty = true;
@@ -201,6 +202,8 @@ impl Workspace {
             self.pending_events.push(WorkspaceEvent::LayoutRestored {
                 source: WorkspaceRestoreSource::Restore,
             });
+            self.pending_events
+                .extend(events::selection_changes(&before, &self.layout));
         }
         Ok(())
     }
@@ -215,11 +218,14 @@ impl Workspace {
             return false;
         };
         if let Some((_, layout)) = changes.into_iter().next() {
+            let before = self.layout.clone();
             self.layout = layout;
             self.dirty = true;
             self.pending_events.push(WorkspaceEvent::LayoutRestored {
                 source: WorkspaceRestoreSource::Undo,
             });
+            self.pending_events
+                .extend(events::selection_changes(&before, &self.layout));
             true
         } else {
             false
@@ -231,11 +237,14 @@ impl Workspace {
             return false;
         };
         if let Some((_, layout)) = changes.into_iter().next() {
+            let before = self.layout.clone();
             self.layout = layout;
             self.dirty = true;
             self.pending_events.push(WorkspaceEvent::LayoutRestored {
                 source: WorkspaceRestoreSource::Redo,
             });
+            self.pending_events
+                .extend(events::selection_changes(&before, &self.layout));
             true
         } else {
             false
@@ -280,7 +289,8 @@ pub struct WorkspacePlugin;
 impl Plugin for WorkspacePlugin {
     fn build(&self, app: &mut App) {
         use bevy::ecs::schedule::IntoScheduleConfigs;
-        app.init_resource::<input::WorkspaceGesture>()
+        app.add_message::<WorkspaceEvent>()
+            .init_resource::<input::WorkspaceGesture>()
             .add_systems(PreUpdate, view::sync_workspace)
             .add_systems(
                 Update,

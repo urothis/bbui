@@ -185,7 +185,6 @@ pub struct CheckboxPaintChange {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum WidgetEvent {
-    Workspace(crate::workspace::WorkspaceEvent),
     Activated {
         target: Entity,
     },
