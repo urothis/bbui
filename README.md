@@ -20,9 +20,9 @@ Panels, menus, fields, graphs, and tables are real widgets with pointer, keyboar
 
 ## Dockable workspace
 
-![Dockable workspace with connected tabs, split panes, and property controls](docs/visuals/examples/workspace-dark.png)
+![A tab being dragged and docked into a new workspace split](docs/visuals/animations/workspace_dock.webp)
 
-`Workspace` adds connected tabs, split and grid docking, tab reordering, keyboard docking, and undo/redo within one Bevy window. Stable pane IDs make layouts serializable; moving a pane keeps its mounted UI, and completed changes emit Bevy `WorkspaceEvent` messages. See the [workspace guide](docs/workspace.md) and [light-theme capture](docs/visuals/examples/workspace-light.png).
+`Workspace` adds connected tabs, split and grid docking, tab reordering, keyboard docking, and undo/redo within one Bevy window. Stable pane IDs make layouts serializable; moving a pane keeps its mounted UI, and completed changes emit Bevy `WorkspaceEvent` messages. See the [splitter resize animation](docs/visuals/animations/workspace_resize.webp), [workspace guide](docs/workspace.md), and [light-theme capture](docs/visuals/examples/workspace-light.png).
 
 ## Try it
 

@@ -6,6 +6,8 @@
 | --- | --- | --- |
 | ![Workspace in the dark theme](visuals/examples/workspace-dark.png) | ![Workspace in the light theme](visuals/examples/workspace-light.png) | ![Translucent preview for docking at the right edge](visuals/examples/workspace-drop.png) |
 
+[Watch a tab dock into a split](visuals/animations/workspace_dock.webp) or [drag the splitter](visuals/animations/workspace_resize.webp). Both clips use 60 Hz samples from the actual offscreen Bevy renderer.
+
 Run `cargo run -p bbui --example workspace` to use the control in a native Bevy window. The example uses F1–F4 to reopen closed panes.
 
 ## Create panes

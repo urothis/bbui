@@ -24,6 +24,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod animation;
 #[path = "../../examples/workspace/content.rs"]
 mod content;
 
@@ -192,4 +193,8 @@ fn capture_workspace_dark_and_light() {
     }
     let bytes = capture(&mut app, &target, 2);
     save_png(output.join("workspace-preview-drop.png"), &bytes);
+    if let Some(directory) = std::env::var_os("BBUI_WORKSPACE_ANIMATION_FRAMES_DIR") {
+        animation::capture_frames(&mut app, &target, camera, &PathBuf::from(directory))
+            .expect("capture workspace animation frames");
+    }
 }

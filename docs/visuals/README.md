@@ -35,8 +35,9 @@ Open menu and choice states are captured separately: [Render menu](examples/prop
 | [Panel expansion](animations/panel_expand.webp) · [Transform collapse](animations/properties_transform.webp) · [Visibility collapse](animations/properties_visibility.webp) | Layout and paint moving together |
 | [Menu opening](animations/menu_open.webp) · [properties Render menu](animations/properties_render_menu.webp) | Popup animation |
 | [Theme switch](animations/theme_switch.webp) | Smooth Dark/Light transition in the theme gallery |
+| [Workspace docking](animations/workspace_dock.webp) · [splitter resize](animations/workspace_resize.webp) | Tab drag and continuous split resizing in the dockable workspace |
 
-The animation capture script samples the real examples at 60 Hz. Short UI transitions use a motion scale of 4; the theme gallery uses its own 1.1-second transition in each direction.
+The animation capture scripts sample the real examples at 60 Hz. Short UI transitions use a motion scale of 4; the theme gallery uses its own 1.1-second transition in each direction. Workspace clips capture scripted pointer input through the offscreen Bevy renderer at the same 60 Hz cadence.
 
 ## Regenerate captures
 
@@ -48,8 +49,11 @@ DISPLAY=:99 python3 scripts/capture_examples.py
 python3 scripts/make_example_gallery.py
 cargo build --release -p bbui --examples --locked
 DISPLAY=:99 python3 scripts/capture_animations.py --profile release
+python3 scripts/capture_workspace_animations.py --profile release
 ```
 
 `capture_examples.py` requires `xwininfo` and `xwd`; input captures also require `libXtst`. Animated WebP capture requires Pillow with WebP support. The scripts live in [`scripts/`](../../scripts/) and accept individual example names for a targeted recapture.
+
+`capture_workspace_animations.py` uses offscreen GPU readback and does not need an X11 display. It writes `workspace_dock.webp` and `workspace_resize.webp` from 120 samples per clip over two seconds.
 
 The workspace captures come from `cargo test -p bbui workspace::gpu::capture_workspace_dark_and_light --lib -- --ignored`; copy the resulting `target/workspace-preview-*.png` files into `docs/visuals/examples/` after visual review.
