@@ -10,6 +10,8 @@
 
 Run `cargo run -p bbui --example workspace` to use the control in a native Bevy window. The example uses F1–F4 to reopen closed panes.
 
+For a composed editor, run `cargo run -p bbui --example editor_workspace`. It places a real node graph beside Scene and Properties panes, with a Console below the graph. F1–F4 reopen panes, F5 saves the layout, and F9 restores it. The [dark](visuals/examples/editor-workspace-dark.png) and [light](visuals/examples/editor-workspace-light.png) captures show the running example.
+
 ## Create panes
 
 Build a `WorkspaceLayout`, register each pane's title and UI builder, then insert `Workspace` as a resource. The builder receives a parent BBUI entity and mounts the pane UI under it. The [workspace example](../crates/bbui/examples/workspace.rs) shows a complete setup with tabs, a split, and a grid.

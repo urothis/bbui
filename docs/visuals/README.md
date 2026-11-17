@@ -12,6 +12,7 @@ These are captures from runnable Bevy examples and BBUI's offscreen GPU tests. O
 | Full showcase | [Showcase](examples/showcase.png) · [layout gallery](examples/layout_gallery.png) |
 | Live themes | [Theme gallery](examples/theme_gallery.png) |
 | Docking workspace | [Dark](examples/workspace-dark.png) · [Light](examples/workspace-light.png) · [edge drop preview](examples/workspace-drop.png) |
+| Editor workspace composition | [Dark](examples/editor-workspace-dark.png) · [Light](examples/editor-workspace-light.png) |
 
 The [properties editor source map](properties-editor-reference.md) records the composition and visual reference. The desktop and FPS examples use the same shared widget tree.
 
@@ -57,3 +58,5 @@ python3 scripts/capture_workspace_animations.py --profile release
 `capture_workspace_animations.py` uses offscreen GPU readback and does not need an X11 display. It writes `workspace_dock.webp` and `workspace_resize.webp` from 120 samples per clip over two seconds.
 
 The workspace captures come from `cargo test -p bbui workspace::gpu::capture_workspace_dark_and_light --lib -- --ignored`; copy the resulting `target/workspace-preview-*.png` files into `docs/visuals/examples/` after visual review.
+
+The editor workspace captures come from `cargo test -p bbui --example editor_workspace --locked -- --ignored`; the capture test writes both themes directly to `docs/visuals/examples/`.
