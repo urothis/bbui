@@ -150,7 +150,7 @@ impl Workspace {
         self.dirty = true;
     }
 
-    /// A false result cancels an explicit close request. Native window closure remains final.
+    /// A false result cancels an explicit workspace close request.
     pub fn set_close_guard(
         &mut self,
         id: &PaneId,

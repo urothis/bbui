@@ -1,5 +1,30 @@
 use super::*;
 
+fn shift_grid_drop_for_release(
+    events: &[UiRoutedEvent],
+    event_index: usize,
+    window: Entity,
+    target: Entity,
+    position: [f32; 2],
+) -> bool {
+    // The router emits a modifier annotation immediately after its PointerUp.
+    events.get(event_index + 1).is_some_and(|event| {
+        matches!(
+            event,
+            UiRoutedEvent::PointerUpWithModifiers {
+                window: modifier_window,
+                target: modifier_target,
+                button: UiPointerButton::Primary,
+                position: modifier_position,
+                modifiers,
+            } if *modifier_window == window
+                && *modifier_target == target
+                && *modifier_position == position
+                && modifiers.shift
+        )
+    })
+}
+
 pub(crate) fn process_workspace_input(world: &mut World) {
     if !world.contains_resource::<Workspace>() {
         return;
@@ -9,10 +34,9 @@ pub(crate) fn process_workspace_input(world: &mut World) {
         .map(|routed| routed.events.clone())
         .unwrap_or_default();
     let events = routed;
-    let grid_drop = events.iter().any(|event| matches!(event, UiRoutedEvent::PointerUpWithModifiers { modifiers, .. } if modifiers.shift));
     world.resource_scope(|world, mut gesture: Mut<WorkspaceGesture>| {
         world.resource_scope(|world, mut workspace: Mut<Workspace>| {
-            for event in events {
+            for (event_index, event) in events.iter().cloned().enumerate() {
                 match event {
                     UiRoutedEvent::PointerDown {
                         window,
@@ -61,6 +85,7 @@ pub(crate) fn process_workspace_input(world: &mut World) {
                     }
                     UiRoutedEvent::PointerUp {
                         window,
+                        target,
                         position,
                         button: UiPointerButton::Primary,
                         cancelled,
@@ -96,7 +121,13 @@ pub(crate) fn process_workspace_input(world: &mut World) {
                                                     destination,
                                                     window,
                                                     position,
-                                                    grid: grid_drop,
+                                                    grid: shift_grid_drop_for_release(
+                                                        &events,
+                                                        event_index,
+                                                        window,
+                                                        target,
+                                                        position,
+                                                    ),
                                                 },
                                             );
                                         } else {

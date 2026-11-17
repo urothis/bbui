@@ -1,4 +1,6 @@
 use super::*;
+use bbui_core::{UiChildren, UiParent};
+use bbui_widgets::WidgetElement;
 
 #[test]
 fn explicit_close_respects_host_guard() {
@@ -90,4 +92,102 @@ fn moving_preserves_live_content_while_closing_rebuilds_it() {
         .unwrap();
     app.update();
     assert_eq!(count.load(Ordering::SeqCst), 2);
+}
+
+fn app_with_registered_pane() -> App {
+    let mut app = app();
+    let mut workspace = Workspace::new(WorkspaceLayout::new(DockNode::Tabs(TabGroup::new(
+        "main-group",
+        vec!["a".into()],
+    ))))
+    .unwrap();
+    workspace.register_pane("a", "A", |world, parent| {
+        WidgetTree::new(WidgetNode::label("Content A"))
+            .spawn(world, Some(parent))
+            .unwrap();
+    });
+    app.insert_resource(workspace);
+    app.update();
+    app
+}
+
+fn assert_live_pane_has_parent(app: &App, pane: Entity, parent: Entity) {
+    assert_eq!(app.world().get::<UiParent>(pane), Some(&UiParent(parent)));
+    assert!(
+        app.world()
+            .get::<UiChildren>(parent)
+            .is_some_and(|children| children.0.contains(&pane))
+    );
+}
+
+#[test]
+fn missing_primary_window_does_not_detach_live_panes() {
+    let mut app = app_with_registered_pane();
+    let (window, pane, parent) = {
+        let workspace = app.world().resource::<Workspace>();
+        let pane = workspace.live_panes[&PaneId::from("a")];
+        (
+            workspace.window.unwrap(),
+            pane,
+            app.world().get::<UiParent>(pane).unwrap().0,
+        )
+    };
+    app.world_mut().entity_mut(window).remove::<PrimaryWindow>();
+    {
+        let mut workspace = app.world_mut().resource_mut::<Workspace>();
+        workspace.window = None;
+        workspace.dirty = true;
+    }
+
+    super::super::view::sync_workspace(app.world_mut());
+
+    assert_live_pane_has_parent(&app, pane, parent);
+}
+
+#[test]
+fn failed_chrome_reconcile_restores_live_pane_parent() {
+    let mut app = app_with_registered_pane();
+    let (root, pane, parent) = {
+        let workspace = app.world().resource::<Workspace>();
+        let pane = workspace.live_panes[&PaneId::from("a")];
+        (
+            workspace.root.unwrap(),
+            pane,
+            app.world().get::<UiParent>(pane).unwrap().0,
+        )
+    };
+    app.world_mut().entity_mut(root).remove::<WidgetElement>();
+    app.world_mut().resource_mut::<Workspace>().dirty = true;
+
+    super::super::view::sync_workspace(app.world_mut());
+
+    assert_live_pane_has_parent(&app, pane, parent);
+}
+
+#[test]
+fn failed_chrome_spawn_keeps_live_pane_parent() {
+    let mut app = app_with_registered_pane();
+    let (pane, parent) = {
+        let workspace = app.world().resource::<Workspace>();
+        let pane = workspace.live_panes[&PaneId::from("a")];
+        (pane, app.world().get::<UiParent>(pane).unwrap().0)
+    };
+    {
+        let mut workspace = app.world_mut().resource_mut::<Workspace>();
+        workspace.root = None;
+        workspace.layout = WorkspaceLayout::new(DockNode::Split {
+            id: "invalid".into(),
+            axis: SplitAxis::Horizontal,
+            shares: vec![1.0, 1.0],
+            children: vec![
+                DockNode::Tabs(TabGroup::new("duplicate", vec!["a".into()])),
+                DockNode::Tabs(TabGroup::new("duplicate", vec!["b".into()])),
+            ],
+        });
+        workspace.dirty = true;
+    }
+
+    super::super::view::sync_workspace(app.world_mut());
+
+    assert_live_pane_has_parent(&app, pane, parent);
 }

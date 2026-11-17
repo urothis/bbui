@@ -1,5 +1,6 @@
 use super::*;
 use accesskit::{Action, ActionRequest as AccessKitActionRequest, NodeId, Role, TreeId};
+use bbui_core::{UiModifiers, UiRoutedEvent, UiRoutedEvents};
 use bbui_widgets::WorkspaceEvent;
 use bevy::a11y::{AccessibilityNode, ActionRequest};
 
@@ -214,6 +215,105 @@ fn dropping_on_a_tab_reorders_instead_of_splitting() {
             .unwrap()
             .panes,
         vec![PaneId::from("b"), PaneId::from("a")]
+    );
+}
+
+#[test]
+fn unrelated_shift_release_does_not_turn_a_tab_drop_into_a_grid() {
+    let mut app = app();
+    app.insert_resource(
+        Workspace::new(WorkspaceLayout::new(DockNode::Split {
+            id: "split".into(),
+            axis: SplitAxis::Horizontal,
+            shares: vec![1.0, 1.0],
+            children: vec![
+                DockNode::Tabs(TabGroup::new("left", vec!["a".into()])),
+                DockNode::Tabs(TabGroup::new("right", vec!["b".into()])),
+            ],
+        }))
+        .unwrap(),
+    );
+    app.update();
+
+    let tab = keyed(app.world_mut(), "ws:tab:left:a");
+    let destination = keyed(app.world_mut(), "ws:tab:right:b");
+    let window = app.world().resource::<Workspace>().window.unwrap();
+    let start = center(&app, tab);
+    let end = center(&app, destination);
+    app.world_mut().resource_mut::<UiRoutedEvents>().events = vec![
+        UiRoutedEvent::PointerDown {
+            window,
+            target: tab,
+            button: UiPointerButton::Primary,
+            position: start,
+        },
+        UiRoutedEvent::PointerMoved {
+            window,
+            target: tab,
+            position: end,
+            delta: [end[0] - start[0], end[1] - start[1]],
+            dragging: true,
+        },
+        UiRoutedEvent::PointerUp {
+            window,
+            target: tab,
+            button: UiPointerButton::Primary,
+            position: end,
+            cancelled: false,
+        },
+        UiRoutedEvent::PointerUpWithModifiers {
+            window,
+            target: tab,
+            button: UiPointerButton::Primary,
+            position: end,
+            modifiers: UiModifiers::default(),
+        },
+        UiRoutedEvent::PointerUp {
+            window,
+            target: tab,
+            button: UiPointerButton::Primary,
+            position: end,
+            cancelled: false,
+        },
+        UiRoutedEvent::PointerUpWithModifiers {
+            window,
+            target: tab,
+            button: UiPointerButton::Primary,
+            position: end,
+            modifiers: UiModifiers {
+                shift: true,
+                ..default()
+            },
+        },
+        UiRoutedEvent::PointerUp {
+            window,
+            target: tab,
+            button: UiPointerButton::Secondary,
+            position: end,
+            cancelled: false,
+        },
+        UiRoutedEvent::PointerUpWithModifiers {
+            window,
+            target: tab,
+            button: UiPointerButton::Secondary,
+            position: end,
+            modifiers: UiModifiers {
+                shift: true,
+                ..default()
+            },
+        },
+    ];
+
+    super::super::input::process_workspace_input(app.world_mut());
+
+    assert!(
+        app.world()
+            .resource::<Workspace>()
+            .layout
+            .group("right")
+            .unwrap()
+            .panes
+            .contains(&PaneId::from("a"))
     );
 }
 
