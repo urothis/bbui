@@ -144,7 +144,9 @@ pub mod prelude {
         NodeGraph, NumberField, NumericExpressionVariables, NumericField, PaneId, Panel,
         PanelExpansionStore, PanelGroup, PanelOrderStore, PreviewGrid, PreviewGridItem, Progress,
         RadioGroup, Slider, SplitAxis, TabGroup, TabGroupOptions, TableColumn, TableRow, TextArea,
-        TextField, Tooltip, TreeModel, WidgetContainer, WidgetNode, WidgetTree, WorkspaceEvent,
-        WorkspaceLayout, WorkspaceOperation, WorkspaceRestoreSource,
+        TextField, Tooltip, TreeModel, UiBorderEffect, UiEdgeGlow, UiEffectColor, UiVisualEffects,
+        WidgetContainer, WidgetNode, WidgetTree, WorkspaceEvent, WorkspaceLayout,
+        WorkspaceOperation, WorkspaceRestoreSource, border_phase_binding, border_strength_binding,
+        edge_glow_phase_binding, edge_glow_strength_binding,
     };
 }

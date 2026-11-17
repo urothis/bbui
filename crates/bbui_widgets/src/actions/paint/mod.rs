@@ -45,6 +45,9 @@ pub(super) use overlays::*;
 mod primitives;
 pub(super) use primitives::*;
 
+mod effects;
+use effects::*;
+
 mod table;
 pub(super) use table::*;
 

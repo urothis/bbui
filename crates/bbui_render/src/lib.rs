@@ -28,8 +28,8 @@ use bevy::{
         Justify, LetterSpacing, LineBreak, LineHeight, TextBounds, TextColor, TextFont, TextLayout,
     },
     ui::{
-        BackgroundGradient, BoxShadow, ColorStop, InterpolationColorSpace, LinearGradient, UiRect,
-        UiTargetCamera, UiTransform,
+        AngularColorStop, BackgroundGradient, BorderGradient, BoxShadow, ColorStop, ConicGradient,
+        InterpolationColorSpace, LinearGradient, UiPosition, UiRect, UiTargetCamera, UiTransform,
     },
 };
 

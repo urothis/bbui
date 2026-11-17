@@ -37,6 +37,14 @@ pub enum Primitive {
         width: f32,
         color: Rgba,
     },
+    /// A rounded border with colors distributed around its perimeter.
+    GradientBorder {
+        rect: ClipRect,
+        radius: f32,
+        width: f32,
+        colors: Vec<Rgba>,
+        phase: f32,
+    },
     /// A GPU-rendered filled ellipse with the supplied bounds and sRGB color.
     Ellipse {
         rect: ClipRect,
@@ -167,6 +175,19 @@ impl UiPaint {
                 radius: *radius,
                 width: *width,
                 color: *color,
+            },
+            Primitive::GradientBorder {
+                radius,
+                width,
+                colors,
+                phase,
+                ..
+            } => Primitive::GradientBorder {
+                rect,
+                radius: *radius,
+                width: *width,
+                colors: colors.clone(),
+                phase: *phase,
             },
             Primitive::Ellipse { color, .. } => Primitive::Ellipse {
                 rect,
