@@ -33,6 +33,7 @@ cargo run -p bbui --example properties_editor
 cargo run -p bbui --example fps_world_ui
 cargo run -p bbui --example theme_gallery
 cargo run -p bbui --example workspace
+cargo run -p bbui --example editor_workspace
 ```
 
 For your own app, start with [installing BBUI and mounting a widget tree](docs/getting-started.md). The [widget guide](docs/widgets.md) covers events and keyed updates; the [world-space guide](docs/world-space.md) covers the camera, texture, and mesh setup.

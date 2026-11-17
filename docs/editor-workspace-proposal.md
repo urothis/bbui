@@ -1,6 +1,6 @@
 # Editor workspace composition proposal
 
-**Status:** visual review. The images below are design mockups assembled from existing BBUI captures. They are not screenshots of a running example.
+**Status:** approved design, implemented in the [editor workspace example](../crates/bbui/examples/editor_workspace.rs). The images below remain design mockups assembled from existing BBUI captures; see the [dark](visuals/examples/editor-workspace-dark.png) and [light](visuals/examples/editor-workspace-light.png) captures for the actual renderer output.
 
 ## Proposed default layout
 
@@ -14,11 +14,10 @@ Use one `WorkspaceLayout` in one Bevy window: a narrow Scene tree on the left, a
 
 The translucent region shows the existing edge-drop preview while a tab is being dragged. The pane stays mounted when it moves.
 
-## Scope after visual approval
+## Implemented example
 
-- Build a runnable example using the public `Workspace`, `WidgetTree`, and `NodeGraph` APIs.
-- Register pane builders for Scene, Material Graph, Properties, and Console. Use representative content from the current examples.
-- Demonstrate layout save/restore and reading completed `WorkspaceEvent` Bevy messages in the example.
-- Capture the running example in dark and light themes for the visual gallery.
+- Run `cargo run -p bbui --example editor_workspace` to use the four panes. Drag tabs and splitters; F1–F4 reopen closed panes.
+- F5 saves the layout to `target/editor-workspace-layout.json`; F9 restores it. The example reads completed `WorkspaceEvent` Bevy messages and logs them.
+- The graph, Scene tree, Properties controls, and Console are mounted with public BBUI APIs. The actual renderer captures are in the visual gallery.
 
-This proposal does not change workspace behavior or add a new application service. The example implementation and renderer captures will follow visual approval.
+This example does not change workspace behavior or add an application service.
