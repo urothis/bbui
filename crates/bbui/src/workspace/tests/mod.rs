@@ -47,3 +47,4 @@ fn push_pointer(app: &mut App, event: UiInputEvent) {
 mod events;
 mod lifecycle;
 mod pointer;
+mod splitter;

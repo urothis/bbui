@@ -1,4 +1,74 @@
 use super::*;
+use bbui_core::{UiChildren, UiDirty, UiDirtyDomain};
+use bbui_layout::UiLength;
+use bbui_style::{UiInlineStyle, UiStyleProperty, UiStyleValue};
+
+/// A splitter preview changes only two child shares. Keep the existing chrome and pane
+/// parents mounted, then let the normal style and layout passes resolve their new sizes.
+fn update_splitter_preview(
+    world: &mut World,
+    workspace: &Workspace,
+    split_entity: Entity,
+    gesture: &SplitterGesture,
+    shares: &[f32],
+) -> bool {
+    let Some(children) = world.get::<UiChildren>(split_entity) else {
+        return false;
+    };
+    if children.0.len() != shares.len().saturating_mul(2).saturating_sub(1) {
+        return false;
+    }
+    let affected = [gesture.index, gesture.index + 1].map(|index| children.0[index * 2]);
+    if affected
+        .iter()
+        .any(|entity| world.get::<UiInlineStyle>(*entity).is_none())
+    {
+        return false;
+    }
+    let Some(splitter) = workspace.targets.iter().find_map(|(entity, target)| {
+        matches!(target, WorkspaceTarget::Splitter { id, index } if id == &gesture.id && *index == gesture.index)
+            .then_some(*entity)
+    }) else {
+        return false;
+    };
+    if world
+        .get::<super::super::WorkspaceSplitterSemantic>(splitter)
+        .is_none()
+    {
+        return false;
+    }
+
+    let property = match gesture.axis {
+        SplitAxis::Horizontal => UiStyleProperty::Width,
+        SplitAxis::Vertical => UiStyleProperty::Height,
+    };
+    for (entity, index) in affected.into_iter().zip([gesture.index, gesture.index + 1]) {
+        let value = UiStyleValue::Length(UiLength::Fill(shares[index]));
+        if world
+            .get::<UiInlineStyle>(entity)
+            .and_then(|style| style.0.get(&property))
+            != Some(&value)
+            && let Some(mut style) = world.get_mut::<UiInlineStyle>(entity)
+        {
+            style.set(property, value);
+        }
+    }
+
+    let total = shares.iter().sum::<f32>();
+    let semantic = super::super::WorkspaceSplitterSemantic {
+        id: gesture.id.clone(),
+        index: gesture.index,
+        axis: gesture.axis,
+        fraction: shares[..=gesture.index].iter().sum::<f32>() / total,
+    };
+    if world.get::<super::super::WorkspaceSplitterSemantic>(splitter) != Some(&semantic) {
+        world.entity_mut(splitter).insert(semantic);
+        world
+            .resource_mut::<UiDirty>()
+            .mark(UiDirtyDomain::Accessibility, splitter);
+    }
+    true
+}
 
 fn split<'a>(node: &'a DockNode, id: &str) -> Option<(SplitAxis, &'a [f32])> {
     match node {
@@ -121,7 +191,7 @@ pub(super) fn pointer_down(
 }
 
 pub(super) fn resize_split(
-    world: &World,
+    world: &mut World,
     workspace: &mut Workspace,
     gesture: &SplitterGesture,
     position: [f32; 2],
@@ -131,6 +201,7 @@ pub(super) fn resize_split(
     ) else {
         return;
     };
+    let split_entity = *entity;
     let Some(rect) = world.get::<UiLayoutResult>(*entity) else {
         return;
     };
@@ -152,10 +223,18 @@ pub(super) fn resize_split(
     let change = (delta * unit).clamp(0.1 - next[gesture.index], next[gesture.index + 1] - 0.1);
     next[gesture.index] += change;
     next[gesture.index + 1] -= change;
-    let _ = workspace.preview(WorkspaceOperation::Resize {
-        split: gesture.id.clone(),
-        shares: next,
-    });
+    let was_dirty = workspace.dirty;
+    if workspace
+        .preview(WorkspaceOperation::Resize {
+            split: gesture.id.clone(),
+            shares: next.clone(),
+        })
+        .is_ok()
+        && !was_dirty
+        && update_splitter_preview(world, workspace, split_entity, gesture, &next)
+    {
+        workspace.dirty = false;
+    }
 }
 
 pub(super) fn insertion_index(

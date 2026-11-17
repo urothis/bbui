@@ -82,6 +82,21 @@ fn splitter_drag_scene(groups: usize) -> Result<(App, Entity, [f32; 2]), String>
         .ok_or_else(|| "workspace benchmark splitter has no layout".to_owned())?
         .rect;
     let start = [rect.x + rect.width * 0.5, rect.y + rect.height * 0.5];
+    let first_group = {
+        let world = app.world_mut();
+        let mut query = world.query::<(Entity, &UiKey)>();
+        query
+            .iter(world)
+            .find(|(_, key)| key.0 == "ws:group:group-0")
+            .map(|(entity, _)| entity)
+    }
+    .ok_or_else(|| "workspace benchmark has no first group".to_owned())?;
+    let original_width = app
+        .world()
+        .get::<UiLayoutResult>(first_group)
+        .ok_or_else(|| "workspace benchmark group has no layout".to_owned())?
+        .rect
+        .width;
     app.world_mut()
         .resource_mut::<UiInputQueue>()
         .push(UiInputEvent::PointerMove {
@@ -108,11 +123,21 @@ fn splitter_drag_scene(groups: usize) -> Result<(App, Entity, [f32; 2]), String>
             time_seconds: 0.02,
         });
     update(&mut app);
+    update(&mut app); // Resolve the preview through style and layout.
     let DockNode::Split { shares, .. } = &app.world().resource::<Workspace>().layout().root else {
         return Err("workspace benchmark root is not a split".to_owned());
     };
     if shares[0] == 1.0 {
         return Err("workspace benchmark splitter drag did not change the layout".to_owned());
+    }
+    let resized_width = app
+        .world()
+        .get::<UiLayoutResult>(first_group)
+        .ok_or_else(|| "workspace benchmark group lost its layout".to_owned())?
+        .rect
+        .width;
+    if (resized_width - original_width).abs() < 0.1 {
+        return Err("workspace benchmark splitter drag did not resize the view".to_owned());
     }
     Ok((app, window, start))
 }
