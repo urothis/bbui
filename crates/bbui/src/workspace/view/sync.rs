@@ -1,5 +1,37 @@
 use super::*;
 
+fn restore_live_panes(
+    world: &mut World,
+    workspace: &Workspace,
+    detached: &[(PaneId, Entity, Entity)],
+) {
+    let keys = keyed_entities(world);
+    for (pane, entity, previous_parent) in detached {
+        if world.get_entity(*entity).is_err() {
+            continue;
+        }
+        let parent = world
+            .get::<UiNode>(*previous_parent)
+            .is_some()
+            .then_some(*previous_parent)
+            .or_else(|| {
+                pane_destinations(&workspace.layout)
+                    .into_iter()
+                    .find(|(candidate, _, _)| candidate == pane)
+                    .and_then(|(_, group, _)| keys.get(&format!("ws:content:{group}")).copied())
+                    .filter(|parent| world.get::<UiNode>(*parent).is_some())
+            })
+            .or_else(|| {
+                workspace
+                    .root
+                    .filter(|root| world.get::<UiNode>(*root).is_some())
+            });
+        if let Some(parent) = parent {
+            let _ = set_parent(world, *entity, parent);
+        }
+    }
+}
+
 pub(crate) fn sync_workspace(world: &mut World) {
     if !world.contains_resource::<Workspace>() {
         return;
@@ -24,14 +56,11 @@ pub(crate) fn sync_workspace(world: &mut World) {
                 .and_then(|entity| workspace.targets.get(&entity).cloned())
         });
 
-        // Preserve pane entities while chrome is reconciled around them.
-        for entity in workspace.live_panes.values().copied() {
-            if world.get_entity(entity).is_ok() {
-                detach_from_parent(world, entity);
-            }
-        }
-
-        if workspace.window.is_none() {
+        if workspace
+            .window
+            .is_none_or(|window| world.get_entity(window).is_err())
+        {
+            workspace.window = None;
             let mut query = world.query_filtered::<Entity, With<PrimaryWindow>>();
             let Some(window) = query.iter(world).next() else {
                 return;
@@ -42,9 +71,27 @@ pub(crate) fn sync_workspace(world: &mut World) {
             return;
         };
         let declaration = WidgetTree::new(chrome(&workspace.layout.root, &workspace));
-        if let Some(root) = workspace.root {
-            if declaration.reconcile(world, root).is_err() {
-                return;
+        let root = if let Some(root) = workspace.root {
+            // Preserve pane entities while chrome is reconciled around them. Restore their
+            // parents if reconciliation fails so they remain mounted in the live UI.
+            let detached: Vec<_> = workspace
+                .live_panes
+                .iter()
+                .filter_map(|(pane, entity)| {
+                    if world.get_entity(*entity).is_ok() {
+                        detach_from_parent(world, *entity)
+                            .map(|parent| (pane.clone(), *entity, parent))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            match declaration.reconcile(world, root) {
+                Ok(root) => root,
+                Err(_) => {
+                    restore_live_panes(world, &workspace, &detached);
+                    return;
+                }
             }
         } else if let Ok(root) = declaration.spawn(world, None) {
             let dimensions = world
@@ -56,8 +103,11 @@ pub(crate) fn sync_workspace(world: &mut World) {
                 Rect::new(0.0, 0.0, dimensions[0], dimensions[1]),
                 1.0,
             ));
-            workspace.root = Some(root);
-        }
+            root
+        } else {
+            return;
+        };
+        workspace.root = Some(root);
 
         let present = open_panes(&workspace.layout);
         let rebuild: Vec<PaneId> = workspace.rebuild_panes.drain().collect();
@@ -208,4 +258,43 @@ pub(crate) fn sync_workspace(world: &mut World) {
         }
         workspace.dirty = false;
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bbui_core::UiParent;
+    use bbui_widgets::TabGroup;
+
+    #[test]
+    fn restore_live_panes_uses_destination_host_if_previous_parent_was_removed() {
+        let mut world = World::new();
+        let previous_parent = world.spawn(UiNode).id();
+        let destination = world
+            .spawn((UiNode, UiKey("ws:content:main-group".to_owned())))
+            .id();
+        let root = world.spawn(UiNode).id();
+        let entity = world.spawn(UiNode).id();
+        let pane = PaneId::from("a");
+        set_parent(&mut world, entity, previous_parent).unwrap();
+
+        let mut workspace = Workspace::new(WorkspaceLayout::new(DockNode::Tabs(TabGroup::new(
+            "main-group",
+            vec![pane.clone()],
+        ))))
+        .unwrap();
+        workspace.root = Some(root);
+        workspace.live_panes.insert(pane.clone(), entity);
+
+        let parent = detach_from_parent(&mut world, entity).unwrap();
+        world.despawn(previous_parent);
+        restore_live_panes(&mut world, &workspace, &[(pane, entity, parent)]);
+
+        assert_eq!(world.get::<UiParent>(entity), Some(&UiParent(destination)));
+        assert!(
+            world
+                .get::<UiChildren>(destination)
+                .is_some_and(|children| children.0.contains(&entity))
+        );
+    }
 }
