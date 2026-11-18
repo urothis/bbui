@@ -18,7 +18,7 @@ use crate::{
     HsvColorEditor, IconButton, IconButtonAsset, IconButtonAssetState, Label, ListModel,
     MenuControl, MenuDisplay, MenuItemControl, MenuTree, NodeGraph, NumericField, NumericFieldKind,
     Panel, PreviewGrid, Progress, RadioGroup, Slider, TextArea, TextField,
-    Tooltip as TooltipControl, TreeModel,
+    Tooltip as TooltipControl, TreeModel, UiVisualEffects,
     editors::{ColorChannel, HsvColorEditorState, LinkEndpoint, NodeId, SocketDirection},
     menus::{MenuEntry, PopupState},
 };

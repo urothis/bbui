@@ -19,6 +19,7 @@ pub(super) fn checkbox_static_stamp(
 ) -> Option<CheckboxPaintStaticStamp> {
     if world.get::<Checkbox>(entity).is_none()
         || world.get::<UiRole>(entity).is_some()
+        || world.get::<UiVisualEffects>(entity).is_some()
         || world
             .get::<Tooltip>(entity)
             .is_some_and(|tooltip| tooltip.visible)

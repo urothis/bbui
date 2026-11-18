@@ -180,6 +180,19 @@ pub(super) fn reconcile_node(
         }
         if old_props
             .as_ref()
+            .is_none_or(|old| old.visual_effects != props.visual_effects)
+        {
+            match &props.visual_effects {
+                Some(effects) => {
+                    world.entity_mut(entity).insert(effects.clone());
+                }
+                None => {
+                    world.entity_mut(entity).remove::<UiVisualEffects>();
+                }
+            }
+        }
+        if old_props
+            .as_ref()
             .is_none_or(|old| old.accessible_name != props.accessible_name)
         {
             match &props.accessible_name {

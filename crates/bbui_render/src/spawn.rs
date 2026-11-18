@@ -122,6 +122,45 @@ pub(super) fn spawn_primitive(
                 true,
             ));
         }
+        Primitive::GradientBorder {
+            rect,
+            radius,
+            width,
+            colors,
+            phase,
+        } if valid_clip(*rect)
+            && radius.is_finite()
+            && width.is_finite()
+            && *width > 0.0
+            && phase.is_finite()
+            && colors.len() >= 2
+            && colors.iter().all(|color| color.is_finite()) =>
+        {
+            let mut node = positioned_node(*rect, item.clip);
+            node.border_radius = BorderRadius::all(Val::Px(radius.max(0.0)));
+            node.border = UiRect::all(Val::Px(*width));
+            let stops = colors
+                .iter()
+                .chain(colors.first())
+                .enumerate()
+                .map(|(index, color)| {
+                    AngularColorStop::new(
+                        color_to_bevy(*color),
+                        std::f32::consts::TAU * index as f32 / colors.len() as f32,
+                    )
+                })
+                .collect();
+            let gradient = ConicGradient::new(UiPosition::CENTER, stops)
+                .with_start(phase.rem_euclid(1.0) * std::f32::consts::TAU)
+                .in_color_space(InterpolationColorSpace::Srgba);
+            output.push(spawn_item_node(
+                parent,
+                (node, BorderGradient::from(gradient)),
+                item.z,
+                context.local_z,
+                true,
+            ));
+        }
         Primitive::Ellipse { rect, color } if valid_clip(*rect) => {
             let mut node = positioned_node(*rect, item.clip);
             node.border_radius = BorderRadius::all(Val::Percent(50.0));

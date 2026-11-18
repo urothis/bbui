@@ -70,6 +70,7 @@ pub fn install_widget_systems(app: &mut App) {
         UiNode,
         UiLayoutResult,
         UiComputedStyle,
+        UiVisualEffects,
         UiRole,
         UiTextLayout,
         TextBuffer,

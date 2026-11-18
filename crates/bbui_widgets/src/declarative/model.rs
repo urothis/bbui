@@ -158,6 +158,7 @@ pub struct WidgetNode {
     pub role: Option<String>,
     pub scrollable: bool,
     pub style: Option<UiInlineStyle>,
+    pub visual_effects: Option<UiVisualEffects>,
     pub accessible_name: Option<String>,
     pub tab_selected: Option<bool>,
     pub tab_list: bool,
@@ -169,6 +170,7 @@ pub(crate) struct WidgetProps {
     pub role: Option<String>,
     pub scrollable: bool,
     pub style: Option<UiInlineStyle>,
+    pub visual_effects: Option<UiVisualEffects>,
     pub accessible_name: Option<String>,
     pub tab_selected: Option<bool>,
     pub tab_list: bool,
@@ -181,6 +183,7 @@ impl From<&WidgetNode> for WidgetProps {
             role: node.role.clone(),
             scrollable: node.scrollable,
             style: node.style.clone(),
+            visual_effects: node.visual_effects.clone(),
             accessible_name: node.accessible_name.clone(),
             tab_selected: node.tab_selected,
             tab_list: node.tab_list,
@@ -198,6 +201,7 @@ impl WidgetNode {
             role: None,
             scrollable: false,
             style: None,
+            visual_effects: None,
             accessible_name: None,
             tab_selected: None,
             tab_list: false,
@@ -330,6 +334,7 @@ impl WidgetNode {
             role: None,
             scrollable: false,
             style: None,
+            visual_effects: None,
             accessible_name: None,
             tab_selected: None,
             tab_list: false,
@@ -358,6 +363,7 @@ impl WidgetNode {
             role: role.map(str::to_owned),
             scrollable: false,
             style: None,
+            visual_effects: None,
             accessible_name: None,
             tab_selected: None,
             tab_list: false,
@@ -475,6 +481,7 @@ impl WidgetNode {
             role: None,
             scrollable: false,
             style: None,
+            visual_effects: None,
             accessible_name: None,
             tab_selected: None,
             tab_list: false,
@@ -679,6 +686,10 @@ impl WidgetNode {
     }
     pub fn with_style(mut self, style: UiInlineStyle) -> Self {
         self.style = Some(style);
+        self
+    }
+    pub fn with_visual_effects(mut self, effects: UiVisualEffects) -> Self {
+        self.visual_effects = Some(effects);
         self
     }
     pub fn with_role(mut self, role: impl Into<String>) -> Self {

@@ -22,6 +22,7 @@ pub mod menus;
 pub mod numeric;
 pub mod panels;
 pub mod sliders;
+pub mod visual_effects;
 pub mod workspace;
 
 pub use actions::{
@@ -66,6 +67,10 @@ pub use numeric::{
 };
 pub use panels::{Panel, PanelExpansionStore, PanelGroup, PanelOrderStore, PanelState};
 pub use sliders::Slider;
+pub use visual_effects::{
+    UiBorderEffect, UiEdgeGlow, UiEffectColor, UiVisualEffects, border_phase_binding,
+    border_strength_binding, edge_glow_phase_binding, edge_glow_strength_binding,
+};
 pub use workspace::{
     DockNode, PaneId, SplitAxis, TabGroup, TabGroupOptions, WorkspaceError, WorkspaceEvent,
     WorkspaceLayout, WorkspaceOperation, WorkspaceRestoreSource,
@@ -81,9 +86,11 @@ pub mod prelude {
         NumberField, NumericExpressionVariables, NumericField, PaneId, Panel, PanelGroup,
         PanelOrderStore, PreviewGrid, RadioGroup, RadioOptionControl, Slider, SocketDirection,
         SocketEditorDefinition, SocketId, SocketPlacement, SocketType, SocketTypeDefinition,
-        SplitAxis, TabGroup, TabGroupOptions, TextArea, TextField, TreeModel, WidgetActionQueue,
-        WidgetEventQueue, WidgetPlugin, WidgetTree, WorkspaceEvent, WorkspaceLayout,
-        WorkspaceOperation, WorkspaceRestoreSource,
+        SplitAxis, TabGroup, TabGroupOptions, TextArea, TextField, TreeModel, UiBorderEffect,
+        UiEdgeGlow, UiEffectColor, UiVisualEffects, WidgetActionQueue, WidgetEventQueue,
+        WidgetPlugin, WidgetTree, WorkspaceEvent, WorkspaceLayout, WorkspaceOperation,
+        WorkspaceRestoreSource, border_phase_binding, border_strength_binding,
+        edge_glow_phase_binding, edge_glow_strength_binding,
     };
 }
 

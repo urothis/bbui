@@ -163,6 +163,7 @@ pub(in crate::actions) fn collect_widget_paint_full(
                 .get::<crate::canvas::CanvasObjectControl>(entity)
                 .is_none()
             && world.get::<Tooltip>(entity).is_none()
+            && world.get::<UiVisualEffects>(entity).is_none()
         {
             if fragments.remove(&entity) {
                 removed_fragments.insert(entity);
@@ -195,6 +196,7 @@ pub(in crate::actions) fn collect_widget_paint_full(
         let checkbox_stamp = checkbox_static_stamp(world, entity, effective_enabled, order, camera);
         if let Some(stamp) = checkbox_stamp {
             if !repaint_all
+                && world.get::<UiVisualEffects>(entity).is_none()
                 && fragments.contains(&entity)
                 && checkbox_static_stamps.get(&entity) == Some(&stamp)
                 && let Some(changed) = recolor_retained_checkbox(
@@ -280,11 +282,13 @@ pub(in crate::actions) fn collect_widget_paint_full(
             is_box,
             output: camera_items,
         };
-        if paint_editor_widgets(&mut paint)
+        paint_edge_glow(&mut paint);
+        let painted = paint_editor_widgets(&mut paint)
             || paint_buttons_and_menus(&mut paint)
             || paint_text_controls(&mut paint)
-            || paint_misc_controls(&mut paint)
-        {
+            || paint_misc_controls(&mut paint);
+        paint_gradient_border(&mut paint);
+        if painted {
             continue;
         }
     }

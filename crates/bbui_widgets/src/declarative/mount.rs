@@ -206,6 +206,9 @@ pub(super) fn spawn_node(
     if let Some(style) = &node.style {
         entity.insert(style.clone());
     }
+    if let Some(effects) = &node.visual_effects {
+        entity.insert(effects.clone());
+    }
     if node.scrollable {
         entity.insert(UiScroll::new());
     }
