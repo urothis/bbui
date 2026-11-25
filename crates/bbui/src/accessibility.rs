@@ -2,6 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use crate::modal::ModalDialogMarker;
 use crate::workspace::{WorkspaceDockSemantic, WorkspaceSplitterSemantic};
 use accesskit::{
     Action, ActionData, Color as AccessibleColor, HasPopup, Live, Node, Rect as AccessibleRect,
@@ -9,7 +10,8 @@ use accesskit::{
 };
 use bbui_core::{
     UiAccessibleName, UiChildren, UiDirty, UiDirtyDomain, UiEnabled, UiFocus, UiFocusable,
-    UiHitBox, UiLivePoliteness, UiLiveRegion, UiNode, UiParent, UiTab, UiTabList, UiVisible,
+    UiHitBox, UiLivePoliteness, UiLiveRegion, UiModalScopes, UiNode, UiParent, UiTab, UiTabList,
+    UiVisible,
 };
 use bbui_layout::UiLayoutResult;
 use bbui_render::UiWorldSurface;

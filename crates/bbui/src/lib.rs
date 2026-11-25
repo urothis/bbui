@@ -6,6 +6,7 @@ mod accessibility;
 mod clipboard_bridge;
 mod cursor_bridge;
 mod input_bridge;
+pub mod modal;
 mod window_layout;
 pub mod workspace;
 mod world_input;
@@ -29,6 +30,7 @@ impl Plugin for BbuiPlugin {
         app.add_plugins(bbui_render::BbuiRenderPlugin);
         app.add_plugins(bbui_widgets::WidgetPlugin);
         app.add_plugins(workspace::WorkspacePlugin);
+        app.add_plugins(modal::ModalPlugin);
         app.init_resource::<accessibility::BbuiFocusMirror>();
         app.init_resource::<accessibility::AccessibilityLinkSelection>();
         app.init_resource::<accessibility::AccessibilitySyncCache>();
@@ -107,6 +109,9 @@ impl Plugin for BbuiPlugin {
 pub mod prelude {
     pub use crate::BbuiPlugin;
     pub use crate::bbui;
+    pub use crate::modal::{
+        ModalAction, ModalDialog, ModalDialogs, ModalDismissal, ModalError, ModalEvent,
+    };
     pub use crate::workspace::{Workspace, WorkspaceAppearance, WorkspacePlugin};
     pub use bbui_core::{
         UiDirty, UiDirtyBatch, UiDirtyDomain, UiEnabled, UiFocus, UiFocusable, UiHistoryDelegate,

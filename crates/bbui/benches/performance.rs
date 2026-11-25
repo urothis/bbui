@@ -16,6 +16,7 @@ fn workspace_benchmarks(c: &mut Criterion) {
     suite::widgets::bench_panel_sync(c);
     suite::text_media::bench(c);
     suite::workspace::bench(c);
+    suite::modal::bench(c);
 }
 
 criterion_group! {

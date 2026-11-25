@@ -50,6 +50,29 @@ pub enum UiSystems {
 #[component(summary_tick)]
 pub struct UiNode;
 
+/// Limits pointer and keyboard routing to one UI subtree in each window.
+/// Hosts use this while a modal surface is open. Painting and layout are unaffected.
+#[derive(Resource, Debug, Default)]
+pub struct UiModalScopes(pub HashMap<Entity, Entity>);
+
+fn is_within_ui_subtree(world: &World, entity: Entity, root: Entity) -> bool {
+    let mut current = Some(entity);
+    let mut seen = std::collections::HashSet::new();
+    while let Some(at) = current {
+        if at == root {
+            return true;
+        }
+        if !seen.insert(at) {
+            return false;
+        }
+        current = world
+            .get::<UiParent>(at)
+            .map(|parent| parent.0)
+            .or_else(|| world.get::<ChildOf>(at).map(ChildOf::parent));
+    }
+    false
+}
+
 /// A stable semantic identity for a control, independent of its entity ID.
 #[derive(Component, Debug, Clone, PartialEq, Eq, Hash)]
 #[component(summary_tick)]
@@ -476,6 +499,13 @@ pub fn is_interactable(world: &World, entity: Entity) -> bool {
 /// Whether an interactable node belongs to the given input surface. A node
 /// without a window-tagged hit box in its ancestry is treated as global.
 pub fn is_interactable_in_window(world: &World, entity: Entity, window: Entity) -> bool {
+    if world
+        .get_resource::<UiModalScopes>()
+        .and_then(|scopes| scopes.0.get(&window).copied())
+        .is_some_and(|root| !is_within_ui_subtree(world, entity, root))
+    {
+        return false;
+    }
     if !is_interactable(world, entity) {
         return false;
     }
@@ -501,7 +531,9 @@ pub fn is_interactable_in_window(world: &World, entity: Entity, window: Entity) 
 /// traversal in `window`. An explicit `window: None` hit box is global; a node
 /// with no hit box anywhere in its ancestry is not assigned to a tab sequence.
 pub(crate) fn has_window_assignment(world: &World, entity: Entity, window: Entity) -> bool {
-    if !is_interactable(world, entity) || !has_visible_focus_geometry(world, entity) {
+    if !is_interactable_in_window(world, entity, window)
+        || !has_visible_focus_geometry(world, entity)
+    {
         return false;
     }
     let mut current = Some(entity);
