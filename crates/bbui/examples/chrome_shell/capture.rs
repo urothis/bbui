@@ -134,6 +134,58 @@ fn capture(kind: ThemeKind, mode: &str, width: u32, height: u32) {
     for _ in 0..5 {
         app.update();
     }
+    if mode.starts_with("desktop") {
+        for (control, expected_lines) in [("minimize", 1), ("maximize", 0), ("close", 2)] {
+            let entity = {
+                let mut keys = app.world_mut().query::<(Entity, &UiKey)>();
+                keys.iter(app.world())
+                    .find_map(|(entity, key)| {
+                        (key.0 == format!("chrome:{control}")).then_some(entity)
+                    })
+                    .expect("window control mounted")
+            };
+            let rect = app
+                .world()
+                .get::<bbui_layout::UiLayoutResult>(entity)
+                .expect("control layout")
+                .rect;
+            let fragment = app
+                .world()
+                .resource::<bbui::render::DisplayList>()
+                .widget_fragments()
+                .get(&entity)
+                .expect("control paint");
+            let lines: Vec<_> = fragment
+                .items
+                .iter()
+                .filter_map(|item| match item.primitive {
+                    bbui::render::Primitive::Line { from, to, .. } => Some((from, to)),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(lines.len(), expected_lines);
+            for (from, to) in lines {
+                assert!(((from[0] + to[0]) * 0.5 - (rect.x + rect.width * 0.5)).abs() < 1.0);
+                assert!(from[0] >= rect.x && from[0] <= rect.x + rect.width);
+                assert!(to[0] >= rect.x && to[0] <= rect.x + rect.width);
+                assert!(from[1] >= rect.y && from[1] <= rect.y + rect.height);
+                assert!(to[1] >= rect.y && to[1] <= rect.y + rect.height);
+            }
+            if control == "maximize" {
+                assert!(fragment.items.iter().any(|item| matches!(item.primitive,
+                    bbui::render::Primitive::RoundedBorder { rect: border, .. }
+                    if (border.x + border.width * 0.5 - (rect.x + rect.width * 0.5)).abs() < 1.0
+                        && (border.y + border.height * 0.5 - (rect.y + rect.height * 0.5)).abs() < 1.0
+                )));
+            }
+            assert!(
+                !fragment.items.iter().any(|item| matches!(
+                    item.primitive,
+                    bbui::render::Primitive::TextWrapped { .. }
+                ))
+            );
+        }
+    }
     let bytes = read_frame(&mut app, &target);
     let output =
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/visuals/examples");

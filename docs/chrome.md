@@ -4,6 +4,8 @@
 
 `view_with` accepts `DesktopChromeAppearance` for titlebar height, padding, spacing, labels, control width, native button inset, control visibility, and themed styles for the surface, title, menu, and window controls. `view_with_slots` adds host content before or after the drag region. Controls retain stable keys for routing. Set `close_style` separately when the close action needs a distinct treatment.
 
+The default minimize, maximize, and close marks are drawn as centered geometry inside equal-sized controls. Their size follows `control_style` / `close_style` font size. Replacing a control label in the appearance uses centered text instead, while its accessible name and action key remain stable.
+
 `MobileChrome` builds a compact toolbar, content area, bottom navigation, and optional sheet from host-supplied content. Use `compact_chrome(window.resolution.width())` to switch at 600 logical pixels. Navigation returns stable IDs for the host to handle. The sheet is dismissible and remains within the shell layout.
 
 `MobileChromeAppearance` controls toolbar and navigation height, sheet padding and spacing, copy, selected indicator, and separate theme-aware styles for each surface and control. Pass it to `view_with`. Use `compact_chrome_at(width, breakpoint)` for a host-selected breakpoint. The sheet's content remains a host-owned `WidgetNode`, so its controls and layout can be composed independently.

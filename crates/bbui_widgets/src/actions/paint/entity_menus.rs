@@ -133,6 +133,101 @@ pub(super) fn paint_buttons_and_menus(paint: &mut PaintEntityContext<'_>) -> boo
                 color: background,
             },
         ));
+        if let Some(control) = role
+            .as_deref()
+            .and_then(|role| role.strip_prefix("chrome-window-"))
+            .filter(|control| matches!(*control, "minimize" | "maximize" | "close"))
+        {
+            let color = if !enabled || !button.enabled {
+                theme.color(ThemeColorToken::DisabledText)
+            } else {
+                theme.text
+            };
+            let center_x = rect.x + rect.width * 0.5;
+            let center_y = rect.y + rect.height * 0.5;
+            let size = (theme.font_size * 0.68)
+                .clamp(8.0, 14.0)
+                .min((rect.width.min(rect.height) - 10.0).max(4.0));
+            let standard_label = matches!(
+                (control, button.label.as_str()),
+                ("minimize", "−") | ("maximize", "□") | ("close", "×")
+            );
+            if standard_label {
+                match control {
+                    "minimize" => camera_items.push(item(
+                        clip,
+                        z.saturating_add(1),
+                        Primitive::Line {
+                            from: [center_x - size * 0.5, center_y + size * 0.28],
+                            to: [center_x + size * 0.5, center_y + size * 0.28],
+                            width: 1.6,
+                            color,
+                        },
+                    )),
+                    "maximize" => camera_items.push(item(
+                        clip,
+                        z.saturating_add(1),
+                        Primitive::RoundedBorder {
+                            rect: ClipRect::from(Rect::new(
+                                center_x - size * 0.5,
+                                center_y - size * 0.5,
+                                size,
+                                size,
+                            )),
+                            radius: 1.0,
+                            width: 1.5,
+                            color,
+                        },
+                    )),
+                    "close" => {
+                        for (from, to) in [
+                            (
+                                [center_x - size * 0.42, center_y - size * 0.42],
+                                [center_x + size * 0.42, center_y + size * 0.42],
+                            ),
+                            (
+                                [center_x + size * 0.42, center_y - size * 0.42],
+                                [center_x - size * 0.42, center_y + size * 0.42],
+                            ),
+                        ] {
+                            camera_items.push(item(
+                                clip,
+                                z.saturating_add(1),
+                                Primitive::Line {
+                                    from,
+                                    to,
+                                    width: 1.6,
+                                    color,
+                                },
+                            ));
+                        }
+                    }
+                    _ => {}
+                }
+            } else {
+                let text_width = measured_text_width(world, entity, &button.label, theme);
+                camera_items.push(item(
+                    clip,
+                    z.saturating_add(1),
+                    styled_text_primitive_for_entity(
+                        world,
+                        entity,
+                        clip,
+                        TextPlacement {
+                            origin: [
+                                center_x - text_width * 0.5,
+                                center_y - theme.font_size * theme.line_height * 0.5,
+                            ],
+                            text: button.label.clone(),
+                        },
+                        color,
+                        theme,
+                        false,
+                    ),
+                ));
+            }
+            return true;
+        }
         if palette_action
             && world
                 .get_resource::<UiFocus>()

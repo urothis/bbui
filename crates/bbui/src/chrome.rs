@@ -263,6 +263,7 @@ impl DesktopChrome {
                 row.push(
                     WidgetNode::button(label)
                         .with_key(format!("chrome:{key}"))
+                        .with_role(format!("chrome-window-{key}"))
                         .with_accessible_name(name)
                         .with_width(UiLength::Px(appearance.control_width))
                         .with_style(style.clone()),
