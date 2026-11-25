@@ -16,6 +16,7 @@ The default minimize, maximize, and close marks are drawn as centered geometry i
 | Compact editor | ![Compact chrome and material sheet in dark theme](visuals/examples/chrome-mobile-dark.png) | ![Compact chrome and material sheet in light theme](visuals/examples/chrome-mobile-light.png) |
 | Desktop control hover | [Preview](visuals/examples/chrome-desktop-hover-dark.png) | [Preview](visuals/examples/chrome-desktop-hover-light.png) |
 | Compact navigation hover | [Preview](visuals/examples/chrome-mobile-hover-dark.png) | [Preview](visuals/examples/chrome-mobile-hover-light.png) |
+| Window controls, enlarged | ![Centered controls in dark theme](visuals/examples/chrome-controls-dark.png) | ![Centered controls in light theme](visuals/examples/chrome-controls-light.png) |
 
 Run `cargo run -p bbui --example chrome_shell` for the desktop composition. The compact composition uses the same example at a 390-pixel window width. BBUI maps a primary touch to pointer events and ignores additional fingers until the active touch ends or is cancelled.
 

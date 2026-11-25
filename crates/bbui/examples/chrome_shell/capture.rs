@@ -70,6 +70,29 @@ fn save_png(path: &std::path::Path, padded: &[u8], width: u32, height: u32) {
 }
 
 #[allow(clippy::expect_used)]
+fn save_controls_preview(path: &std::path::Path, padded: &[u8], width: u32) {
+    let left = width.saturating_sub(320) as usize;
+    let crop_width = width as usize - left;
+    let crop_height = 48usize;
+    let row_stride = (width as usize * 4).div_ceil(256) * 256;
+    let mut pixels = Vec::with_capacity(crop_width * crop_height * 4);
+    for y in 0..crop_height {
+        let start = y * row_stride + left * 4;
+        pixels.extend_from_slice(&padded[start..start + crop_width * 4]);
+    }
+    let crop = image::RgbaImage::from_raw(crop_width as u32, crop_height as u32, pixels)
+        .expect("control crop dimensions");
+    image::imageops::resize(
+        &crop,
+        (crop_width * 3) as u32,
+        (crop_height * 3) as u32,
+        image::imageops::FilterType::Lanczos3,
+    )
+    .save(path)
+    .expect("save controls preview");
+}
+
+#[allow(clippy::expect_used)]
 fn capture(kind: ThemeKind, mode: &str, width: u32, height: u32) {
     let mut app = App::new();
     app.add_plugins(
@@ -201,6 +224,13 @@ fn capture(kind: ThemeKind, mode: &str, width: u32, height: u32) {
         width,
         height,
     );
+    if mode == "desktop" {
+        save_controls_preview(
+            &output.join(format!("chrome-controls-{theme}.png")),
+            &bytes,
+            width,
+        );
+    }
 }
 
 #[test]
