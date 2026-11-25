@@ -178,6 +178,7 @@ pub struct CommandPaletteAppearance {
     pub padding: UiEdges,
     pub gap: f32,
     pub row_height: f32,
+    pub result_padding_x: f32,
     pub shortcut_column_width: f32,
     pub surface_style: UiInlineStyle,
     pub title_style: UiInlineStyle,
@@ -236,6 +237,7 @@ impl Default for CommandPaletteAppearance {
             padding: UiEdges::all(22.0),
             gap: 10.0,
             row_height: 38.0,
+            result_padding_x: 12.0,
             shortcut_column_width: 80.0,
             surface_style,
             title_style: text_style(20.0, ThemeColorToken::Text),
@@ -355,6 +357,7 @@ impl CommandPalette {
             .with_accessible_name(&appearance.search_placeholder)
             .with_width(UiLength::Fill(1.0))
             .with_height(UiLength::Px(40.0))
+            .with_padding(UiEdges::all(8.0))
             .with_style(appearance.search_style.clone()),
         );
         children.push(
@@ -369,24 +372,25 @@ impl CommandPalette {
             .enumerate()
             .map(|(index, command)| {
                 let selected = index == self.selected.min(visible.saturating_sub(1));
-                let mut button = WidgetNode::button(if selected {
-                    format!("›  {}", command.label)
-                } else {
-                    format!("   {}", command.label)
-                })
-                .with_key(Self::action_key(&command.id))
-                .with_width(UiLength::Fill(1.0))
-                .with_height(UiLength::Px(appearance.row_height))
-                .with_accessible_name(if command.description.is_empty() {
-                    command.label.clone()
-                } else {
-                    format!("{}; {}", command.label, command.description)
-                })
-                .with_style(if selected {
-                    appearance.selected_style.clone()
-                } else {
-                    appearance.result_style.clone()
-                });
+                let mut button = WidgetNode::button(&command.label)
+                    .with_key(Self::action_key(&command.id))
+                    .with_role("command-palette-action")
+                    .with_width(UiLength::Fill(1.0))
+                    .with_height(UiLength::Px(appearance.row_height))
+                    .with_padding(UiEdges::horizontal_vertical(
+                        appearance.result_padding_x,
+                        0.0,
+                    ))
+                    .with_accessible_name(if command.description.is_empty() {
+                        command.label.clone()
+                    } else {
+                        format!("{}; {}", command.label, command.description)
+                    })
+                    .with_style(if selected {
+                        appearance.selected_style.clone()
+                    } else {
+                        appearance.result_style.clone()
+                    });
                 if selected && let Some(effects) = &appearance.selected_effects {
                     button = button.with_visual_effects(effects.clone());
                 }
@@ -398,9 +402,14 @@ impl CommandPalette {
                     let column_width = appearance.shortcut_column_width.max(34.0);
                     let key_width =
                         (hint.chars().count() as f32 * 7.5 + 18.0).clamp(34.0, column_width);
+                    let mut keycap_layout = UiLayoutNode::column(0.0);
+                    keycap_layout.align_items = UiAlign::Center;
+                    keycap_layout.justify_content = bbui_layout::UiJustify::Center;
                     let keycap = WidgetNode::boxed([WidgetNode::label(hint)
+                        .with_role("centered-label")
                         .with_height(UiLength::Px(16.0))
                         .with_style(appearance.shortcut_style.clone())])
+                    .with_layout(keycap_layout)
                     .with_width(UiLength::Px(key_width))
                     .with_height(UiLength::Px(27.0))
                     .with_padding(UiEdges::all(5.0))
@@ -432,9 +441,15 @@ impl CommandPalette {
                 ];
                 if !detail.is_empty() {
                     content.push(
-                        WidgetNode::label(detail)
-                            .with_height(UiLength::Px(18.0))
-                            .with_style(appearance.detail_style.clone()),
+                        WidgetNode::row([
+                            WidgetNode::column([])
+                                .with_width(UiLength::Px(appearance.result_padding_x)),
+                            WidgetNode::label(detail)
+                                .with_height(UiLength::Px(18.0))
+                                .with_style(appearance.detail_style.clone()),
+                        ])
+                        .with_width(UiLength::Fill(1.0))
+                        .with_height(UiLength::Px(18.0)),
                     );
                 }
                 WidgetNode::column(content)
