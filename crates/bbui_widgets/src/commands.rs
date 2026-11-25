@@ -2,7 +2,7 @@
 
 use bbui_core::search::MenuSearch;
 use bbui_core::{UiKey, UiKeyCode, UiModifiers};
-use bbui_layout::{UiEdges, UiLength};
+use bbui_layout::{UiAlign, UiEdges, UiLayoutNode, UiLength};
 use bbui_style::{ThemeColorToken, UiInlineStyle, UiStyleProperty, UiStyleValue};
 use bevy_ecs::world::World;
 
@@ -178,6 +178,7 @@ pub struct CommandPaletteAppearance {
     pub padding: UiEdges,
     pub gap: f32,
     pub row_height: f32,
+    pub shortcut_column_width: f32,
     pub surface_style: UiInlineStyle,
     pub title_style: UiInlineStyle,
     pub subtitle_style: UiInlineStyle,
@@ -185,8 +186,10 @@ pub struct CommandPaletteAppearance {
     pub search_style: UiInlineStyle,
     pub result_style: UiInlineStyle,
     pub selected_style: UiInlineStyle,
+    pub selected_effects: Option<UiVisualEffects>,
     pub detail_style: UiInlineStyle,
     pub shortcut_style: UiInlineStyle,
+    pub shortcut_surface_style: UiInlineStyle,
     pub footer_style: UiInlineStyle,
     pub surface_effects: Option<UiVisualEffects>,
 }
@@ -216,6 +219,13 @@ impl Default for CommandPaletteAppearance {
             UiStyleProperty::Background,
             ThemeColorToken::SelectedSurface,
         );
+        let mut shortcut_surface_style = UiInlineStyle::default();
+        shortcut_surface_style
+            .set_color_token(UiStyleProperty::Background, ThemeColorToken::Background);
+        shortcut_surface_style
+            .set_color_token(UiStyleProperty::BorderColor, ThemeColorToken::Border);
+        shortcut_surface_style.set(UiStyleProperty::BorderWidth, UiStyleValue::Scalar(1.0));
+        shortcut_surface_style.set(UiStyleProperty::CornerRadius, UiStyleValue::Scalar(4.0));
         Self {
             title: "Quick actions".into(),
             subtitle: Some("Find a command and keep moving.".into()),
@@ -226,6 +236,7 @@ impl Default for CommandPaletteAppearance {
             padding: UiEdges::all(22.0),
             gap: 10.0,
             row_height: 38.0,
+            shortcut_column_width: 80.0,
             surface_style,
             title_style: text_style(20.0, ThemeColorToken::Text),
             subtitle_style: text_style(12.0, ThemeColorToken::MutedText),
@@ -233,8 +244,16 @@ impl Default for CommandPaletteAppearance {
             search_style,
             result_style,
             selected_style,
+            selected_effects: Some(
+                UiVisualEffects::default().with_border(UiBorderEffect::solid(
+                    ThemeColorToken::Accent,
+                    1.5,
+                    6.0,
+                )),
+            ),
             detail_style: text_style(11.5, ThemeColorToken::MutedText),
             shortcut_style: text_style(11.5, ThemeColorToken::MutedText),
+            shortcut_surface_style,
             footer_style: text_style(11.0, ThemeColorToken::MutedText),
             surface_effects: Some(
                 UiVisualEffects::default()
@@ -350,7 +369,7 @@ impl CommandPalette {
             .enumerate()
             .map(|(index, command)| {
                 let selected = index == self.selected.min(visible.saturating_sub(1));
-                let button = WidgetNode::button(if selected {
+                let mut button = WidgetNode::button(if selected {
                     format!("›  {}", command.label)
                 } else {
                     format!("   {}", command.label)
@@ -368,10 +387,37 @@ impl CommandPalette {
                 } else {
                     appearance.result_style.clone()
                 });
-                let shortcut = WidgetNode::label(command.shortcut_hint.as_deref().unwrap_or(""))
-                    .with_width(UiLength::Px(80.0))
+                if selected && let Some(effects) = &appearance.selected_effects {
+                    button = button.with_visual_effects(effects.clone());
+                }
+                let shortcut = if let Some(hint) = command
+                    .shortcut_hint
+                    .as_deref()
+                    .filter(|hint| !hint.is_empty())
+                {
+                    let column_width = appearance.shortcut_column_width.max(34.0);
+                    let key_width =
+                        (hint.chars().count() as f32 * 7.5 + 18.0).clamp(34.0, column_width);
+                    let keycap = WidgetNode::boxed([WidgetNode::label(hint)
+                        .with_height(UiLength::Px(16.0))
+                        .with_style(appearance.shortcut_style.clone())])
+                    .with_width(UiLength::Px(key_width))
+                    .with_height(UiLength::Px(27.0))
+                    .with_padding(UiEdges::all(5.0))
+                    .with_style(appearance.shortcut_surface_style.clone());
+                    let mut layout = UiLayoutNode::row(0.0);
+                    layout.align_items = UiAlign::Center;
+                    WidgetNode::row([
+                        WidgetNode::column([]).with_width(UiLength::Fill(1.0)),
+                        keycap,
+                    ])
+                    .with_layout(layout)
+                    .with_width(UiLength::Px(column_width))
                     .with_height(UiLength::Px(appearance.row_height))
-                    .with_style(appearance.shortcut_style.clone());
+                } else {
+                    WidgetNode::column([])
+                        .with_width(UiLength::Px(appearance.shortcut_column_width.max(34.0)))
+                };
                 let detail = if command.description.is_empty() {
                     command.category.clone()
                 } else if command.category.is_empty() {
