@@ -8,7 +8,7 @@ Use `CommandPaletteSession::begin(world, window, root)` after mounting to focus 
 
 ## Appearance and composition
 
-`CommandPaletteAppearance` controls copy, width, maximum width and height, results height, padding, spacing, row height, text inset, shortcut column, icon width, text and surface styles, accent colors, and border/glow effects. Category and description have separate styles. Set `show_icons`, `show_shortcuts`, or `show_descriptions` to false for compact layouts. The host can calculate `width` from the window size; the example clamps it to the available width and simplifies the rows below 480 logical pixels. Long names are measured and ellipsized before they reach the shortcut column.
+`CommandPaletteAppearance` controls copy, width, maximum width and height, results height, padding, spacing, row height, text inset, maximum shortcut badge width, icon width, text and surface styles, accent colors, and border/glow effects. Shortcut badges sit inside each action, so the entire result row shares one highlight and activation target. Category and description have separate styles. Set `show_icons`, `show_shortcuts`, or `show_descriptions` to false for compact layouts. The host can calculate `width` from the window size; the example clamps it to the available width and simplifies the rows below 480 logical pixels. Long names are measured and ellipsized before they reach the shortcut badge.
 
 ```rust
 let mut appearance = CommandPaletteAppearance {

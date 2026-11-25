@@ -1,5 +1,52 @@
 use super::*;
 
+fn palette_style_color(
+    style: &UiInlineStyle,
+    property: UiStyleProperty,
+    theme: &Theme,
+    fallback: Rgba,
+) -> Rgba {
+    match style.0.get(&property) {
+        Some(UiStyleValue::Color(color)) => *color,
+        Some(UiStyleValue::ColorToken(token)) => theme.color(*token),
+        _ => fallback,
+    }
+}
+
+fn fit_palette_text(
+    world: &mut World,
+    entity: Entity,
+    text: &str,
+    theme: &Theme,
+    available: f32,
+) -> String {
+    if measured_text_width(world, entity, text, theme) <= available {
+        return text.to_owned();
+    }
+    let boundaries: Vec<_> = text
+        .char_indices()
+        .map(|(index, _)| index)
+        .chain(std::iter::once(text.len()))
+        .collect();
+    let mut low = 0;
+    let mut high = boundaries.len() - 1;
+    while low < high {
+        let mid = (low + high).div_ceil(2);
+        if measured_text_width(
+            world,
+            entity,
+            &format!("{}…", &text[..boundaries[mid]]),
+            theme,
+        ) <= available
+        {
+            low = mid;
+        } else {
+            high = mid - 1;
+        }
+    }
+    format!("{}…", &text[..boundaries[low]])
+}
+
 pub(super) fn paint_buttons_and_menus(paint: &mut PaintEntityContext<'_>) -> bool {
     let world = &mut *paint.world;
     let entity = paint.entity;
@@ -132,34 +179,136 @@ pub(super) fn paint_buttons_and_menus(paint: &mut PaintEntityContext<'_>) -> boo
                 ));
                 x += presentation.icon_width;
             }
-            let available =
-                (rect.x + rect.width - x - presentation.reserved_trailing_width).max(0.0);
-            let mut visible = button.label.clone();
-            if measured_text_width(world, entity, &visible, theme) > available {
-                let boundaries: Vec<_> = visible
-                    .char_indices()
-                    .map(|(index, _)| index)
-                    .chain(std::iter::once(visible.len()))
-                    .collect();
-                let mut low = 0;
-                let mut high = boundaries.len() - 1;
-                while low < high {
-                    let mid = (low + high).div_ceil(2);
-                    if measured_text_width(
+            let right_edge = rect.x + rect.width - presentation.reserved_trailing_width;
+            let badge_left = if let Some(hint) = presentation.shortcut_hint.as_deref() {
+                let mut hint_theme = theme.clone();
+                if let Some(UiStyleValue::Scalar(size)) = presentation
+                    .shortcut_style
+                    .0
+                    .get(&UiStyleProperty::FontSize)
+                    && size.is_finite()
+                    && *size > 0.0
+                {
+                    hint_theme.font_size = *size;
+                }
+                if let Some(UiStyleValue::Scalar(height)) = presentation
+                    .shortcut_style
+                    .0
+                    .get(&UiStyleProperty::LineHeight)
+                    && height.is_finite()
+                    && *height > 0.0
+                {
+                    hint_theme.line_height = *height;
+                }
+                let badge_padding = match presentation
+                    .shortcut_surface_style
+                    .0
+                    .get(&UiStyleProperty::Padding)
+                {
+                    Some(UiStyleValue::Edges(edges)) => *edges,
+                    _ => bbui_layout::UiEdges::horizontal_vertical(8.0, 5.0),
+                };
+                let max_width = presentation
+                    .shortcut_max_width
+                    .max(34.0)
+                    .min((rect.width * 0.42).max(34.0));
+                let text_width = measured_text_width(world, entity, hint, &hint_theme);
+                let badge_width = (text_width + badge_padding.left + badge_padding.right + 2.0)
+                    .clamp(34.0, max_width);
+                let badge_rect = Rect::new(
+                    right_edge - badge_width,
+                    rect.y + (rect.height - 25.0) * 0.5,
+                    badge_width,
+                    25.0,
+                );
+                let radius = match presentation
+                    .shortcut_surface_style
+                    .0
+                    .get(&UiStyleProperty::CornerRadius)
+                {
+                    Some(UiStyleValue::Scalar(radius)) => *radius,
+                    _ => 4.0,
+                };
+                camera_items.push(item(
+                    clip,
+                    z.saturating_add(1),
+                    Primitive::RoundedRect {
+                        rect: ClipRect::from(badge_rect),
+                        radius,
+                        color: palette_style_color(
+                            &presentation.shortcut_surface_style,
+                            UiStyleProperty::Background,
+                            base_theme,
+                            base_theme.background,
+                        ),
+                    },
+                ));
+                let border_width = match presentation
+                    .shortcut_surface_style
+                    .0
+                    .get(&UiStyleProperty::BorderWidth)
+                {
+                    Some(UiStyleValue::Scalar(width)) => *width,
+                    _ => 0.0,
+                };
+                if border_width > 0.0 {
+                    camera_items.push(item(
+                        clip,
+                        z.saturating_add(2),
+                        Primitive::RoundedBorder {
+                            rect: ClipRect::from(badge_rect),
+                            radius,
+                            width: border_width,
+                            color: palette_style_color(
+                                &presentation.shortcut_surface_style,
+                                UiStyleProperty::BorderColor,
+                                base_theme,
+                                base_theme.border,
+                            ),
+                        },
+                    ));
+                }
+                let visible_hint = fit_palette_text(
+                    world,
+                    entity,
+                    hint,
+                    &hint_theme,
+                    (badge_width - badge_padding.left - badge_padding.right).max(1.0),
+                );
+                let hint_width = measured_text_width(world, entity, &visible_hint, &hint_theme);
+                camera_items.push(item(
+                    clip,
+                    z.saturating_add(3),
+                    styled_text_primitive_for_entity(
                         world,
                         entity,
-                        &format!("{}…", &visible[..boundaries[mid]]),
-                        theme,
-                    ) <= available
-                    {
-                        low = mid;
-                    } else {
-                        high = mid - 1;
-                    }
-                }
-                visible.truncate(boundaries[low]);
-                visible.push('…');
-            }
+                        clip,
+                        TextPlacement {
+                            origin: [
+                                badge_rect.x + (badge_width - hint_width) * 0.5,
+                                badge_rect.y
+                                    + (badge_rect.height
+                                        - hint_theme.font_size * hint_theme.line_height)
+                                        * 0.5,
+                            ],
+                            text: visible_hint,
+                        },
+                        palette_style_color(
+                            &presentation.shortcut_style,
+                            UiStyleProperty::Foreground,
+                            base_theme,
+                            base_theme.text_muted,
+                        ),
+                        &hint_theme,
+                        false,
+                    ),
+                ));
+                badge_rect.x - 10.0
+            } else {
+                right_edge
+            };
+            let available = (badge_left - x).max(0.0);
+            let visible = fit_palette_text(world, entity, &button.label, theme, available);
             let query = presentation.query.to_ascii_lowercase();
             let label_lower = visible.to_ascii_lowercase();
             let match_range = (!query.is_empty())

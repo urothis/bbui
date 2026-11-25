@@ -57,6 +57,10 @@ pub(super) fn palette_action_highlights_match_and_truncates_before_shortcut() {
             highlight_color: appearance.highlight_color,
             icon_color: appearance.icon_color,
             icon_width: appearance.icon_width,
+            shortcut_hint: Some("Ctrl+E".into()),
+            shortcut_max_width: appearance.shortcut_column_width,
+            shortcut_style: appearance.shortcut_style.clone(),
+            shortcut_surface_style: appearance.shortcut_surface_style.clone(),
             reserved_trailing_width: 8.0,
         },
         UiLayoutNode {
@@ -84,6 +88,12 @@ pub(super) fn palette_action_highlights_match_and_truncates_before_shortcut() {
         .collect();
     assert!(texts.iter().any(|(text, _)| *text == "Material"));
     assert!(texts.iter().any(|(text, _)| text.ends_with('…')));
+    assert!(texts.iter().any(|(text, _)| *text == "Ctrl+E"));
+    assert!(items.widget_items().iter().any(|item| matches!(
+        item.primitive,
+        Primitive::RoundedRect { rect, .. }
+            if rect.x > 100.0 && rect.x + rect.width < 360.0
+    )));
     let accent = app
         .world()
         .resource::<Theme>()
