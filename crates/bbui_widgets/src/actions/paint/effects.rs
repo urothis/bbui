@@ -7,6 +7,30 @@ pub(super) fn paint_edge_glow(paint: &mut PaintEntityContext<'_>) {
     let Some(glow) = effects.edge_glow.as_ref() else {
         return;
     };
+    let radius = effects
+        .border
+        .as_ref()
+        .map_or(paint.theme.corner_radius, |border| border.radius.max(0.0));
+    push_effect_glow(
+        paint.output,
+        paint.layout.clip.map(ClipRect::from),
+        paint.z,
+        ClipRect::from(paint.rect),
+        radius,
+        glow,
+        paint.theme,
+    );
+}
+
+pub(super) fn push_effect_glow(
+    output: &mut Vec<DrawItem>,
+    clip: Option<ClipRect>,
+    z: i32,
+    rect: ClipRect,
+    radius: f32,
+    glow: &crate::UiEdgeGlow,
+    theme: &Theme,
+) {
     if glow.colors.is_empty()
         || !glow.blur.is_finite()
         || glow.blur < 0.0
@@ -20,7 +44,7 @@ pub(super) fn paint_edge_glow(paint: &mut PaintEntityContext<'_>) {
         .colors
         .iter()
         .map(|color| {
-            let mut resolved = color.resolve(paint.theme);
+            let mut resolved = color.resolve(theme);
             resolved.3 *= glow.strength.clamp(0.0, 1.0);
             resolved
         })
@@ -30,26 +54,18 @@ pub(super) fn paint_edge_glow(paint: &mut PaintEntityContext<'_>) {
     }
     let reach = (glow.blur * 1.8 + glow.spread.max(0.0) + 4.0).max(0.0);
     let fallback_clip = ClipRect {
-        x: paint.rect.x - reach,
-        y: paint.rect.y - reach,
-        width: paint.rect.width + 2.0 * reach,
-        height: paint.rect.height + 2.0 * reach,
+        x: rect.x - reach,
+        y: rect.y - reach,
+        width: rect.width + 2.0 * reach,
+        height: rect.height + 2.0 * reach,
     };
-    let clip = paint
-        .layout
-        .clip
-        .map(ClipRect::from)
-        .unwrap_or(fallback_clip);
-    let radius = effects
-        .border
-        .as_ref()
-        .map_or(paint.theme.corner_radius, |border| border.radius.max(0.0));
+    let clip = clip.unwrap_or(fallback_clip);
     if colors.len() == 1 {
-        paint.output.push(item(
+        output.push(item(
             clip,
-            paint.z,
+            z,
             Primitive::Shadow {
-                rect: ClipRect::from(paint.rect),
+                rect,
                 radius,
                 color: Rgba::TRANSPARENT,
                 shadow: colors[0],
@@ -68,10 +84,10 @@ pub(super) fn paint_edge_glow(paint: &mut PaintEntityContext<'_>) {
     for ring in (0..RINGS).rev() {
         let distance = glow.spread + (ring as f32 + 1.0) * step;
         let rect = ClipRect {
-            x: paint.rect.x - distance,
-            y: paint.rect.y - distance,
-            width: paint.rect.width + distance * 2.0,
-            height: paint.rect.height + distance * 2.0,
+            x: rect.x - distance,
+            y: rect.y - distance,
+            width: rect.width + distance * 2.0,
+            height: rect.height + distance * 2.0,
         };
         if rect.width <= 0.0 || rect.height <= 0.0 {
             continue;
@@ -88,9 +104,9 @@ pub(super) fn paint_edge_glow(paint: &mut PaintEntityContext<'_>) {
                 )
             })
             .collect();
-        paint.output.push(item(
+        output.push(item(
             clip,
-            paint.z,
+            z,
             Primitive::GradientBorder {
                 rect,
                 radius: (radius + distance).max(0.0),
@@ -110,6 +126,24 @@ pub(super) fn paint_gradient_border(paint: &mut PaintEntityContext<'_>) {
     else {
         return;
     };
+    push_effect_border(
+        paint.output,
+        paint.clip,
+        paint.z.saturating_add(20),
+        ClipRect::from(paint.rect),
+        border,
+        paint.theme,
+    );
+}
+
+pub(super) fn push_effect_border(
+    output: &mut Vec<DrawItem>,
+    clip: ClipRect,
+    z: i32,
+    rect: ClipRect,
+    border: &crate::UiBorderEffect,
+    theme: &Theme,
+) {
     if border.colors.is_empty()
         || !border.width.is_finite()
         || border.width <= 0.0
@@ -123,7 +157,7 @@ pub(super) fn paint_gradient_border(paint: &mut PaintEntityContext<'_>) {
         .colors
         .iter()
         .map(|color| {
-            let mut resolved = color.resolve(paint.theme);
+            let mut resolved = color.resolve(theme);
             resolved.3 *= border.strength.clamp(0.0, 1.0);
             resolved
         })
@@ -133,21 +167,19 @@ pub(super) fn paint_gradient_border(paint: &mut PaintEntityContext<'_>) {
     }
     let primitive = if colors.len() == 1 {
         Primitive::RoundedBorder {
-            rect: ClipRect::from(paint.rect),
+            rect,
             radius: border.radius.max(0.0),
             width: border.width,
             color: colors[0],
         }
     } else {
         Primitive::GradientBorder {
-            rect: ClipRect::from(paint.rect),
+            rect,
             radius: border.radius.max(0.0),
             width: border.width,
             colors,
             phase: border.phase,
         }
     };
-    paint
-        .output
-        .push(item(paint.clip, paint.z.saturating_add(20), primitive));
+    output.push(item(clip, z, primitive));
 }

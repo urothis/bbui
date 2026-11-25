@@ -97,7 +97,7 @@ pub enum WidgetSpec {
         text: String,
     },
     Progress {
-        value: f32,
+        progress: Progress,
     },
     FileBrowser {
         directory: PathBuf,
@@ -545,7 +545,20 @@ impl WidgetNode {
         })
     }
     pub fn progress(value: f32) -> Self {
-        Self::new(WidgetSpec::Progress { value })
+        Self::new(WidgetSpec::Progress {
+            progress: Progress::new(value),
+        })
+    }
+    pub fn indeterminate_progress() -> Self {
+        Self::new(WidgetSpec::Progress {
+            progress: Progress::indeterminate(),
+        })
+    }
+    pub fn with_progress_style(mut self, style: crate::ProgressStyle) -> Self {
+        if let WidgetSpec::Progress { progress } = &mut self.spec {
+            progress.style = style;
+        }
+        self
     }
     pub fn file_browser(directory: impl Into<PathBuf>) -> Self {
         Self::new(WidgetSpec::FileBrowser {
