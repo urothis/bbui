@@ -180,21 +180,9 @@ fn paint_fill_piece(
             color: color.resolve(paint.theme),
         },
         (ProgressFill::Gradient(_), Some(colors)) => {
-            let steps = if progress.style.segments.is_some() {
-                8
-            } else {
-                32
-            };
-            let stops = (0..=steps)
-                .map(|index| {
-                    let x = piece.x + piece.width * index as f32 / steps as f32;
-                    let position = ((x - entire_fill.x) / entire_fill.width).clamp(0.0, 1.0);
-                    (
-                        index as f32 / steps as f32,
-                        palette_color(colors, position, progress.palette_phase),
-                    )
-                })
-                .collect();
+            let start = ((piece.x - entire_fill.x) / entire_fill.width).clamp(0.0, 1.0);
+            let end = ((piece.x + piece.width - entire_fill.x) / entire_fill.width).clamp(0.0, 1.0);
+            let stops = palette_stops(colors, start, end, progress.palette_phase);
             Primitive::RoundedLinearGradient {
                 rect: piece,
                 radius,
@@ -214,23 +202,64 @@ fn paint_fill_piece(
         .push(item(paint.clip, paint.z.saturating_add(2), primitive));
 }
 
-fn palette_color(colors: &[Rgba], position: f32, phase: f32) -> Rgba {
+fn palette_color(colors: &[Rgba], coordinate: f32) -> Rgba {
     let span = colors.len() as f32;
-    let phase = if phase.is_finite() { phase } else { 0.0 };
-    let coordinate = ((position * (span - 1.0)) + phase * span).rem_euclid(span);
+    let coordinate = coordinate.rem_euclid(span);
     let index = coordinate.floor() as usize;
     let next = (index + 1) % colors.len();
     colors[index].mix(colors[next], coordinate.fract())
 }
 
+fn palette_stops(colors: &[Rgba], start: f32, end: f32, phase: f32) -> Vec<(f32, Rgba)> {
+    let span = colors.len() as f32;
+    let phase = if phase.is_finite() {
+        phase.rem_euclid(1.0)
+    } else {
+        0.0
+    };
+    let from = start * (span - 1.0) + phase * span;
+    let to = end * (span - 1.0) + phase * span;
+    let mut stops = vec![(0.0, palette_color(colors, from))];
+    let mut boundary = from.floor() + 1.0;
+    while boundary < to {
+        let position = (boundary - from) / (to - from);
+        stops.push((position, palette_color(colors, boundary)));
+        boundary += 1.0;
+    }
+    stops.push((1.0, palette_color(colors, to)));
+    stops
+}
+
 #[cfg(test)]
 mod tests {
-    use super::segment_layout;
+    use super::{palette_stops, segment_layout};
+    use bbui_style::Rgba;
 
     #[test]
     fn dense_segments_fit_or_fall_back_to_continuous_fill() {
         let (count, _, width) = segment_layout(300.0, 24.0, 128).unwrap();
         assert!(count < 128 && width >= 2.0);
         assert!(segment_layout(4.0, 24.0, 128).is_none());
+    }
+
+    #[test]
+    fn palette_stops_follow_color_anchors_without_sampling_steps() {
+        let colors = [
+            Rgba(1.0, 0.0, 0.0, 1.0),
+            Rgba(0.0, 1.0, 0.0, 1.0),
+            Rgba(0.0, 0.0, 1.0, 1.0),
+            Rgba(1.0, 0.0, 1.0, 1.0),
+        ];
+        let stops = palette_stops(&colors, 0.0, 1.0, 0.125);
+        assert_eq!(stops.len(), 5);
+        assert_eq!(stops[1], (1.0 / 6.0, colors[1]));
+        assert_eq!(stops[2], (0.5, colors[2]));
+        assert_eq!(stops[3], (5.0 / 6.0, colors[3]));
+        assert_eq!(stops[0].1, colors[0].mix(colors[1], 0.5));
+        assert_eq!(stops[4].1, colors[3].mix(colors[0], 0.5));
+        assert_eq!(
+            palette_stops(&colors, 0.0, 1.0, 1.0),
+            palette_stops(&colors, 0.0, 1.0, 0.0)
+        );
     }
 }
