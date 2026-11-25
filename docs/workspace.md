@@ -62,6 +62,6 @@ Serialize `workspace.layout()` with Serde to persist the arrangement. Use `Works
 
 ## Performance measurements
 
-Run `cargo bench -p bbui --bench performance --locked -- workspace` to measure workspace layout operations and headless Bevy updates. The cases cover idle frames, tab selection, pane moves, committed splitter resizing, pointer-driven splitter dragging, and chrome refresh at 2, 8, and 32 groups with three panes each. These are CPU measurements; they do not include GPU rendering or application pane content.
+Run `cargo bench -p bbui --bench performance --locked -- workspace` to measure workspace layout operations and headless Bevy updates. The cases cover idle frames, tab selection, pane moves, committed splitter resizing, pointer-driven splitter dragging, and chrome refresh at 2, 8, and 32 groups with three panes each. Embedded cases compare idle updates and window resizes against full-window mounting with the same dock layout. These are CPU measurements; they do not include GPU rendering or application pane content.
 
 During a pointer-driven splitter preview, BBUI updates the two adjacent split shares in place and keeps pane entities mounted. The drag benchmark verifies that the rendered group width actually changes, so it cannot report a speedup from updating only the saved layout.

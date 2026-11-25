@@ -1,10 +1,13 @@
 //! End-to-end CPU cost of the docking workspace's common interactions.
 
 use bbui::{BbuiPlugin, workspace::Workspace};
-use bbui_core::{UiInputEvent, UiInputQueue, UiKey, UiPointerButton};
-use bbui_layout::UiLayoutResult;
+use bbui_core::{UiInputEvent, UiInputQueue, UiKey, UiParent, UiPointerButton};
+use bbui_layout::{Rect, UiLayoutResult, UiLayoutRoot, UiLength};
 use bbui_render::DisplayList;
-use bbui_widgets::{DockNode, PaneId, SplitAxis, TabGroup, WorkspaceLayout, WorkspaceOperation};
+use bbui_widgets::{
+    DockNode, PaneId, SplitAxis, TabGroup, WidgetNode, WidgetTree, WorkspaceLayout,
+    WorkspaceOperation,
+};
 use bevy::{
     asset::AssetPlugin,
     clipboard::ClipboardPlugin,
@@ -54,9 +57,113 @@ fn scene(groups: usize) -> Result<App, String> {
     Ok(app)
 }
 
+fn embedded_scene(groups: usize) -> Result<App, String> {
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins)
+        .add_plugins(AssetPlugin::default())
+        .add_plugins(WindowPlugin {
+            primary_window: None,
+            ..Default::default()
+        })
+        .add_plugins((ImagePlugin::default(), InputPlugin, ClipboardPlugin))
+        .add_plugins(BbuiPlugin);
+    let mut window = Window::default();
+    window.resolution.set(1280.0, 720.0);
+    let window = app.world_mut().spawn((window, PrimaryWindow)).id();
+    let shell = WidgetTree::new(
+        WidgetNode::column([
+            WidgetNode::label("Commands").with_height(UiLength::Px(40.0)),
+            WidgetNode::column([])
+                .with_key("bench:workspace-host")
+                .with_width(UiLength::Fill(1.0))
+                .with_height(UiLength::Fill(1.0)),
+            WidgetNode::label("Job status").with_height(UiLength::Px(28.0)),
+        ])
+        .with_width(UiLength::Fill(1.0))
+        .with_height(UiLength::Fill(1.0)),
+    )
+    .spawn(app.world_mut(), None)
+    .map_err(|error| format!("workspace benchmark shell: {error:?}"))?;
+    app.world_mut().entity_mut(shell).insert(UiLayoutRoot::new(
+        window,
+        Rect::new(0.0, 0.0, 1280.0, 720.0),
+        1.0,
+    ));
+    let host = keyed_entity(&mut app, "bench:workspace-host")?;
+    let mut workspace = Workspace::new(layout(groups)).map_err(|error| error.to_string())?;
+    workspace.set_mount_parent(host);
+    app.insert_resource(workspace);
+    for _ in 0..3 {
+        app.update();
+    }
+    let dock = keyed_entity(&mut app, "ws:split:root-split")?;
+    if app.world().get::<UiParent>(dock) != Some(&UiParent(host)) {
+        return Err("workspace benchmark dock did not mount inside shell".to_owned());
+    }
+    Ok(app)
+}
+
+fn keyed_entity(app: &mut App, key: &str) -> Result<Entity, String> {
+    let world = app.world_mut();
+    let mut query = world.query::<(Entity, &UiKey)>();
+    query
+        .iter(world)
+        .find_map(|(entity, candidate)| (candidate.0 == key).then_some(entity))
+        .ok_or_else(|| format!("workspace benchmark has no {key}"))
+}
+
+fn primary_window(app: &mut App) -> Result<Entity, String> {
+    let world = app.world_mut();
+    let mut query = world.query_filtered::<Entity, bevy::prelude::With<PrimaryWindow>>();
+    query
+        .iter(world)
+        .next()
+        .ok_or_else(|| "workspace benchmark has no primary window".to_owned())
+}
+
 fn update(app: &mut App) {
     app.update();
     black_box(app.world().resource::<DisplayList>().item_count());
+}
+
+fn update_after_window_resize(
+    app: &mut App,
+    window: Entity,
+    dock: Entity,
+    wide: bool,
+    shell_host: Option<Entity>,
+) -> Result<(), String> {
+    let (width, height) = if wide {
+        (1280.0, 720.0)
+    } else {
+        (1024.0, 640.0)
+    };
+    let mut window_state = app
+        .world_mut()
+        .get_mut::<Window>(window)
+        .ok_or_else(|| "workspace benchmark window disappeared".to_owned())?;
+    window_state.resolution.set(width, height);
+    update(app);
+    let rect = app
+        .world()
+        .get::<UiLayoutResult>(dock)
+        .map(|layout| layout.rect)
+        .ok_or_else(|| "workspace benchmark dock lost its layout".to_owned())?;
+    let expected = if let Some(host) = shell_host {
+        app.world()
+            .get::<UiLayoutResult>(host)
+            .map(|layout| layout.rect)
+            .ok_or_else(|| "workspace benchmark shell host lost its layout".to_owned())?
+    } else {
+        Rect::new(0.0, 0.0, width, height)
+    };
+    if rect != expected {
+        return Err(format!(
+            "workspace benchmark dock has unexpected bounds after resize: {rect:?}, expected {expected:?}"
+        ));
+    }
+    black_box(rect);
+    Ok(())
 }
 
 fn splitter_drag_scene(groups: usize) -> Result<(App, Entity, [f32; 2]), String> {
@@ -154,6 +261,59 @@ pub fn bench(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::new("idle", groups), &groups, |b, _| {
             b.iter(|| update(&mut idle));
         });
+
+        let Ok(mut embedded_idle) = embedded_scene(groups) else {
+            eprintln!("failed to create embedded idle workspace benchmark scene");
+            continue;
+        };
+        group.bench_with_input(
+            BenchmarkId::new("embedded_idle", groups),
+            &groups,
+            |b, _| {
+                b.iter(|| update(&mut embedded_idle));
+            },
+        );
+
+        for (name, scene, host_key) in [
+            ("resize_window_full", scene(groups), None),
+            (
+                "resize_window_embedded",
+                embedded_scene(groups),
+                Some("bench:workspace-host"),
+            ),
+        ] {
+            let Ok(mut resized_window) = scene else {
+                eprintln!("failed to create {name} workspace benchmark scene");
+                continue;
+            };
+            let (Ok(window), Ok(dock)) = (
+                primary_window(&mut resized_window),
+                keyed_entity(&mut resized_window, "ws:split:root-split"),
+            ) else {
+                eprintln!("{name} workspace benchmark scene has no window or dock");
+                continue;
+            };
+            let host = if let Some(key) = host_key {
+                match keyed_entity(&mut resized_window, key) {
+                    Ok(host) => Some(host),
+                    Err(error) => {
+                        eprintln!("{name} workspace benchmark: {error}");
+                        continue;
+                    }
+                }
+            } else {
+                None
+            };
+            let mut wide = true;
+            group.bench_with_input(BenchmarkId::new(name, groups), &groups, |b, _| {
+                b.iter(|| {
+                    wide = !wide;
+                    let result =
+                        update_after_window_resize(&mut resized_window, window, dock, wide, host);
+                    assert!(result.is_ok(), "{name} benchmark resize failed: {result:?}");
+                });
+            });
+        }
 
         let Ok(mut select) = scene(groups) else {
             eprintln!("failed to create tab selection benchmark scene");
