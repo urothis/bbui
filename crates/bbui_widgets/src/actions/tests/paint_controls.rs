@@ -1,6 +1,47 @@
 use super::*;
 
 #[test]
+pub(super) fn command_palette_action_text_is_centered_inside_its_row() {
+    let mut app = App::new();
+    app.add_plugins(WidgetPlugin);
+    let window = app.world_mut().spawn_empty().id();
+    let layout = UiLayoutNode {
+        padding: bbui_layout::UiEdges::horizontal_vertical(12.0, 0.0),
+        ..Default::default()
+    };
+    app.world_mut().spawn((
+        UiNode,
+        UiRole("command-palette-action".into()),
+        Button::new("Assign Material"),
+        layout,
+        UiLayoutResult {
+            window,
+            rect: UiRect::new(100.0, 200.0, 260.0, 38.0),
+            clip: None,
+            z: 3,
+            content_size: [260.0, 38.0],
+            dpi_scale: 1.0,
+        },
+    ));
+    app.update();
+
+    let theme = app.world().resource::<Theme>();
+    let expected_y = 200.0 + (38.0 - theme.font_size * theme.line_height) * 0.5;
+    let origin = app
+        .world()
+        .resource::<DisplayList>()
+        .widget_items()
+        .iter()
+        .find_map(|item| match &item.primitive {
+            Primitive::TextWrapped { text, origin, .. } if text == "Assign Material" => {
+                Some(*origin)
+            }
+            _ => None,
+        });
+    assert_eq!(origin, Some([112.0, expected_y]));
+}
+
+#[test]
 pub(super) fn widget_paint_uses_computed_colors_opacity_and_corner_radius() {
     let mut app = App::new();
     app.add_plugins(WidgetPlugin);

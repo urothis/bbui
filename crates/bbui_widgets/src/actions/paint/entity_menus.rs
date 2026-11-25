@@ -14,6 +14,7 @@ pub(super) fn paint_buttons_and_menus(paint: &mut PaintEntityContext<'_>) -> boo
 
     if let Some(button) = world.get::<Button>(entity).cloned() {
         let role = world.get::<UiRole>(entity).map(|role| role.0.clone());
+        let palette_action = role.as_deref() == Some("command-palette-action");
         if matches!(
             role.as_deref(),
             Some("workspace-tab" | "workspace-tab-close" | "workspace-splitter")
@@ -94,8 +95,20 @@ pub(super) fn paint_buttons_and_menus(paint: &mut PaintEntityContext<'_>) -> boo
                 clip,
                 TextPlacement {
                     origin: [
-                        rect.x + theme.spacing.control.padding_x,
-                        rect.y + theme.spacing.control.padding_y,
+                        rect.x
+                            + if palette_action {
+                                world
+                                    .get::<UiLayoutNode>(entity)
+                                    .map_or(12.0, |node| node.padding.left)
+                            } else {
+                                theme.spacing.control.padding_x
+                            },
+                        rect.y
+                            + if palette_action {
+                                ((rect.height - theme.font_size * theme.line_height) * 0.5).max(0.0)
+                            } else {
+                                theme.spacing.control.padding_y
+                            },
                     ],
                     text: button.label.clone(),
                 },
