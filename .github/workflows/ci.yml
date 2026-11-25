@@ -20,11 +20,11 @@ jobs:
         with:
           toolchain: 1.99.0
           targets: ${{ matrix.target }}
-      - uses: android-actions/setup-android@v3
-        if: matrix.target == 'aarch64-linux-android'
       - name: Install Android NDK
         if: matrix.target == 'aarch64-linux-android'
-        run: sdkmanager 'ndk;27.2.12479018'
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager 'ndk;27.2.12479018'
       - name: Check Android library
         if: matrix.target == 'aarch64-linux-android'
         run: |
