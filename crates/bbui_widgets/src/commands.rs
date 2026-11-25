@@ -350,7 +350,11 @@ impl CommandPalette {
                 .with_key(Self::action_key(&command.id))
                 .with_width(UiLength::Fill(1.0))
                 .with_height(UiLength::Px(appearance.row_height))
-                .with_accessible_name(format!("{}; {}", command.label, command.description))
+                .with_accessible_name(if command.description.is_empty() {
+                    command.label.clone()
+                } else {
+                    format!("{}; {}", command.label, command.description)
+                })
                 .with_style(if selected {
                     appearance.selected_style.clone()
                 } else {
