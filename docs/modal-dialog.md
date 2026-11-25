@@ -16,4 +16,6 @@ ModalDialog::new(
 
 Read `ModalEvent` messages to handle `ModalDismissal::Action(id)` or `ModalDismissal::Escape`. Escape dismissal is enabled by default and can be disabled with `with_escape_dismissal(false)`. Call `dismiss_dialog(world, window)` to close a dialog from application code. A window accepts one active dialog; attempting to open another returns `ModalError::AlreadyOpen`. The host owns the action semantics, including save, discard, and close policy.
 
+BBUI blocks its own controls behind the dialog. Applications with separate input systems, such as a 3D viewport, can read `ModalDialogs::is_open(window)` to suspend those interactions while the dialog is visible.
+
 Run `cargo run -p bbui --example modal_dialog` for an interactive confirmation.

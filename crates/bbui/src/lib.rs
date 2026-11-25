@@ -109,7 +109,9 @@ impl Plugin for BbuiPlugin {
 pub mod prelude {
     pub use crate::BbuiPlugin;
     pub use crate::bbui;
-    pub use crate::modal::{ModalAction, ModalDialog, ModalDismissal, ModalError, ModalEvent};
+    pub use crate::modal::{
+        ModalAction, ModalDialog, ModalDialogs, ModalDismissal, ModalError, ModalEvent,
+    };
     pub use crate::workspace::{Workspace, WorkspaceAppearance, WorkspacePlugin};
     pub use bbui_core::{
         UiDirty, UiDirtyBatch, UiDirtyDomain, UiEnabled, UiFocus, UiFocusable, UiHistoryDelegate,

@@ -197,9 +197,17 @@ struct ActiveModal {
     dismiss_on_escape: bool,
 }
 
+/// Read this resource to suspend application input, such as a 3D viewport,
+/// while a dialog is open in the same window.
 #[derive(Resource, Default)]
-struct ModalDialogs {
+pub struct ModalDialogs {
     active: HashMap<Entity, ActiveModal>,
+}
+
+impl ModalDialogs {
+    pub fn is_open(&self, window: Entity) -> bool {
+        self.active.contains_key(&window)
+    }
 }
 
 fn find_key(world: &World, root: Entity, key: &str) -> Option<Entity> {
@@ -370,6 +378,7 @@ mod tests {
         .show(app.world_mut(), window)
         .unwrap();
         app.update();
+        assert!(app.world().resource::<ModalDialogs>().is_open(window));
         let active = &app.world().resource::<ModalDialogs>().active[&window];
         assert!(!bbui_core::is_interactable_in_window(
             app.world(),
@@ -461,6 +470,7 @@ mod tests {
                 modifiers: UiModifiers::default(),
             });
         app.update();
+        assert!(!app.world().resource::<ModalDialogs>().is_open(window));
         assert!(
             app.world()
                 .resource::<ModalDialogs>()
