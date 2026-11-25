@@ -2,6 +2,12 @@ use super::*;
 
 pub(super) fn node_for(world: &World, entity: Entity) -> Option<Node> {
     let label = world.get::<Label>(entity).map(|label| label.text.clone());
+    if let Some(dialog) = world.get::<ModalDialogMarker>(entity) {
+        let mut node = Node::new(Role::Dialog);
+        node.set_label(dialog.0.clone());
+        node.set_modal();
+        return Some(node);
+    }
     if world.get::<UiTabList>(entity).is_some() {
         return Some(Node::new(Role::TabList));
     }
@@ -658,7 +664,15 @@ pub(super) fn node_for(world: &World, entity: Entity) -> Option<Node> {
 pub(super) fn visible_in_hierarchy(world: &World, entity: Entity) -> bool {
     let mut current = Some(entity);
     let mut depth = 0;
+    let mut window = None;
+    let mut modal_ancestor = None;
     while let Some(at) = current {
+        if modal_ancestor.is_none() {
+            modal_ancestor = world
+                .get_resource::<UiModalScopes>()
+                .and_then(|scopes| scopes.0.values().copied().find(|root| *root == at));
+        }
+        window = window.or_else(|| world.get::<UiLayoutResult>(at).map(|layout| layout.window));
         if world.get::<UiVisible>(at).is_some_and(|visible| !visible.0) {
             return false;
         }
@@ -677,6 +691,16 @@ pub(super) fn visible_in_hierarchy(world: &World, entity: Entity) -> bool {
         if depth > 1024 {
             return false;
         }
+    }
+    if let Some(root) = window.and_then(|window| {
+        world
+            .get_resource::<UiModalScopes>()?
+            .0
+            .get(&window)
+            .copied()
+    }) && modal_ancestor != Some(root)
+    {
+        return false;
     }
     true
 }
