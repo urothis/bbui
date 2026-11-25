@@ -133,40 +133,6 @@ pub(super) fn paint_buttons_and_menus(paint: &mut PaintEntityContext<'_>) -> boo
                 color: background,
             },
         ));
-        if role.as_deref() == Some("titlebar-document-drag") {
-            let visible = fit_palette_text(
-                world,
-                entity,
-                &button.label,
-                theme,
-                (rect.width - 16.0).max(0.0),
-            );
-            let text_width = measured_text_width(world, entity, &visible, theme);
-            camera_items.push(item(
-                clip,
-                z.saturating_add(1),
-                styled_text_primitive_for_entity(
-                    world,
-                    entity,
-                    clip,
-                    TextPlacement {
-                        origin: [
-                            rect.x + (rect.width - text_width) * 0.5,
-                            rect.y + (rect.height - theme.font_size * theme.line_height) * 0.5,
-                        ],
-                        text: visible,
-                    },
-                    if !enabled || !button.enabled {
-                        theme.color(ThemeColorToken::DisabledText)
-                    } else {
-                        theme.text
-                    },
-                    theme,
-                    false,
-                ),
-            ));
-            return true;
-        }
         if let Some(control) = role
             .as_deref()
             .and_then(|role| role.strip_prefix("chrome-window-"))

@@ -47,22 +47,36 @@ fn editor_layout() -> WorkspaceLayout {
 fn desktop_page(center: Option<WidgetNode>) -> WidgetNode {
     let mut accent = UiInlineStyle::default();
     accent.set_color_token(UiStyleProperty::Foreground, ThemeColorToken::Accent);
+    let center = center.unwrap_or_else(|| {
+        let mut muted = UiInlineStyle::default();
+        muted.set_color_token(UiStyleProperty::Foreground, ThemeColorToken::MutedText);
+        muted.set(UiStyleProperty::FontSize, UiStyleValue::Scalar(12.5));
+        WidgetNode::row([WidgetNode::label("Material.001")
+            .with_key("host:center-title")
+            .with_role("centered-label")
+            .with_width(UiLength::Fill(1.0))
+            .with_style(muted)])
+        .with_layout(UiLayoutNode {
+            align_items: UiAlign::Center,
+            ..UiLayoutNode::row(0.0)
+        })
+        .with_width(UiLength::Fill(1.0))
+        .with_height(UiLength::Fill(1.0))
+    });
     WidgetNode::column([
-        DesktopChrome::new("Material Studio")
-            .with_document_title("Material.001")
-            .view_with_slots(
-                &commands(),
-                &DesktopChromeAppearance::default(),
-                DesktopChromeSlots {
-                    leading: Some(
-                        WidgetNode::label("◆")
-                            .with_width(UiLength::Px(18.0))
-                            .with_style(accent),
-                    ),
-                    center,
-                    trailing: None,
-                },
-            ),
+        DesktopChrome::new("Material Studio").view_with_slots(
+            &commands(),
+            &DesktopChromeAppearance::default(),
+            DesktopChromeSlots {
+                leading: Some(
+                    WidgetNode::label("◆")
+                        .with_width(UiLength::Px(18.0))
+                        .with_style(accent),
+                ),
+                center: Some(center),
+                trailing: None,
+            },
+        ),
         WidgetNode::column([])
             .with_key("chrome:workspace")
             .with_width(UiLength::Fill(1.0))

@@ -30,7 +30,6 @@ pub struct DesktopChromeAppearance {
     pub gap: f32,
     pub control_width: f32,
     pub center_width: f32,
-    pub document_title_width: f32,
     pub native_button_inset: f32,
     pub menu_label: String,
     pub minimize_label: String,
@@ -39,7 +38,6 @@ pub struct DesktopChromeAppearance {
     pub show_window_controls: bool,
     pub surface_style: UiInlineStyle,
     pub title_style: UiInlineStyle,
-    pub document_title_style: UiInlineStyle,
     pub menu_style: UiInlineStyle,
     pub control_style: UiInlineStyle,
     pub close_style: UiInlineStyle,
@@ -63,7 +61,6 @@ impl Default for DesktopChromeAppearance {
             gap: 6.0,
             control_width: 36.0,
             center_width: 220.0,
-            document_title_width: 220.0,
             native_button_inset: MACOS_BUTTON_INSET,
             menu_label: "Commands".into(),
             minimize_label: "−".into(),
@@ -72,11 +69,6 @@ impl Default for DesktopChromeAppearance {
             show_window_controls: true,
             surface_style,
             title_style: chrome_style(14.0, ThemeColorToken::Text, Some(ThemeColorToken::Surface)),
-            document_title_style: chrome_style(
-                12.5,
-                ThemeColorToken::MutedText,
-                Some(ThemeColorToken::Surface),
-            ),
             menu_style: chrome_style(
                 12.0,
                 ThemeColorToken::MutedText,
@@ -92,7 +84,7 @@ impl Default for DesktopChromeAppearance {
 #[derive(Debug, Default)]
 pub struct DesktopChromeSlots {
     pub leading: Option<WidgetNode>,
-    /// Noninteractive content centered across the full titlebar, in place of the document title.
+    /// Content centered across the full titlebar. Noninteractive descendants remain draggable.
     pub center: Option<WidgetNode>,
     pub trailing: Option<WidgetNode>,
 }
@@ -195,21 +187,13 @@ pub const MACOS_BUTTON_INSET: f32 = 90.0;
 #[derive(Debug, Clone)]
 pub struct DesktopChrome {
     pub title: String,
-    pub document_title: Option<String>,
 }
 
 impl DesktopChrome {
     pub fn new(title: impl Into<String>) -> Self {
         Self {
             title: title.into(),
-            document_title: None,
         }
-    }
-
-    /// Set the current document shown at the horizontal center of the titlebar.
-    pub fn with_document_title(mut self, title: impl Into<String>) -> Self {
-        self.document_title = Some(title.into());
-        self
     }
 
     pub fn view(&self, commands: &CommandRegistry) -> WidgetNode {
@@ -301,35 +285,15 @@ impl DesktopChrome {
                 .with_height(UiLength::Fill(1.0))
                 .with_gap(appearance.gap),
         ];
-        if let Some(content) = center {
-            if appearance.center_width > 0.0 {
-                layers.push(centered_chrome_layer(
-                    WidgetNode::overlay([chrome_center_foreground(content)])
-                        .with_key("chrome:center-drag")
-                        .with_width(UiLength::Px(appearance.center_width))
-                        .with_height(UiLength::Fill(1.0))
-                        .with_style(chrome_center_style()),
-                ));
-            }
-        } else if let Some(title) = self
-            .document_title
-            .as_deref()
-            .filter(|title| !title.is_empty())
-            && appearance.document_title_width > 0.0
+        if let Some(content) = center
+            && appearance.center_width > 0.0
         {
-            let mut style = appearance.document_title_style.clone();
-            style
-                .0
-                .entry(UiStyleProperty::ZIndex)
-                .or_insert(UiStyleValue::Integer(2));
             layers.push(centered_chrome_layer(
-                WidgetNode::button(title)
-                    .with_key("chrome:document-drag")
-                    .with_role("titlebar-document-drag")
-                    .with_accessible_name(format!("Move window; current document {title}"))
-                    .with_width(UiLength::Px(appearance.document_title_width))
+                WidgetNode::overlay([chrome_center_foreground(content)])
+                    .with_key("chrome:center-drag")
+                    .with_width(UiLength::Px(appearance.center_width))
                     .with_height(UiLength::Fill(1.0))
-                    .with_style(style),
+                    .with_style(chrome_center_style()),
             ));
         }
         WidgetNode::boxed([WidgetNode::overlay(layers)
@@ -537,12 +501,10 @@ pub fn handle_chrome_press(world: &mut World, event: &UiRoutedEvent) -> bool {
     let mut current = Some(*target);
     let mut drag_target = false;
     while let Some(entity) = current {
-        if world.get::<UiKey>(entity).is_some_and(|key| {
-            matches!(
-                key.0.as_str(),
-                "chrome:drag" | "chrome:document-drag" | "chrome:center-drag"
-            )
-        }) {
+        if world
+            .get::<UiKey>(entity)
+            .is_some_and(|key| matches!(key.0.as_str(), "chrome:drag" | "chrome:center-drag"))
+        {
             drag_target = true;
             break;
         }
@@ -625,27 +587,24 @@ mod tests {
             show_window_controls: false,
             ..Default::default()
         };
-        let desktop = DesktopChrome::new("Editor")
-            .with_document_title("Current.bbui")
-            .view_with_slots(
-                &commands,
-                &appearance,
-                DesktopChromeSlots {
-                    leading: Some(WidgetNode::label("Brand").with_key("host:brand")),
-                    center: Some(
-                        WidgetNode::row([
-                            WidgetNode::label("Exporting"),
-                            WidgetNode::progress(0.6).with_key("host:progress"),
-                        ])
-                        .with_key("host:center"),
-                    ),
-                    trailing: None,
-                },
-            );
+        let desktop = DesktopChrome::new("Editor").view_with_slots(
+            &commands,
+            &appearance,
+            DesktopChromeSlots {
+                leading: Some(WidgetNode::label("Brand").with_key("host:brand")),
+                center: Some(
+                    WidgetNode::row([
+                        WidgetNode::label("Exporting"),
+                        WidgetNode::progress(0.6).with_key("host:progress"),
+                    ])
+                    .with_key("host:center"),
+                ),
+                trailing: None,
+            },
+        );
         assert!(find(&desktop, "host:brand").is_some());
         assert!(find(&desktop, "chrome:drag").is_some());
         assert!(find(&desktop, "chrome:center-drag").is_some());
-        assert!(find(&desktop, "chrome:document-drag").is_none());
         assert!(find(&desktop, "host:progress").is_some());
         assert!(find(&desktop, "chrome:commands").is_some());
         assert!(find(&desktop, "chrome:close").is_none());
@@ -671,7 +630,6 @@ mod tests {
         let mut world = World::new();
         let window = world.spawn(Window::default()).id();
         let drag = world.spawn(UiKey("chrome:drag".into())).id();
-        let document_drag = world.spawn(UiKey("chrome:document-drag".into())).id();
         let center_drag = world.spawn(UiKey("chrome:center-drag".into())).id();
         let progress = world.spawn(UiParent(center_drag)).id();
         let center_button = world.spawn((UiParent(center_drag), UiFocusable)).id();
@@ -698,15 +656,6 @@ mod tests {
                 target: drag,
                 button: UiPointerButton::Primary,
                 position: [20.0, 10.0],
-            }
-        ));
-        assert!(handle_chrome_press(
-            &mut world,
-            &UiRoutedEvent::PointerDown {
-                window,
-                target: document_drag,
-                button: UiPointerButton::Primary,
-                position: [400.0, 10.0],
             }
         ));
         assert!(handle_chrome_press(

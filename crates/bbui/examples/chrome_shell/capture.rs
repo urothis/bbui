@@ -179,15 +179,10 @@ fn capture(kind: ThemeKind, mode: &str, width: u32, height: u32) {
         app.update();
     }
     if mode.starts_with("desktop") {
-        let center_key = if mode == "desktop-progress" {
-            "chrome:center-drag"
-        } else {
-            "chrome:document-drag"
-        };
         let center_target = {
             let mut keys = app.world_mut().query::<(Entity, &UiKey)>();
             keys.iter(app.world())
-                .find_map(|(entity, key)| (key.0 == center_key).then_some(entity))
+                .find_map(|(entity, key)| (key.0 == "chrome:center-drag").then_some(entity))
                 .expect("center drag target")
         };
         let chrome = {
@@ -294,7 +289,7 @@ fn capture(kind: ThemeKind, mode: &str, width: u32, height: u32) {
         let hit_target_key = if mode == "desktop-progress" {
             "host:center-progress"
         } else {
-            "chrome:document-drag"
+            "host:center-title"
         };
         let hit_target = {
             let mut keys = app.world_mut().query::<(Entity, &UiKey)>();
