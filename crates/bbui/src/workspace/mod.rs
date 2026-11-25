@@ -87,6 +87,7 @@ pub struct Workspace {
     history: History<WorkspaceLayout>,
     pending_events: Vec<WorkspaceEvent>,
     window: Option<Entity>,
+    mount_parent: Option<Entity>,
     root: Option<Entity>,
     live_panes: HashMap<PaneId, Entity>,
     rebuild_panes: HashSet<PaneId>,
@@ -107,6 +108,7 @@ impl Workspace {
             history: History::default(),
             pending_events: Vec::new(),
             window: None,
+            mount_parent: None,
             root: None,
             live_panes: HashMap::new(),
             rebuild_panes: HashSet::new(),
@@ -120,6 +122,20 @@ impl Workspace {
 
     pub fn layout(&self) -> &WorkspaceLayout {
         &self.layout
+    }
+
+    /// Mount the workspace within an existing BBUI layout node instead of filling the window.
+    /// The parent must be attached to a layout root in the workspace's window. Its layout
+    /// determines the available size; moving or resizing it also resizes the workspace.
+    pub fn set_mount_parent(&mut self, parent: Entity) {
+        self.mount_parent = Some(parent);
+        self.dirty = true;
+    }
+
+    /// Return to the default, full-window workspace mounting mode.
+    pub fn clear_mount_parent(&mut self) {
+        self.mount_parent = None;
+        self.dirty = true;
     }
 
     pub fn appearance(&self) -> &WorkspaceAppearance {
