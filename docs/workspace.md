@@ -31,6 +31,20 @@ world.insert_resource(workspace);
 
 The host owns document data. Moving a pane keeps its mounted entity and transient widget state. Closing it unmounts the UI; `WorkspaceOperation::Open` rebuilds it from host state. A saved layout that refers to an unregistered pane shows a placeholder until that pane is registered.
 
+## Place a workspace inside an application shell
+
+Call `workspace.set_mount_parent(parent)` with a BBUI node inside the window's layout tree before inserting the resource. The workspace fills that node and follows its size when the shell or window changes. Its tabs, splitters, and drop targets use the resulting bounds. `clear_mount_parent()` restores the default full-window mounting mode. The [workspace shell example](../crates/bbui/examples/workspace_shell.rs) puts a command row above the dock and a status strip below it.
+
+| Dark shell | Light shell |
+| --- | --- |
+| ![Workspace mounted between the command row and status strip in the dark theme](visuals/examples/workspace-shell-dark.png) | ![Workspace mounted between the command row and status strip in the light theme](visuals/examples/workspace-shell-light.png) |
+
+```rust
+let mut workspace = Workspace::new(layout)?;
+workspace.set_mount_parent(center_region);
+world.insert_resource(workspace);
+```
+
 ## Docking
 
 - Drag a tab onto a group's center to join it, or over another tab to choose its insertion point. Drop on a group edge to create a split. Hold Shift over the center to create a grid.
@@ -48,6 +62,6 @@ Serialize `workspace.layout()` with Serde to persist the arrangement. Use `Works
 
 ## Performance measurements
 
-Run `cargo bench -p bbui --bench performance --locked -- workspace` to measure workspace layout operations and headless Bevy updates. The cases cover idle frames, tab selection, pane moves, committed splitter resizing, pointer-driven splitter dragging, and chrome refresh at 2, 8, and 32 groups with three panes each. These are CPU measurements; they do not include GPU rendering or application pane content.
+Run `cargo bench -p bbui --bench performance --locked -- workspace` to measure workspace layout operations and headless Bevy updates. The cases cover idle frames, tab selection, pane moves, committed splitter resizing, pointer-driven splitter dragging, and chrome refresh at 2, 8, and 32 groups with three panes each. Embedded cases compare idle updates and window resizes against full-window mounting with the same dock layout. These are CPU measurements; they do not include GPU rendering or application pane content.
 
 During a pointer-driven splitter preview, BBUI updates the two adjacent split shares in place and keeps pane entities mounted. The drag benchmark verifies that the rendered group width actually changes, so it cannot report a speedup from updating only the saved layout.
