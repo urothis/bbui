@@ -35,6 +35,10 @@ The host owns document data. Moving a pane keeps its mounted entity and transien
 
 Call `workspace.set_mount_parent(parent)` with a BBUI node inside the window's layout tree before inserting the resource. The workspace fills that node and follows its size when the shell or window changes. Its tabs, splitters, and drop targets use the resulting bounds. `clear_mount_parent()` restores the default full-window mounting mode. The [workspace shell example](../crates/bbui/examples/workspace_shell.rs) puts a command row above the dock and a status strip below it.
 
+| Dark shell | Light shell |
+| --- | --- |
+| ![Workspace mounted between the command row and status strip in the dark theme](visuals/examples/workspace-shell-dark.png) | ![Workspace mounted between the command row and status strip in the light theme](visuals/examples/workspace-shell-light.png) |
+
 ```rust
 let mut workspace = Workspace::new(layout)?;
 workspace.set_mount_parent(center_region);

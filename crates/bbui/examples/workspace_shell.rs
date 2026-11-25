@@ -6,8 +6,11 @@ use bbui::widgets::WidgetNode;
 use bevy::prelude::*;
 use bevy::window::{PrimaryWindow, WindowResolution};
 
-fn setup(world: &mut World) {
-    world.spawn(Camera2d);
+#[cfg(test)]
+#[path = "workspace_shell/capture.rs"]
+mod capture;
+
+fn install_shell(world: &mut World) {
     let mut windows = world.query_filtered::<Entity, With<PrimaryWindow>>();
     let Ok(window) = windows.single(world) else {
         return;
@@ -35,9 +38,15 @@ fn setup(world: &mut World) {
         .with_width(UiLength::Fill(1.0))
         .with_height(UiLength::Fill(1.0)),
     )
-    .spawn(world, None)
-    .expect("shell widgets");
-    let resolution = &world.get::<Window>(window).unwrap().resolution;
+    .spawn(world, None);
+    let Ok(shell) = shell else {
+        error!("Could not mount shell widgets: {shell:?}");
+        return;
+    };
+    let Some(window_state) = world.get::<Window>(window) else {
+        return;
+    };
+    let resolution = &window_state.resolution;
     let dimensions = [resolution.width(), resolution.height()];
     world.entity_mut(shell).insert(UiLayoutRoot::new(
         window,
@@ -47,8 +56,11 @@ fn setup(world: &mut World) {
     let mut keys = world.query::<(Entity, &UiKey)>();
     let workspace_host = keys
         .iter(world)
-        .find_map(|(entity, key)| (key.0 == "shell:workspace").then_some(entity))
-        .expect("workspace host");
+        .find_map(|(entity, key)| (key.0 == "shell:workspace").then_some(entity));
+    let Some(workspace_host) = workspace_host else {
+        error!("Could not find workspace host in shell");
+        return;
+    };
     let layout = WorkspaceLayout::new(DockNode::Split {
         id: "columns".into(),
         axis: SplitAxis::Horizontal,
@@ -58,19 +70,31 @@ fn setup(world: &mut World) {
             DockNode::Tabs(TabGroup::new("inspector", vec!["properties".into()])),
         ],
     });
-    let mut workspace = Workspace::new(layout).expect("workspace layout");
+    let Ok(mut workspace) = Workspace::new(layout) else {
+        error!("Could not create workspace layout");
+        return;
+    };
     workspace.set_mount_parent(workspace_host);
     workspace.register_pane("terrain", "Terrain", |world, parent| {
-        WidgetTree::new(WidgetNode::label("Terrain viewport goes here"))
+        if let Err(error) = WidgetTree::new(WidgetNode::label("Terrain viewport goes here"))
             .spawn(world, Some(parent))
-            .expect("terrain pane");
+        {
+            error!("Could not mount terrain pane: {error:?}");
+        }
     });
     workspace.register_pane("properties", "Properties", |world, parent| {
-        WidgetTree::new(WidgetNode::label("Area properties"))
-            .spawn(world, Some(parent))
-            .expect("properties pane");
+        if let Err(error) =
+            WidgetTree::new(WidgetNode::label("Area properties")).spawn(world, Some(parent))
+        {
+            error!("Could not mount properties pane: {error:?}");
+        }
     });
     world.insert_resource(workspace);
+}
+
+fn setup(world: &mut World) {
+    world.spawn(Camera2d);
+    install_shell(world);
 }
 
 fn main() {
