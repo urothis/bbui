@@ -9,7 +9,11 @@ pub(super) fn paint_progress(paint: &mut PaintEntityContext<'_>) {
         return;
     }
     let rect = ClipRect::from(paint.rect);
-    if rect.width <= 0.0 || rect.height <= 0.0 {
+    if !rect.width.is_finite()
+        || !rect.height.is_finite()
+        || rect.width <= 0.0
+        || rect.height <= 0.0
+    {
         return;
     }
     let radius = progress
@@ -71,11 +75,8 @@ pub(super) fn paint_progress(paint: &mut PaintEntityContext<'_>) {
 
     let mut pieces = Vec::new();
     match progress.style.segments {
-        Some(count) if count >= 2 => {
-            let count = count.min(128);
-            let gap = (rect.height * 0.2).clamp(1.0, 3.0);
-            let width = (rect.width - gap * (count - 1) as f32) / count as f32;
-            if width > 0.0 {
+        Some(requested) if requested >= 2 => {
+            if let Some((count, gap, width)) = segment_layout(rect.width, rect.height, requested) {
                 for index in 0..count {
                     let segment_start = rect.x + index as f32 * (width + gap);
                     let left = segment_start.max(start);
@@ -88,6 +89,8 @@ pub(super) fn paint_progress(paint: &mut PaintEntityContext<'_>) {
                         });
                     }
                 }
+            } else {
+                pieces.push(fill_rect);
             }
         }
         _ => pieces.push(fill_rect),
@@ -137,6 +140,20 @@ pub(super) fn paint_progress(paint: &mut PaintEntityContext<'_>) {
             );
         }
     }
+}
+
+fn segment_layout(width: f32, height: f32, requested: usize) -> Option<(usize, f32, f32)> {
+    if !width.is_finite() || !height.is_finite() || width <= 0.0 || height <= 0.0 {
+        return None;
+    }
+    let gap = (height * 0.2).clamp(1.0, 3.0);
+    let max_count = ((width + gap) / (gap + 2.0)).floor() as usize;
+    let count = requested.min(128).min(max_count);
+    if count < 2 {
+        return None;
+    }
+    let segment_width = (width - gap * (count - 1) as f32) / count as f32;
+    (segment_width > 0.0).then_some((count, gap, segment_width))
 }
 
 fn paint_fill_piece(
@@ -204,4 +221,16 @@ fn palette_color(colors: &[Rgba], position: f32, phase: f32) -> Rgba {
     let index = coordinate.floor() as usize;
     let next = (index + 1) % colors.len();
     colors[index].mix(colors[next], coordinate.fract())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::segment_layout;
+
+    #[test]
+    fn dense_segments_fit_or_fall_back_to_continuous_fill() {
+        let (count, _, width) = segment_layout(300.0, 24.0, 128).unwrap();
+        assert!(count < 128 && width >= 2.0);
+        assert!(segment_layout(4.0, 24.0, 128).is_none());
+    }
 }

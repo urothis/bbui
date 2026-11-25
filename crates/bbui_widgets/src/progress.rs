@@ -52,7 +52,7 @@ pub struct ProgressStyle {
     pub fill: ProgressFill,
     pub track: Option<UiEffectColor>,
     pub corners: ProgressCorners,
-    /// Number of equal segments. `None` paints a continuous fill.
+    /// Number of equal segments. Reduced to fit narrow bars; `None` paints a continuous fill.
     pub segments: Option<usize>,
     /// The border radius follows `corners`; the border's own radius is ignored here.
     pub fill_border: Option<UiBorderEffect>,
