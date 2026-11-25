@@ -23,3 +23,7 @@ Read `ModalEvent` messages to handle `ModalDismissal::Action(id)` or `ModalDismi
 BBUI blocks its own controls behind the dialog. Applications with separate input systems, such as a 3D viewport, can read `ModalDialogs::is_open(window)` to suspend those interactions while the dialog is visible.
 
 Run `cargo run -p bbui --example modal_dialog` for an interactive confirmation. After dismissing it, choose **Edit project** to reopen it.
+
+## Performance measurements
+
+Run `cargo bench -p bbui --bench performance --locked -- modal` to compare pointer and Tab routing with a modal scope open and closed over 10,000 controls. The open/close cases measure a confirmation and its accessibility refresh over pages with 100 and 1,000 controls. These are headless CPU measurements; they do not include GPU rendering.
