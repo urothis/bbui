@@ -48,6 +48,27 @@ Use `UiBorderEffect::solid` or `UiBorderEffect::gradient` for a border, and `UiE
 
 Run `BBUI_VISUAL_VARIANTS=1 cargo run -p bbui --example visual_effects` to compare all eight in one window.
 
+## Progress bars
+
+![Plain, gradient, segmented, luminous, indeterminate, and square progress bars](docs/visuals/animations/progress-gallery.webp)
+
+`Progress` supports continuous or segmented fills, theme colors or custom solid and gradient palettes, and optional border and edge glow on the filled portion. `ProgressCorners` chooses theme, square, explicit radius, or pill corners for the track, fill, segments, border, and glow together. The glow follows the value instead of surrounding the whole track. Indeterminate bars sweep automatically and show a still indicator with reduced motion. Motion bindings can animate the displayed value, gradient palette, border and glow palette rotation, and border or glow strength; the preview clips capture 120 frames over two seconds at 60 fps.
+
+```rust
+let cyan = Rgba(0.27, 0.91, 0.88, 1.0);
+let blue = Rgba(0.28, 0.68, 1.0, 1.0);
+let violet = Rgba(0.66, 0.42, 1.0, 1.0);
+let glow_color = Rgba(0.27, 0.91, 0.88, 0.22);
+let style = ProgressStyle::gradient([cyan, blue, violet])
+    .with_corners(ProgressCorners::Pill)
+    .with_segments(12)
+    .with_fill_glow(UiEdgeGlow::solid(glow_color, 10.0, 0.0));
+let bar = WidgetNode::progress(0.64).with_progress_style(style);
+let busy = WidgetNode::indeterminate_progress();
+```
+
+Compare the [gradient](docs/visuals/animations/progress-gradient.webp), [segmented](docs/visuals/animations/progress-segmented.webp), [glowing](docs/visuals/animations/progress-glow.webp), and [indeterminate](docs/visuals/animations/progress-indeterminate.webp) clips, or run `cargo run -p bbui --example progress_gallery`.
+
 ## Try it
 
 Requires Rust 1.99 and Bevy 0.20.1. From this repository:
@@ -59,6 +80,7 @@ cargo run -p bbui --example theme_gallery
 cargo run -p bbui --example workspace
 cargo run -p bbui --example editor_workspace
 cargo run -p bbui --example visual_effects
+cargo run -p bbui --example progress_gallery
 ```
 
 For your own app, start with [installing BBUI and mounting a widget tree](docs/getting-started.md). The [widget guide](docs/widgets.md) covers events and keyed updates; the [world-space guide](docs/world-space.md) covers the camera, texture, and mesh setup.

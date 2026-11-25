@@ -30,6 +30,12 @@ pub enum Primitive {
         rect: ClipRect,
         stops: Vec<(f32, Rgba)>,
     },
+    /// A rounded horizontal color strip; stop positions are in 0..=1.
+    RoundedLinearGradient {
+        rect: ClipRect,
+        radius: f32,
+        stops: Vec<(f32, Rgba)>,
+    },
     /// A transparent rounded outline, including curved corners.
     RoundedBorder {
         rect: ClipRect,
@@ -165,6 +171,13 @@ impl UiPaint {
                 rect,
                 stops: stops.clone(),
             },
+            Primitive::RoundedLinearGradient { radius, stops, .. } => {
+                Primitive::RoundedLinearGradient {
+                    rect,
+                    radius: *radius,
+                    stops: stops.clone(),
+                }
+            }
             Primitive::RoundedBorder {
                 radius,
                 width,

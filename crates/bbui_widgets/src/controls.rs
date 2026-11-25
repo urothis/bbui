@@ -448,33 +448,7 @@ impl Default for IconButtonAssetState {
     }
 }
 
-#[derive(Component, Debug, Clone, Copy, PartialEq)]
-#[component(summary_tick)]
-pub struct Progress {
-    pub value: f32,
-    pub indeterminate: bool,
-}
-
-impl Progress {
-    pub fn new(value: f32) -> Self {
-        Self {
-            value: if value.is_finite() {
-                value.clamp(0.0, 1.0)
-            } else {
-                0.0
-            },
-            indeterminate: false,
-        }
-    }
-
-    pub fn set(&mut self, value: f32) {
-        self.value = if value.is_finite() {
-            value.clamp(0.0, 1.0)
-        } else {
-            self.value
-        };
-    }
-}
+pub use crate::progress::Progress;
 
 #[derive(Component, Debug, Clone, PartialEq, Eq)]
 #[component(summary_tick)]
