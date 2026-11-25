@@ -4,11 +4,12 @@
 
 `MobileChrome` builds a compact toolbar, content area, bottom navigation, and optional sheet from host-supplied content. Use `compact_chrome(window.resolution.width())` to switch at 600 logical pixels. Navigation returns stable IDs for the host to handle. The sheet is dismissible and remains within the shell layout.
 
-| Dark theme | Light theme |
-| --- | --- |
-| ![Desktop and compact chrome in dark theme](visuals/examples/chrome-shell-dark.png) | ![Desktop and compact chrome in light theme](visuals/examples/chrome-shell-light.png) |
+| Mode | Dark theme | Light theme |
+| --- | --- | --- |
+| Desktop editor | ![Desktop chrome around the editor in dark theme](visuals/examples/chrome-desktop-dark.png) | ![Desktop chrome around the editor in light theme](visuals/examples/chrome-desktop-light.png) |
+| Compact editor | ![Compact chrome and material sheet in dark theme](visuals/examples/chrome-mobile-dark.png) | ![Compact chrome and material sheet in light theme](visuals/examples/chrome-mobile-light.png) |
 
-Run `cargo run -p bbui --example chrome_shell` for both layouts in one window. BBUI maps a primary touch to pointer events and ignores additional fingers until the active touch ends or is cancelled.
+Run `cargo run -p bbui --example chrome_shell` for the desktop composition. The compact composition uses the same example at a 390-pixel window width. BBUI maps a primary touch to pointer events and ignores additional fingers until the active touch ends or is cancelled.
 
 The library is checked for `aarch64-apple-ios` and `aarch64-linux-android` in CI. Embedding requires a host app to create a Bevy window and mount the chrome tree; BBUI does not package mobile app bundles. Device behavior still depends on the host's window integration.
 

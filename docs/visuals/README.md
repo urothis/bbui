@@ -16,7 +16,7 @@ These are captures from runnable Bevy examples and BBUI's offscreen GPU tests. O
 | Workspace shell | [Dark](examples/workspace-shell-dark.png) · [Light](examples/workspace-shell-light.png) |
 | Modal dialog | [Dark](examples/modal-dialog-dark.png) · [Light](examples/modal-dialog-light.png) |
 | Command palette | [Dark](examples/command-palette-dark.png) · [Light](examples/command-palette-light.png) |
-| Window chrome | [Desktop and mobile dark](examples/chrome-shell-dark.png) · [light](examples/chrome-shell-light.png) |
+| Window chrome | [Desktop dark](examples/chrome-desktop-dark.png) · [desktop light](examples/chrome-desktop-light.png) · [compact dark](examples/chrome-mobile-dark.png) · [compact light](examples/chrome-mobile-light.png) |
 | Visual effects | [Gradient border and edge glow](examples/visual-effects-dark.png) · [rotated border](examples/visual-effects-rotated.png) · [eight variants](examples/visual-effect-variants.png) |
 | Progress bars | [Six-style gallery with corner options](examples/progress-gallery.png) |
 
@@ -78,7 +78,7 @@ The modal dialog captures come from `cargo test -p bbui --example modal_dialog -
 
 The command palette captures come from `cargo test -p bbui --example command_palette --locked -- --ignored`; the capture test writes both themes directly to `docs/visuals/examples/`.
 
-The window chrome captures come from `cargo test -p bbui --example chrome_shell --locked -- --ignored`; the capture test writes both themes directly to `docs/visuals/examples/`.
+The window chrome captures come from `cargo test -p bbui --example chrome_shell --locked -- --ignored`; the capture test writes desktop and compact views in both themes directly to `docs/visuals/examples/`.
 
 `capture_visual_effect_animations.py` uses offscreen GPU readback to write the visual effects stills and four 120-frame WebP clips. Each clip is two seconds at 60 fps. Pass `--frames-dir` to encode an existing set of capture frames.
 

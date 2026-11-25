@@ -2,10 +2,19 @@
 
 use bbui_core::{UiKey, UiPointerButton, UiRoutedEvent};
 use bbui_layout::{UiEdges, UiLength};
+use bbui_style::{ThemeColorToken, UiInlineStyle, UiStyleProperty, UiStyleValue};
 use bbui_widgets::{CommandRegistry, WidgetEvent, WidgetNode};
 use bevy::prelude::*;
 
 const MOBILE_BREAKPOINT: f32 = 600.0;
+
+fn sheet_foreground(mut node: WidgetNode) -> WidgetNode {
+    let style = node.style.get_or_insert_with(UiInlineStyle::default);
+    style.set(UiStyleProperty::ZIndex, UiStyleValue::Integer(2));
+    style.set_color_token(UiStyleProperty::Foreground, ThemeColorToken::Text);
+    node.children = node.children.into_iter().map(sheet_foreground).collect();
+    node
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ChromeAction {
@@ -41,7 +50,7 @@ impl DesktopChrome {
             WidgetNode::button(&self.title)
                 .with_key("chrome:drag")
                 .with_role("titlebar-drag")
-                .with_width(UiLength::Px(220.0)),
+                .with_width(UiLength::Fill(1.0)),
         );
         row.push(WidgetNode::menu("Commands", commands.menu_entries()).with_key("chrome:commands"));
         if !cfg!(target_os = "macos") {
@@ -61,6 +70,7 @@ impl DesktopChrome {
         WidgetNode::row(row)
             .with_key("chrome:desktop")
             .with_role("window-chrome")
+            .with_width(UiLength::Fill(1.0))
             .with_height(UiLength::Px(40.0))
             .with_padding(UiEdges::all(6.0))
     }
@@ -122,16 +132,22 @@ impl MobileChrome {
                 .with_height(UiLength::Fill(1.0)),
         ];
         if let (Some(title), Some(sheet)) = (&self.sheet_title, sheet) {
+            let mut sheet_style = UiInlineStyle::default();
+            sheet_style.set_color_token(UiStyleProperty::Background, ThemeColorToken::Surface);
+            sheet_style.set_color_token(UiStyleProperty::BorderColor, ThemeColorToken::Border);
+            sheet_style.set(UiStyleProperty::BorderWidth, UiStyleValue::Scalar(1.0));
+            sheet_style.set(UiStyleProperty::ZIndex, UiStyleValue::Integer(1));
             body.push(
                 WidgetNode::column([
-                    WidgetNode::row([
+                    sheet_foreground(WidgetNode::row([
                         WidgetNode::label(title).with_width(UiLength::Fill(1.0)),
                         WidgetNode::button("Close sheet").with_key("chrome:mobile:sheet-close"),
-                    ]),
-                    sheet,
+                    ])),
+                    sheet_foreground(sheet),
                 ])
                 .with_key("chrome:mobile:sheet")
-                .with_role("mobile-sheet")
+                .with_role("box")
+                .with_style(sheet_style)
                 .with_padding(UiEdges::all(12.0)),
             );
         }

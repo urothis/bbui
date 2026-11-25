@@ -22,8 +22,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-const WIDTH: u32 = 1000;
-const HEIGHT: u32 = 650;
+const WIDTH: u32 = 1536;
+const HEIGHT: u32 = 900;
 
 #[derive(Resource, Default)]
 struct Frames(HashMap<usize, Vec<u8>>);
@@ -113,12 +113,17 @@ fn capture_command_palette_dark_and_light() {
         },
         PrimaryWindow,
     ));
+    install_editor(app.world_mut());
+    for _ in 0..3 {
+        app.update();
+    }
     install_palette(app.world_mut());
     let output =
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/visuals/examples");
     std::fs::create_dir_all(&output).expect("create gallery directory");
     for (index, kind) in [ThemeKind::Dark, ThemeKind::Light].into_iter().enumerate() {
         *app.world_mut().resource_mut::<Theme>() = Theme::new(kind);
+        editor_content::configure_theme(&mut app.world_mut().resource_mut::<Theme>());
         for _ in 0..5 {
             app.update();
         }
