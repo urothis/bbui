@@ -8,6 +8,7 @@ use std::time::Duration;
 mod suite;
 
 fn workspace_benchmarks(c: &mut Criterion) {
+    suite::commands::bench(c);
     suite::layout::bench(c);
     suite::input::bench(c);
     suite::integration::bench(c);
