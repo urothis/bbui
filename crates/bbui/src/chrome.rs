@@ -51,7 +51,7 @@ impl Default for DesktopChromeAppearance {
         let mut control_style = chrome_style(
             16.0,
             ThemeColorToken::MutedText,
-            Some(ThemeColorToken::Surface),
+            Some(ThemeColorToken::Background),
         );
         control_style.set(UiStyleProperty::CornerRadius, UiStyleValue::Scalar(5.0));
         Self {
@@ -66,11 +66,7 @@ impl Default for DesktopChromeAppearance {
             close_label: "×".into(),
             show_window_controls: true,
             surface_style,
-            title_style: chrome_style(
-                14.0,
-                ThemeColorToken::Text,
-                Some(ThemeColorToken::Background),
-            ),
+            title_style: chrome_style(14.0, ThemeColorToken::Text, Some(ThemeColorToken::Surface)),
             menu_style: chrome_style(
                 12.0,
                 ThemeColorToken::MutedText,
@@ -273,14 +269,17 @@ impl DesktopChrome {
                 );
             }
         }
-        WidgetNode::row(row)
-            .with_key("chrome:desktop")
-            .with_role("window-chrome")
+        WidgetNode::boxed([WidgetNode::row(row)
             .with_width(UiLength::Fill(1.0))
-            .with_height(UiLength::Px(appearance.height))
-            .with_padding(appearance.padding)
-            .with_gap(appearance.gap)
-            .with_style(appearance.surface_style.clone())
+            .with_height(UiLength::Fill(1.0))
+            .with_gap(appearance.gap)])
+        .with_key("chrome:desktop")
+        .with_role("box")
+        .with_width(UiLength::Fill(1.0))
+        .with_height(UiLength::Px(appearance.height))
+        .with_padding(appearance.padding)
+        .with_gap(appearance.gap)
+        .with_style(appearance.surface_style.clone())
     }
 }
 
@@ -335,7 +334,7 @@ impl MobileChrome {
         sheet: Option<WidgetNode>,
         appearance: &MobileChromeAppearance,
     ) -> WidgetNode {
-        let toolbar = WidgetNode::row([
+        let toolbar = WidgetNode::boxed([WidgetNode::row([
             WidgetNode::label(&self.title)
                 .with_width(UiLength::Fill(1.0))
                 .with_style(appearance.title_style.clone()),
@@ -343,8 +342,10 @@ impl MobileChrome {
                 .with_key("chrome:mobile:commands")
                 .with_style(appearance.menu_style.clone()),
         ])
+        .with_width(UiLength::Fill(1.0))
+        .with_height(UiLength::Fill(1.0))])
         .with_key("chrome:mobile:toolbar")
-        .with_role("mobile-toolbar")
+        .with_role("box")
         .with_height(UiLength::Px(appearance.toolbar_height))
         .with_padding(UiEdges::all(8.0))
         .with_style(appearance.toolbar_style.clone());
@@ -376,7 +377,7 @@ impl MobileChrome {
             );
         }
         body.push(
-            WidgetNode::row(self.navigation.iter().map(|item| {
+            WidgetNode::boxed([WidgetNode::row(self.navigation.iter().map(|item| {
                 let label = if self.selected.as_deref() == Some(&item.id) {
                     format!("{} {}", appearance.selected_indicator, item.label)
                 } else {
@@ -393,8 +394,11 @@ impl MobileChrome {
                         appearance.navigation_item_style.clone()
                     })
             }))
+            .with_width(UiLength::Fill(1.0))
+            .with_height(UiLength::Fill(1.0))
+            .with_gap(6.0)])
             .with_key("chrome:mobile:bottom-nav")
-            .with_role("mobile-bottom-nav")
+            .with_role("box")
             .with_tab_list()
             .with_height(UiLength::Px(appearance.navigation_height))
             .with_padding(UiEdges::all(6.0))
