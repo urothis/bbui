@@ -2,9 +2,11 @@
 
 `DesktopChrome` builds a BBUI title and command row. The host forwards a primary press to `handle_chrome_press` to start native window movement at the press edge. `chrome_action` translates control activations into close, minimize, and maximize requests. The host decides how to handle close requests, including unsaved work. On macOS, the row reserves space for native traffic lights.
 
-`view_with` accepts `DesktopChromeAppearance` for titlebar height, padding, spacing, labels, control width, native button inset, control visibility, and themed styles for the surface, title, menu, and window controls. `view_with_slots` adds host content before or after the drag region. Controls retain stable keys for routing. Set `close_style` separately when the close action needs a distinct treatment.
+`view_with` accepts `DesktopChromeAppearance` for titlebar height, padding, spacing, labels, control width, native button inset, control visibility, and themed styles for the surface, title, menu, and window controls. `view_with_slots` adds host content before or after the drag region and at the horizontal center of the titlebar. Controls retain stable keys for routing. Set `close_style` separately when the close action needs a distinct treatment.
 
 Set the current document with `DesktopChrome::new("Editor").with_document_title("Project.blend")`. It is centered against the full titlebar width, stays draggable on a primary press, and truncates within `document_title_width`. `document_title_style` controls its text and surface. The host updates the title when the active document changes; omit it or narrow its width when the window is too tight for a centered title.
+
+For other visuals, pass a BBUI tree as `DesktopChromeSlots.center`. It takes precedence over `with_document_title` and fills a region of `center_width` logical pixels, centered across the whole titlebar. For example, `WidgetNode::row([WidgetNode::label("Exporting"), WidgetNode::progress(0.65).with_width(UiLength::Px(78.0)), WidgetNode::label("65%")])` can be used as the center widget. Primary presses on its noninteractive descendants start native window dragging; focusable controls keep their own input. Set `center_width` to fit the supplied content, and rebuild the chrome when that content changes.
 
 The default minimize, maximize, and close marks are drawn as centered geometry inside equal-sized controls. Their size follows `control_style` / `close_style` font size. Replacing a control label in the appearance uses centered text instead, while its accessible name and action key remain stable.
 
@@ -15,6 +17,7 @@ The default minimize, maximize, and close marks are drawn as centered geometry i
 | Mode | Dark theme | Light theme |
 | --- | --- | --- |
 | Desktop editor | ![Desktop chrome around the editor in dark theme](visuals/examples/chrome-desktop-dark.png) | ![Desktop chrome around the editor in light theme](visuals/examples/chrome-desktop-light.png) |
+| Centered progress | ![A progress indicator in the draggable chrome center in dark theme](visuals/examples/chrome-desktop-progress-dark.png) | ![A progress indicator in the draggable chrome center in light theme](visuals/examples/chrome-desktop-progress-light.png) |
 | Compact editor | ![Compact chrome and material sheet in dark theme](visuals/examples/chrome-mobile-dark.png) | ![Compact chrome and material sheet in light theme](visuals/examples/chrome-mobile-light.png) |
 | Desktop control hover | [Preview](visuals/examples/chrome-desktop-hover-dark.png) | [Preview](visuals/examples/chrome-desktop-hover-light.png) |
 | Compact navigation hover | [Preview](visuals/examples/chrome-mobile-hover-dark.png) | [Preview](visuals/examples/chrome-mobile-hover-light.png) |

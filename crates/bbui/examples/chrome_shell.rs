@@ -44,7 +44,7 @@ fn editor_layout() -> WorkspaceLayout {
     })
 }
 
-fn desktop_page() -> WidgetNode {
+fn desktop_page(center: Option<WidgetNode>) -> WidgetNode {
     let mut accent = UiInlineStyle::default();
     accent.set_color_token(UiStyleProperty::Foreground, ThemeColorToken::Accent);
     WidgetNode::column([
@@ -59,6 +59,7 @@ fn desktop_page() -> WidgetNode {
                             .with_width(UiLength::Px(18.0))
                             .with_style(accent),
                     ),
+                    center,
                     trailing: None,
                 },
             ),
@@ -119,6 +120,10 @@ fn mobile_page() -> WidgetNode {
 }
 
 fn install_chrome(world: &mut World) {
+    install_chrome_with_center(world, None);
+}
+
+fn install_chrome_with_center(world: &mut World, center: Option<WidgetNode>) {
     editor_content::configure_theme(&mut world.resource_mut::<Theme>());
     let mut windows = world.query_filtered::<Entity, With<PrimaryWindow>>();
     let Ok(window) = windows.single(world) else {
@@ -134,7 +139,7 @@ fn install_chrome(world: &mut World) {
     let page = if compact {
         mobile_page()
     } else {
-        desktop_page()
+        desktop_page(center)
     };
     let Ok(root) = WidgetTree::new(page).spawn(world, None) else {
         return;

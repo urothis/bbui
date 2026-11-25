@@ -136,7 +136,28 @@ fn capture(kind: ThemeKind, mode: &str, width: u32, height: u32) {
         },
         PrimaryWindow,
     ));
-    install_chrome(app.world_mut());
+    if mode == "desktop-progress" {
+        let mut muted = UiInlineStyle::default();
+        muted.set_color_token(UiStyleProperty::Foreground, ThemeColorToken::MutedText);
+        install_chrome_with_center(
+            app.world_mut(),
+            Some(
+                WidgetNode::row([
+                    WidgetNode::label("Exporting").with_style(muted.clone()),
+                    WidgetNode::progress(0.65)
+                        .with_key("host:center-progress")
+                        .with_width(UiLength::Px(78.0))
+                        .with_height(UiLength::Px(8.0)),
+                    WidgetNode::label("65%").with_style(muted),
+                ])
+                .with_width(UiLength::Fill(1.0))
+                .with_height(UiLength::Fill(1.0))
+                .with_gap(8.0),
+            ),
+        );
+    } else {
+        install_chrome(app.world_mut());
+    }
     if mode.ends_with("hover") {
         let key = if mode.starts_with("desktop") {
             "chrome:close"
@@ -158,11 +179,16 @@ fn capture(kind: ThemeKind, mode: &str, width: u32, height: u32) {
         app.update();
     }
     if mode.starts_with("desktop") {
-        let document = {
+        let center_key = if mode == "desktop-progress" {
+            "chrome:center-drag"
+        } else {
+            "chrome:document-drag"
+        };
+        let center_target = {
             let mut keys = app.world_mut().query::<(Entity, &UiKey)>();
             keys.iter(app.world())
-                .find_map(|(entity, key)| (key.0 == "chrome:document-drag").then_some(entity))
-                .expect("document drag target")
+                .find_map(|(entity, key)| (key.0 == center_key).then_some(entity))
+                .expect("center drag target")
         };
         let chrome = {
             let mut keys = app.world_mut().query::<(Entity, &UiKey)>();
@@ -170,10 +196,10 @@ fn capture(kind: ThemeKind, mode: &str, width: u32, height: u32) {
                 .find_map(|(entity, key)| (key.0 == "chrome:desktop").then_some(entity))
                 .expect("desktop chrome")
         };
-        let document_rect = app
+        let center_rect = app
             .world()
-            .get::<bbui_layout::UiLayoutResult>(document)
-            .expect("document layout")
+            .get::<bbui_layout::UiLayoutResult>(center_target)
+            .expect("center layout")
             .rect;
         let chrome_rect = app
             .world()
@@ -181,14 +207,14 @@ fn capture(kind: ThemeKind, mode: &str, width: u32, height: u32) {
             .expect("chrome layout")
             .rect;
         let center = [
-            document_rect.x + document_rect.width * 0.5,
-            document_rect.y + document_rect.height * 0.5,
+            center_rect.x + center_rect.width * 0.5,
+            center_rect.y + center_rect.height * 0.5,
         ];
         assert!((center[0] - (chrome_rect.x + chrome_rect.width * 0.5)).abs() < 1.0);
         assert!(
             app.world()
-                .get::<bbui_core::UiHitBox>(document)
-                .expect("document hitbox")
+                .get::<bbui_core::UiHitBox>(center_target)
+                .expect("center hitbox")
                 .contains(center)
         );
         for (control, expected_lines) in [("minimize", 1), ("maximize", 0), ("close", 2)] {
@@ -265,16 +291,21 @@ fn capture(kind: ThemeKind, mode: &str, width: u32, height: u32) {
         );
     }
     if mode.starts_with("desktop") {
-        let document = {
+        let hit_target_key = if mode == "desktop-progress" {
+            "host:center-progress"
+        } else {
+            "chrome:document-drag"
+        };
+        let hit_target = {
             let mut keys = app.world_mut().query::<(Entity, &UiKey)>();
             keys.iter(app.world())
-                .find_map(|(entity, key)| (key.0 == "chrome:document-drag").then_some(entity))
-                .expect("document drag target")
+                .find_map(|(entity, key)| (key.0 == hit_target_key).then_some(entity))
+                .expect("center hit target")
         };
         let rect = app
             .world()
-            .get::<bbui_layout::UiLayoutResult>(document)
-            .expect("document layout")
+            .get::<bbui_layout::UiLayoutResult>(hit_target)
+            .expect("center hit layout")
             .rect;
         let position = [rect.x + rect.width * 0.5, rect.y + rect.height * 0.5];
         let window = {
@@ -296,7 +327,7 @@ fn capture(kind: ThemeKind, mode: &str, width: u32, height: u32) {
                 .resource::<bbui_core::UiFocus>()
                 .state(window)
                 .and_then(|state| state.hovered),
-            Some(document)
+            Some(hit_target)
         );
         app.world_mut()
             .resource_mut::<bbui_core::UiInputQueue>()
@@ -308,15 +339,19 @@ fn capture(kind: ThemeKind, mode: &str, width: u32, height: u32) {
                 time_seconds: 1.1,
             });
         app.update();
-        assert!(
-            app.world()
-                .resource::<bbui_core::UiRoutedEvents>()
-                .events
-                .iter()
-                .any(|event| matches!(event,
-                    bbui_core::UiRoutedEvent::PointerDown { target, .. } if *target == document
-                ))
-        );
+        let press = app
+            .world()
+            .resource::<bbui_core::UiRoutedEvents>()
+            .events
+            .iter()
+            .find(|event| {
+                matches!(event,
+                    bbui_core::UiRoutedEvent::PointerDown { target, .. } if *target == hit_target
+                )
+            })
+            .cloned()
+            .expect("center pointer press");
+        assert!(handle_chrome_press(app.world_mut(), &press));
     }
 }
 
@@ -325,6 +360,7 @@ fn capture(kind: ThemeKind, mode: &str, width: u32, height: u32) {
 fn capture_chrome_dark_and_light() {
     for kind in [ThemeKind::Dark, ThemeKind::Light] {
         capture(kind, "desktop", 1536, 900);
+        capture(kind, "desktop-progress", 1536, 900);
         capture(kind, "mobile", 390, 844);
         capture(kind, "desktop-hover", 1536, 900);
         capture(kind, "mobile-hover", 390, 844);
