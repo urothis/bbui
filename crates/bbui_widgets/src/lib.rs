@@ -21,6 +21,7 @@ pub mod icon_assets;
 pub mod menus;
 pub mod numeric;
 pub mod panels;
+pub mod progress;
 pub mod sliders;
 pub mod visual_effects;
 pub mod workspace;
@@ -38,7 +39,7 @@ pub use collections::{
 };
 pub use controls::{
     Button, Checkbox, CheckboxValue, Dropdown, IconButton, IconButtonAsset, IconButtonAssetState,
-    IconButtonAssetStatus, Label, Progress, RadioGroup, TextArea, TextField, Tooltip, WidgetStatus,
+    IconButtonAssetStatus, Label, RadioGroup, TextArea, TextField, Tooltip, WidgetStatus,
 };
 pub use declarative::{
     CollectionEditorState, CollectionItemControl, CollectionItemKind, ColorRampEditorState,
@@ -66,6 +67,11 @@ pub use numeric::{
     NumericExpressionVariables, NumericField, NumericFieldKind, NumericValue, format_float,
 };
 pub use panels::{Panel, PanelExpansionStore, PanelGroup, PanelOrderStore, PanelState};
+pub use progress::{
+    Progress, ProgressFill, ProgressStyle, progress_border_phase_binding,
+    progress_border_strength_binding, progress_glow_phase_binding, progress_glow_strength_binding,
+    progress_palette_phase_binding, progress_value_binding,
+};
 pub use sliders::Slider;
 pub use visual_effects::{
     UiBorderEffect, UiEdgeGlow, UiEffectColor, UiVisualEffects, border_phase_binding,
@@ -84,13 +90,16 @@ pub mod prelude {
         MenuSession, NodeCategory, NodeGraph, NodeGraphNodeControl, NodeGraphSocketControl,
         NodeGraphTypeRegistry, NodeId, NodeLink, NodeModel, NodeSocket, NodeTypeDefinition,
         NumberField, NumericExpressionVariables, NumericField, PaneId, Panel, PanelGroup,
-        PanelOrderStore, PreviewGrid, RadioGroup, RadioOptionControl, Slider, SocketDirection,
-        SocketEditorDefinition, SocketId, SocketPlacement, SocketType, SocketTypeDefinition,
-        SplitAxis, TabGroup, TabGroupOptions, TextArea, TextField, TreeModel, UiBorderEffect,
-        UiEdgeGlow, UiEffectColor, UiVisualEffects, WidgetActionQueue, WidgetEventQueue,
-        WidgetPlugin, WidgetTree, WorkspaceEvent, WorkspaceLayout, WorkspaceOperation,
-        WorkspaceRestoreSource, border_phase_binding, border_strength_binding,
-        edge_glow_phase_binding, edge_glow_strength_binding,
+        PanelOrderStore, PreviewGrid, Progress, ProgressFill, ProgressStyle, RadioGroup,
+        RadioOptionControl, Slider, SocketDirection, SocketEditorDefinition, SocketId,
+        SocketPlacement, SocketType, SocketTypeDefinition, SplitAxis, TabGroup, TabGroupOptions,
+        TextArea, TextField, TreeModel, UiBorderEffect, UiEdgeGlow, UiEffectColor, UiVisualEffects,
+        WidgetActionQueue, WidgetEventQueue, WidgetPlugin, WidgetTree, WorkspaceEvent,
+        WorkspaceLayout, WorkspaceOperation, WorkspaceRestoreSource, border_phase_binding,
+        border_strength_binding, edge_glow_phase_binding, edge_glow_strength_binding,
+        progress_border_phase_binding, progress_border_strength_binding,
+        progress_glow_phase_binding, progress_glow_strength_binding,
+        progress_palette_phase_binding, progress_value_binding,
     };
 }
 

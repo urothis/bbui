@@ -1,6 +1,10 @@
 use super::*;
 
 pub(super) fn paint_misc_controls(paint: &mut PaintEntityContext<'_>) -> bool {
+    if paint.world.get::<Progress>(paint.entity).is_some() {
+        paint_progress(paint);
+        return true;
+    }
     let world = &mut *paint.world;
     let entity = paint.entity;
     let layout = paint.layout;
@@ -391,38 +395,6 @@ pub(super) fn paint_misc_controls(paint: &mut PaintEntityContext<'_>) -> bool {
             }
         }
         return true;
-    }
-    if let Some(progress) = world.get::<Progress>(entity) {
-        let properties_progress = world
-            .get::<UiRole>(entity)
-            .is_some_and(|role| role.0 == EditorRole::PROGRESS);
-        camera_items.push(item(
-            clip,
-            z,
-            Primitive::RoundedRect {
-                rect: ClipRect::from(rect),
-                radius: theme.corner_radius,
-                color: if properties_progress {
-                    base_theme.color(ThemeColorToken::EditorProgressTrack)
-                } else {
-                    theme.surface
-                },
-            },
-        ));
-        if progress.value > 0.0 {
-            camera_items.push(item(
-                clip,
-                z.saturating_add(1),
-                Primitive::RoundedRect {
-                    rect: ClipRect {
-                        width: rect.width * progress.value,
-                        ..ClipRect::from(rect)
-                    },
-                    radius: theme.corner_radius,
-                    color: theme.accent,
-                },
-            ));
-        }
     }
     false
 }

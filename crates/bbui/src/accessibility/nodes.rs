@@ -631,9 +631,13 @@ pub(super) fn node_for(world: &World, entity: Entity) -> Option<Node> {
     if let Some(progress) = world.get::<Progress>(entity) {
         let mut node = Node::new(Role::ProgressIndicator);
         node.set_label(label.unwrap_or_else(|| "Progress".to_owned()));
-        node.set_numeric_value(f64::from(progress.value));
-        node.set_min_numeric_value(0.0);
-        node.set_max_numeric_value(1.0);
+        if progress.indeterminate {
+            node.set_value("In progress");
+        } else {
+            node.set_numeric_value(f64::from(progress.value));
+            node.set_min_numeric_value(0.0);
+            node.set_max_numeric_value(1.0);
+        }
         return Some(node);
     }
     if let Some(label) = world.get::<Label>(entity) {

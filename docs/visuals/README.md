@@ -14,6 +14,7 @@ These are captures from runnable Bevy examples and BBUI's offscreen GPU tests. O
 | Docking workspace | [Dark](examples/workspace-dark.png) · [Light](examples/workspace-light.png) · [edge drop preview](examples/workspace-drop.png) |
 | Editor workspace composition | [Dark](examples/editor-workspace-dark.png) · [Light](examples/editor-workspace-light.png) |
 | Visual effects | [Gradient border and edge glow](examples/visual-effects-dark.png) · [rotated border](examples/visual-effects-rotated.png) · [eight variants](examples/visual-effect-variants.png) |
+| Progress bars | [Five-style gallery](examples/progress-gallery.png) |
 
 The [properties editor source map](properties-editor-reference.md) records the composition and visual reference. The desktop and FPS examples use the same shared widget tree.
 
@@ -40,6 +41,7 @@ Open menu and choice states are captured separately: [Render menu](examples/prop
 | [Workspace docking](animations/workspace_dock.webp) · [splitter resize](animations/workspace_resize.webp) | Tab drag and continuous split resizing in the dockable workspace |
 | [Gradient border](animations/gradient-border.webp) · [edge glow](animations/edge-glow.webp) · [combined](animations/border-edge-glow.webp) · [full composition](animations/visual-effects.webp) | Rotating border and pulsing glow, captured at 60 fps |
 | [Eight effect variants](animations/visual-effect-variants.webp) | Solid and multicolor borders and glows, static and animated |
+| [Progress gallery](animations/progress-gallery.webp) · [gradient](animations/progress-gradient.webp) · [segmented](animations/progress-segmented.webp) · [glow](animations/progress-glow.webp) · [indeterminate](animations/progress-indeterminate.webp) | Filled-region effects and determinate/indeterminate motion at 60 fps |
 
 The animation capture scripts sample the real examples at 60 Hz. Short UI transitions use a motion scale of 4; the theme gallery uses its own 1.1-second transition in each direction. Workspace clips capture scripted pointer input through the offscreen Bevy renderer at the same 60 Hz cadence.
 
@@ -69,3 +71,5 @@ The editor workspace captures come from `cargo test -p bbui --example editor_wor
 `capture_visual_effect_animations.py` uses offscreen GPU readback to write the visual effects stills and four 120-frame WebP clips. Each clip is two seconds at 60 fps. Pass `--frames-dir` to encode an existing set of capture frames.
 
 `capture_visual_effect_variants.py` writes the eight-case overview and one WebP per variant. Animated variants sample 120 frames over two seconds; static variants are single-frame WebPs. Set `BBUI_VISUAL_VARIANTS=1` when running the `visual_effects` example to inspect the gallery live.
+
+`capture_progress_animations.py` writes the progress gallery screenshot and five WebP clips from offscreen GPU readback. Each clip has 120 frames over two seconds at 60 fps. Pass `--frames-dir` to encode an existing capture.

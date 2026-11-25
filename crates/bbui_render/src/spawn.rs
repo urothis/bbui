@@ -76,6 +76,7 @@ pub(super) fn spawn_primitive(
             ));
         }
         Primitive::LinearGradient { rect, stops }
+        | Primitive::RoundedLinearGradient { rect, stops, .. }
             if valid_clip(*rect)
                 && stops.len() >= 2
                 && stops.iter().all(|(position, color)| {
@@ -94,12 +95,13 @@ pub(super) fn spawn_primitive(
                     .collect(),
             )
             .in_color_space(InterpolationColorSpace::Srgba);
+            let mut node = positioned_node(*rect, item.clip);
+            if let Primitive::RoundedLinearGradient { radius, .. } = &item.primitive {
+                node.border_radius = BorderRadius::all(Val::Px(radius.max(0.0)));
+            }
             output.push(spawn_item_node(
                 parent,
-                (
-                    positioned_node(*rect, item.clip),
-                    BackgroundGradient::from(gradient),
-                ),
+                (node, BackgroundGradient::from(gradient)),
                 item.z,
                 context.local_z,
                 true,

@@ -143,10 +143,13 @@ pub mod prelude {
         IconButtonAssetState, IconButtonAssetStatus, Label, ListItem, ListModel, NodeCategory,
         NodeGraph, NumberField, NumericExpressionVariables, NumericField, PaneId, Panel,
         PanelExpansionStore, PanelGroup, PanelOrderStore, PreviewGrid, PreviewGridItem, Progress,
-        RadioGroup, Slider, SplitAxis, TabGroup, TabGroupOptions, TableColumn, TableRow, TextArea,
-        TextField, Tooltip, TreeModel, UiBorderEffect, UiEdgeGlow, UiEffectColor, UiVisualEffects,
-        WidgetContainer, WidgetNode, WidgetTree, WorkspaceEvent, WorkspaceLayout,
-        WorkspaceOperation, WorkspaceRestoreSource, border_phase_binding, border_strength_binding,
-        edge_glow_phase_binding, edge_glow_strength_binding,
+        ProgressFill, ProgressStyle, RadioGroup, Slider, SplitAxis, TabGroup, TabGroupOptions,
+        TableColumn, TableRow, TextArea, TextField, Tooltip, TreeModel, UiBorderEffect, UiEdgeGlow,
+        UiEffectColor, UiVisualEffects, WidgetContainer, WidgetNode, WidgetTree, WorkspaceEvent,
+        WorkspaceLayout, WorkspaceOperation, WorkspaceRestoreSource, border_phase_binding,
+        border_strength_binding, edge_glow_phase_binding, edge_glow_strength_binding,
+        progress_border_phase_binding, progress_border_strength_binding,
+        progress_glow_phase_binding, progress_glow_strength_binding,
+        progress_palette_phase_binding, progress_value_binding,
     };
 }

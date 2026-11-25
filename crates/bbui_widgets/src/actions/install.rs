@@ -43,6 +43,7 @@ pub fn install_widget_systems(app: &mut App) {
                 apply_widget_actions,
                 sync_node_graph_socket_values,
                 sync_panel_animations,
+                crate::progress::advance_indeterminate_progress,
                 collect_panel_descendant_invalidations,
                 sync_panel_children,
                 sync_menu_popups,
