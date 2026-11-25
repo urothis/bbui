@@ -1,9 +1,13 @@
 //! Application commands shared by menus and searchable palettes.
 
 use bbui_core::search::MenuSearch;
-use bbui_core::{UiKey, UiKeyCode, UiModifiers};
-use bbui_layout::{UiAlign, UiEdges, UiLayoutNode, UiLength};
+use bbui_core::{
+    UiChildren, UiDirty, UiDirtyDomain, UiFocus, UiKey, UiKeyCode, UiModalScopes, UiModifiers,
+};
+use bbui_layout::{UiAlign, UiEdges, UiLayoutNode, UiLength, UiScroll};
 use bbui_style::{ThemeColorToken, UiInlineStyle, UiStyleProperty, UiStyleValue};
+use bevy_ecs::component::Component;
+use bevy_ecs::entity::Entity;
 use bevy_ecs::world::World;
 
 use crate::{MenuEntry, UiBorderEffect, UiEdgeGlow, UiVisualEffects, WidgetEvent, WidgetNode};
@@ -33,6 +37,8 @@ pub struct Command {
     pub enabled: bool,
     pub shortcut: Option<CommandShortcut>,
     pub shortcut_hint: Option<String>,
+    /// Optional short glyph shown before the command name.
+    pub icon: Option<String>,
 }
 
 impl Command {
@@ -45,6 +51,7 @@ impl Command {
             enabled: true,
             shortcut: None,
             shortcut_hint: None,
+            icon: None,
         }
     }
 
@@ -53,6 +60,22 @@ impl Command {
         self.shortcut_hint = Some(hint.into());
         self
     }
+
+    pub fn with_icon(mut self, icon: impl Into<String>) -> Self {
+        self.icon = Some(icon.into());
+        self
+    }
+}
+
+/// Extra text presentation for a palette action. The button remains the hit target.
+#[derive(Component, Debug, Clone, PartialEq)]
+pub struct PaletteActionText {
+    pub query: String,
+    pub icon: Option<String>,
+    pub highlight_color: ThemeColorToken,
+    pub icon_color: ThemeColorToken,
+    pub icon_width: f32,
+    pub reserved_trailing_width: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -90,6 +113,14 @@ impl CommandRegistry {
 
     pub fn commands(&self) -> &[Command] {
         &self.commands
+    }
+
+    pub fn unregister(&mut self, id: &str) -> bool {
+        let Some(index) = self.commands.iter().position(|command| command.id == id) else {
+            return false;
+        };
+        self.commands.remove(index);
+        true
     }
 
     pub fn set_enabled(&mut self, id: &str, enabled: bool) -> bool {
@@ -175,11 +206,21 @@ pub struct CommandPaletteAppearance {
     pub empty_message: String,
     pub footer: Option<String>,
     pub width: UiLength,
+    pub max_width: f32,
+    pub max_height: Option<f32>,
+    pub max_results_height: f32,
+    pub min_results_height: f32,
     pub padding: UiEdges,
     pub gap: f32,
     pub row_height: f32,
     pub result_padding_x: f32,
     pub shortcut_column_width: f32,
+    pub icon_width: f32,
+    pub show_icons: bool,
+    pub show_shortcuts: bool,
+    pub show_descriptions: bool,
+    pub highlight_color: ThemeColorToken,
+    pub icon_color: ThemeColorToken,
     pub surface_style: UiInlineStyle,
     pub title_style: UiInlineStyle,
     pub subtitle_style: UiInlineStyle,
@@ -189,6 +230,7 @@ pub struct CommandPaletteAppearance {
     pub selected_style: UiInlineStyle,
     pub selected_effects: Option<UiVisualEffects>,
     pub detail_style: UiInlineStyle,
+    pub category_style: UiInlineStyle,
     pub shortcut_style: UiInlineStyle,
     pub shortcut_surface_style: UiInlineStyle,
     pub footer_style: UiInlineStyle,
@@ -234,11 +276,21 @@ impl Default for CommandPaletteAppearance {
             empty_message: "No matching commands".into(),
             footer: Some("↑ ↓  Navigate     Enter  Run     Esc  Close".into()),
             width: UiLength::Px(620.0),
+            max_width: 620.0,
+            max_height: Some(600.0),
+            max_results_height: 330.0,
+            min_results_height: 0.0,
             padding: UiEdges::all(22.0),
             gap: 10.0,
             row_height: 38.0,
             result_padding_x: 12.0,
-            shortcut_column_width: 80.0,
+            shortcut_column_width: 116.0,
+            icon_width: 24.0,
+            show_icons: true,
+            show_shortcuts: true,
+            show_descriptions: true,
+            highlight_color: ThemeColorToken::Accent,
+            icon_color: ThemeColorToken::Accent,
             surface_style,
             title_style: text_style(20.0, ThemeColorToken::Text),
             subtitle_style: text_style(12.0, ThemeColorToken::MutedText),
@@ -254,6 +306,7 @@ impl Default for CommandPaletteAppearance {
                 )),
             ),
             detail_style: text_style(11.5, ThemeColorToken::MutedText),
+            category_style: text_style(11.5, ThemeColorToken::Accent),
             shortcut_style: text_style(11.5, ThemeColorToken::MutedText),
             shortcut_surface_style,
             footer_style: text_style(11.0, ThemeColorToken::MutedText),
@@ -289,6 +342,86 @@ pub struct CommandPalette {
     pub visible_limit: usize,
 }
 
+/// Optional sections for apps that need different palette structure. A custom
+/// result must use `CommandPalette::action_key` on its activating control.
+pub type CommandResultBuilder<'a> = dyn Fn(&Command, bool) -> WidgetNode + 'a;
+
+#[derive(Default)]
+pub struct CommandPaletteSlots<'a> {
+    pub header: Option<WidgetNode>,
+    pub empty: Option<WidgetNode>,
+    pub footer: Option<WidgetNode>,
+    pub result: Option<&'a CommandResultBuilder<'a>>,
+}
+
+/// Focus and modal input scope for a mounted palette. The host owns its overlay.
+#[derive(Debug)]
+pub struct CommandPaletteSession {
+    window: Entity,
+    previous_focus: Option<Entity>,
+    previous_scope: Option<Entity>,
+}
+
+impl CommandPaletteSession {
+    pub fn begin(world: &mut World, window: Entity, root: Entity) -> Option<Self> {
+        fn find(world: &World, entity: Entity) -> Option<Entity> {
+            if world
+                .get::<UiKey>(entity)
+                .is_some_and(|key| key.0 == CommandPalette::QUERY_KEY)
+            {
+                return Some(entity);
+            }
+            world
+                .get::<UiChildren>(entity)?
+                .0
+                .iter()
+                .find_map(|child| find(world, *child))
+        }
+        let query = find(world, root)?;
+        let previous_focus = world
+            .get_resource::<UiFocus>()?
+            .state(window)
+            .and_then(|state| state.focused);
+        world.init_resource::<UiModalScopes>();
+        let previous_scope = world.resource_mut::<UiModalScopes>().0.insert(window, root);
+        if let Some(mut dirty) = world.get_resource_mut::<UiDirty>() {
+            dirty.mark_all(UiDirtyDomain::Accessibility);
+        }
+        let mut focus = world.resource_mut::<UiFocus>();
+        let state = focus.state_mut(window);
+        state.focused = Some(query);
+        state.selection = None;
+        state.captured = None;
+        state.captured_button = None;
+        focus.set_active(window);
+        Some(Self {
+            window,
+            previous_focus,
+            previous_scope,
+        })
+    }
+
+    pub fn end(self, world: &mut World) {
+        let mut scopes = world.resource_mut::<UiModalScopes>();
+        if let Some(previous) = self.previous_scope {
+            scopes.0.insert(self.window, previous);
+        } else {
+            scopes.0.remove(&self.window);
+        }
+        if let Some(mut dirty) = world.get_resource_mut::<UiDirty>() {
+            dirty.mark_all(UiDirtyDomain::Accessibility);
+        }
+        let restored = self
+            .previous_focus
+            .filter(|entity| bbui_core::is_interactable_in_window(world, *entity, self.window));
+        let mut focus = world.resource_mut::<UiFocus>();
+        let state = focus.state_mut(self.window);
+        state.focused = restored;
+        state.selection = None;
+        focus.set_active(self.window);
+    }
+}
+
 impl Default for CommandPalette {
     fn default() -> Self {
         Self {
@@ -301,6 +434,15 @@ impl Default for CommandPalette {
 }
 
 impl CommandPalette {
+    fn results_viewport_limit(appearance: &CommandPaletteAppearance) -> f32 {
+        appearance
+            .max_height
+            .map_or(appearance.max_results_height, |height| {
+                appearance
+                    .max_results_height
+                    .min((height - 220.0).max(40.0))
+            })
+    }
     /// Stable key for a host-rendered search field.
     pub const QUERY_KEY: &'static str = "command-palette:query";
 
@@ -315,6 +457,43 @@ impl CommandPalette {
         self.selected = 0;
     }
 
+    /// Keep keyboard selection inside the bounded results viewport.
+    pub fn scroll_selected_into_view(
+        &self,
+        world: &mut World,
+        root: Entity,
+        appearance: &CommandPaletteAppearance,
+    ) {
+        if !self.open {
+            return;
+        }
+        let stride = appearance.row_height + 20.0 + appearance.gap;
+        let bottom = (self.selected + 1) as f32 * stride;
+        let top = self.selected as f32 * stride;
+        fn find(world: &World, entity: Entity) -> Option<Entity> {
+            if world
+                .get::<UiKey>(entity)
+                .is_some_and(|key| key.0 == "command-palette:results-scroll")
+            {
+                return Some(entity);
+            }
+            world
+                .get::<UiChildren>(entity)?
+                .0
+                .iter()
+                .find_map(|child| find(world, *child))
+        }
+        if let Some(entity) = find(world, root)
+            && let Some(mut scroll) = world.get_mut::<UiScroll>(entity)
+        {
+            if top < scroll.offset[1] {
+                scroll.offset[1] = top;
+            } else if bottom > scroll.offset[1] + Self::results_viewport_limit(appearance) {
+                scroll.offset[1] = bottom - Self::results_viewport_limit(appearance);
+            }
+        }
+    }
+
     pub fn view(&self, registry: &CommandRegistry) -> WidgetNode {
         self.view_with(registry, &CommandPaletteAppearance::default())
     }
@@ -325,24 +504,39 @@ impl CommandPalette {
         registry: &CommandRegistry,
         appearance: &CommandPaletteAppearance,
     ) -> WidgetNode {
+        self.view_with_slots(registry, appearance, CommandPaletteSlots::default())
+    }
+
+    /// Build a palette with optional caller-owned sections and result controls.
+    pub fn view_with_slots(
+        &self,
+        registry: &CommandRegistry,
+        appearance: &CommandPaletteAppearance,
+        slots: CommandPaletteSlots<'_>,
+    ) -> WidgetNode {
         if !self.open {
             return WidgetNode::column([]).with_key("command-palette:closed");
         }
         let results = registry.ranked(&self.query);
         let visible = results.len().min(self.visible_limit.max(1));
-        let mut children = vec![
-            WidgetNode::label(&appearance.title)
-                .with_key("command-palette:title")
-                .with_height(UiLength::Px(29.0))
-                .with_style(appearance.title_style.clone()),
-        ];
-        if let Some(subtitle) = &appearance.subtitle {
+        let mut children = Vec::new();
+        if let Some(header) = slots.header {
+            children.push(header);
+        } else {
             children.push(
-                WidgetNode::label(subtitle)
-                    .with_key("command-palette:subtitle")
-                    .with_height(UiLength::Px(21.0))
-                    .with_style(appearance.subtitle_style.clone()),
+                WidgetNode::label(&appearance.title)
+                    .with_key("command-palette:title")
+                    .with_height(UiLength::Px(29.0))
+                    .with_style(appearance.title_style.clone()),
             );
+            if let Some(subtitle) = &appearance.subtitle {
+                children.push(
+                    WidgetNode::label(subtitle)
+                        .with_key("command-palette:subtitle")
+                        .with_height(UiLength::Px(21.0))
+                        .with_style(appearance.subtitle_style.clone()),
+                );
+            }
         }
         children.push(
             WidgetNode::text_field(
@@ -366,113 +560,43 @@ impl CommandPalette {
                 .with_height(UiLength::Px(21.0))
                 .with_style(appearance.section_style.clone()),
         );
-        let rows = results
-            .into_iter()
-            .take(visible)
-            .enumerate()
-            .map(|(index, command)| {
-                let selected = index == self.selected.min(visible.saturating_sub(1));
-                let mut button = WidgetNode::button(&command.label)
-                    .with_key(Self::action_key(&command.id))
-                    .with_role("command-palette-action")
-                    .with_width(UiLength::Fill(1.0))
-                    .with_height(UiLength::Px(appearance.row_height))
-                    .with_padding(UiEdges::horizontal_vertical(
-                        appearance.result_padding_x,
-                        0.0,
-                    ))
-                    .with_accessible_name(if command.description.is_empty() {
-                        command.label.clone()
-                    } else {
-                        format!("{}; {}", command.label, command.description)
-                    })
-                    .with_style(if selected {
-                        appearance.selected_style.clone()
-                    } else {
-                        appearance.result_style.clone()
-                    });
-                if selected && let Some(effects) = &appearance.selected_effects {
-                    button = button.with_visual_effects(effects.clone());
-                }
-                let shortcut = if let Some(hint) = command
-                    .shortcut_hint
-                    .as_deref()
-                    .filter(|hint| !hint.is_empty())
-                {
-                    let column_width = appearance.shortcut_column_width.max(34.0);
-                    let key_width =
-                        (hint.chars().count() as f32 * 7.5 + 18.0).clamp(34.0, column_width);
-                    let mut keycap_layout = UiLayoutNode::column(0.0);
-                    keycap_layout.align_items = UiAlign::Center;
-                    keycap_layout.justify_content = bbui_layout::UiJustify::Center;
-                    let keycap = WidgetNode::boxed([WidgetNode::label(hint)
-                        .with_role("centered-label")
-                        .with_height(UiLength::Px(16.0))
-                        .with_style(appearance.shortcut_style.clone())])
-                    .with_layout(keycap_layout)
-                    .with_width(UiLength::Px(key_width))
-                    .with_height(UiLength::Px(27.0))
-                    .with_padding(UiEdges::all(5.0))
-                    .with_style(appearance.shortcut_surface_style.clone());
-                    let mut layout = UiLayoutNode::row(0.0);
-                    layout.align_items = UiAlign::Center;
-                    WidgetNode::row([
-                        WidgetNode::column([]).with_width(UiLength::Fill(1.0)),
-                        keycap,
-                    ])
-                    .with_layout(layout)
-                    .with_width(UiLength::Px(column_width))
-                    .with_height(UiLength::Px(appearance.row_height))
-                } else {
-                    WidgetNode::column([])
-                        .with_width(UiLength::Px(appearance.shortcut_column_width.max(34.0)))
-                };
-                let detail = if command.description.is_empty() {
-                    command.category.clone()
-                } else if command.category.is_empty() {
-                    command.description.clone()
-                } else {
-                    format!("{}  ·  {}", command.category, command.description)
-                };
-                let mut content = vec![
-                    WidgetNode::row([button, shortcut])
-                        .with_width(UiLength::Fill(1.0))
-                        .with_gap(8.0),
-                ];
-                if !detail.is_empty() {
-                    content.push(
-                        WidgetNode::row([
-                            WidgetNode::column([])
-                                .with_width(UiLength::Px(appearance.result_padding_x)),
-                            WidgetNode::label(detail)
-                                .with_height(UiLength::Px(18.0))
-                                .with_style(appearance.detail_style.clone()),
-                        ])
-                        .with_width(UiLength::Fill(1.0))
-                        .with_height(UiLength::Px(18.0)),
-                    );
-                }
-                WidgetNode::column(content)
-                    .with_key(format!("command-palette:result:{}", command.id))
-                    .with_width(UiLength::Fill(1.0))
-                    .with_gap(2.0)
-            });
         if visible == 0 {
-            children.push(
+            children.push(slots.empty.unwrap_or_else(|| {
                 WidgetNode::label(&appearance.empty_message)
                     .with_key("command-palette:empty")
                     .with_height(UiLength::Px(48.0))
-                    .with_style(appearance.detail_style.clone()),
-            );
+                    .with_style(appearance.detail_style.clone())
+            }));
         } else {
+            let rows = results
+                .into_iter()
+                .take(visible)
+                .enumerate()
+                .map(|(index, command)| {
+                    let selected = index == self.selected.min(visible - 1);
+                    if let Some(render) = slots.result {
+                        return render(command, selected);
+                    }
+                    self.default_result(command, selected, appearance)
+                });
+            let mut scroll_layout = UiLayoutNode::column(0.0);
+            let limit = Self::results_viewport_limit(appearance);
+            scroll_layout.size.height = UiLength::Px(
+                (visible as f32 * (appearance.row_height + 20.0 + appearance.gap))
+                    .clamp(appearance.min_results_height.min(limit), limit),
+            );
             children.push(
-                WidgetNode::column(rows)
+                WidgetNode::scroll([WidgetNode::column(rows)
                     .with_key("command-palette:results")
                     .with_width(UiLength::Fill(1.0))
-                    .with_gap(appearance.gap),
+                    .with_gap(appearance.gap)])
+                .with_key("command-palette:results-scroll")
+                .with_layout(scroll_layout),
             );
         }
-        if let Some(footer) = &appearance.footer {
+        if let Some(footer) = slots.footer {
+            children.push(footer);
+        } else if let Some(footer) = &appearance.footer {
             children.push(
                 WidgetNode::label(footer)
                     .with_key("command-palette:footer")
@@ -480,16 +604,136 @@ impl CommandPalette {
                     .with_style(appearance.footer_style.clone()),
             );
         }
+        let mut layout = UiLayoutNode::column(appearance.gap);
+        layout.size.width = appearance.width;
+        layout.max_size[0] = Some(appearance.max_width);
+        layout.max_size[1] = appearance.max_height;
+        layout.padding = appearance.padding;
         let mut surface = WidgetNode::boxed(children)
             .with_key("command-palette:root")
-            .with_width(appearance.width)
-            .with_padding(appearance.padding)
-            .with_gap(appearance.gap)
+            .with_layout(layout)
             .with_style(appearance.surface_style.clone());
         if let Some(effects) = &appearance.surface_effects {
             surface = surface.with_visual_effects(effects.clone());
         }
         surface
+    }
+
+    fn default_result(
+        &self,
+        command: &Command,
+        selected: bool,
+        appearance: &CommandPaletteAppearance,
+    ) -> WidgetNode {
+        let mut button = WidgetNode::button(&command.label)
+            .with_key(Self::action_key(&command.id))
+            .with_role("command-palette-action")
+            .with_width(UiLength::Fill(1.0))
+            .with_height(UiLength::Px(appearance.row_height))
+            .with_padding(UiEdges::horizontal_vertical(
+                appearance.result_padding_x,
+                0.0,
+            ))
+            .with_accessible_name(if command.description.is_empty() {
+                command.label.clone()
+            } else {
+                format!("{}; {}", command.label, command.description)
+            })
+            .with_palette_action_text(PaletteActionText {
+                query: self.query.clone(),
+                icon: appearance
+                    .show_icons
+                    .then(|| command.icon.clone())
+                    .flatten(),
+                highlight_color: appearance.highlight_color,
+                icon_color: appearance.icon_color,
+                icon_width: appearance.icon_width,
+                reserved_trailing_width: 8.0,
+            })
+            .with_style(if selected {
+                appearance.selected_style.clone()
+            } else {
+                appearance.result_style.clone()
+            });
+        if selected && let Some(effects) = &appearance.selected_effects {
+            button = button.with_visual_effects(effects.clone());
+        }
+        let shortcut = if appearance.show_shortcuts {
+            command
+                .shortcut_hint
+                .as_deref()
+                .filter(|hint| !hint.is_empty())
+        } else {
+            None
+        };
+        let shortcut = if let Some(hint) = shortcut {
+            let column_width = appearance.shortcut_column_width.max(34.0);
+            let key_width = (hint.chars().count() as f32 * 7.5 + 18.0).clamp(34.0, column_width);
+            let mut keycap_layout = UiLayoutNode::column(0.0);
+            keycap_layout.align_items = UiAlign::Center;
+            keycap_layout.justify_content = bbui_layout::UiJustify::Center;
+            let keycap = WidgetNode::boxed([WidgetNode::label(hint)
+                .with_role("centered-label")
+                .with_height(UiLength::Px(16.0))
+                .with_style(appearance.shortcut_style.clone())])
+            .with_layout(keycap_layout)
+            .with_width(UiLength::Px(key_width))
+            .with_height(UiLength::Px(27.0))
+            .with_padding(UiEdges::all(5.0))
+            .with_style(appearance.shortcut_surface_style.clone());
+            let mut layout = UiLayoutNode::row(0.0);
+            layout.align_items = UiAlign::Center;
+            WidgetNode::row([
+                WidgetNode::column([]).with_width(UiLength::Fill(1.0)),
+                keycap,
+            ])
+            .with_layout(layout)
+            .with_width(UiLength::Px(column_width))
+            .with_height(UiLength::Px(appearance.row_height))
+        } else if appearance.show_shortcuts {
+            WidgetNode::column([])
+                .with_width(UiLength::Px(appearance.shortcut_column_width.max(34.0)))
+        } else {
+            WidgetNode::column([]).with_width(UiLength::Px(0.0))
+        };
+        let mut content = vec![if appearance.show_shortcuts {
+            WidgetNode::row([button, shortcut])
+                .with_width(UiLength::Fill(1.0))
+                .with_gap(8.0)
+        } else {
+            WidgetNode::row([button]).with_width(UiLength::Fill(1.0))
+        }];
+        if !command.category.is_empty() || !command.description.is_empty() {
+            let mut metadata = Vec::new();
+            if !command.category.is_empty() {
+                metadata.push(
+                    WidgetNode::label(&command.category)
+                        .with_style(appearance.category_style.clone()),
+                );
+            }
+            if appearance.show_descriptions && !command.description.is_empty() {
+                metadata.push(
+                    WidgetNode::label(&command.description)
+                        .with_width(UiLength::Fill(1.0))
+                        .with_style(appearance.detail_style.clone()),
+                );
+            }
+            content.push(
+                WidgetNode::row([
+                    WidgetNode::column([]).with_width(UiLength::Px(appearance.result_padding_x)),
+                    WidgetNode::row(metadata)
+                        .with_width(UiLength::Fill(1.0))
+                        .with_height(UiLength::Px(18.0))
+                        .with_gap(8.0),
+                ])
+                .with_width(UiLength::Fill(1.0))
+                .with_height(UiLength::Px(18.0)),
+            );
+        }
+        WidgetNode::column(content)
+            .with_key(format!("command-palette:result:{}", command.id))
+            .with_width(UiLength::Fill(1.0))
+            .with_gap(2.0)
     }
 
     /// Route widget events from a mounted palette. Returns an activated command ID.
@@ -642,5 +886,67 @@ mod tests {
         palette.query = "no such command".into();
         let empty = palette.view_with(&registry, &appearance);
         assert!(by_key(&empty, "command-palette:empty").is_some());
+    }
+
+    #[test]
+    fn palette_slots_and_bounded_results_keep_action_keys() {
+        let mut registry = CommandRegistry::default();
+        registry.register(Command::new("one", "One")).unwrap();
+        let mut palette = CommandPalette::default();
+        palette.show();
+        let custom = |command: &Command, _: bool| {
+            WidgetNode::button(&command.label).with_key(CommandPalette::action_key(&command.id))
+        };
+        let view = palette.view_with_slots(
+            &registry,
+            &CommandPaletteAppearance::default(),
+            CommandPaletteSlots {
+                header: Some(WidgetNode::label("Custom header").with_key("custom-header")),
+                footer: Some(WidgetNode::label("Custom footer").with_key("custom-footer")),
+                result: Some(&custom),
+                ..Default::default()
+            },
+        );
+        assert!(by_key(&view, "custom-header").is_some());
+        assert!(by_key(&view, "custom-footer").is_some());
+        assert!(by_key(&view, &CommandPalette::action_key("one")).is_some());
+        let scroll = by_key(&view, "command-palette:results-scroll").unwrap();
+        assert!(scroll.scrollable);
+        assert!(matches!(
+            scroll.layout.unwrap().size.height,
+            UiLength::Px(_)
+        ));
+    }
+
+    #[test]
+    fn palette_session_scopes_focus_and_restores_it() {
+        let mut world = World::new();
+        world.init_resource::<UiFocus>();
+        let window = world.spawn_empty().id();
+        let previous = world
+            .spawn((bbui_core::UiNode, bbui_core::UiFocusable))
+            .id();
+        world.resource_mut::<UiFocus>().state_mut(window).focused = Some(previous);
+        let query = world
+            .spawn((bbui_core::UiNode, UiKey(CommandPalette::QUERY_KEY.into())))
+            .id();
+        let root = world
+            .spawn((bbui_core::UiNode, UiChildren(vec![query])))
+            .id();
+        let session = CommandPaletteSession::begin(&mut world, window, root).unwrap();
+        assert_eq!(
+            world.resource::<UiFocus>().state(window).unwrap().focused,
+            Some(query)
+        );
+        assert_eq!(
+            world.resource::<UiModalScopes>().0.get(&window),
+            Some(&root)
+        );
+        session.end(&mut world);
+        assert_eq!(
+            world.resource::<UiFocus>().state(window).unwrap().focused,
+            Some(previous)
+        );
+        assert!(world.resource::<UiModalScopes>().0.get(&window).is_none());
     }
 }

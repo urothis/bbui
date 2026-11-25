@@ -86,41 +86,153 @@ pub(super) fn paint_buttons_and_menus(paint: &mut PaintEntityContext<'_>) -> boo
                 color: background,
             },
         ));
-        camera_items.push(item(
-            clip,
-            z.saturating_add(1),
-            styled_text_primitive_for_entity(
-                world,
-                entity,
-                clip,
-                TextPlacement {
-                    origin: [
-                        rect.x
-                            + if palette_action {
-                                world
-                                    .get::<UiLayoutNode>(entity)
-                                    .map_or(12.0, |node| node.padding.left)
-                            } else {
-                                theme.spacing.control.padding_x
-                            },
-                        rect.y
-                            + if palette_action {
-                                ((rect.height - theme.font_size * theme.line_height) * 0.5).max(0.0)
-                            } else {
-                                theme.spacing.control.padding_y
-                            },
-                    ],
-                    text: button.label.clone(),
-                },
-                if !enabled || !button.enabled {
-                    theme.color(ThemeColorToken::DisabledText)
+        let origin = [
+            rect.x
+                + if palette_action {
+                    world
+                        .get::<UiLayoutNode>(entity)
+                        .map_or(12.0, |node| node.padding.left)
                 } else {
-                    theme.text
+                    theme.spacing.control.padding_x
                 },
-                theme,
-                false,
-            ),
-        ));
+            rect.y
+                + if palette_action {
+                    ((rect.height - theme.font_size * theme.line_height) * 0.5).max(0.0)
+                } else {
+                    theme.spacing.control.padding_y
+                },
+        ];
+        let text_color = if !enabled || !button.enabled {
+            theme.color(ThemeColorToken::DisabledText)
+        } else {
+            theme.text
+        };
+        if palette_action
+            && let Some(presentation) = world
+                .get::<crate::commands::PaletteActionText>(entity)
+                .cloned()
+        {
+            let mut x = origin[0];
+            if let Some(icon) = presentation.icon.as_deref().filter(|icon| !icon.is_empty()) {
+                camera_items.push(item(
+                    clip,
+                    z.saturating_add(1),
+                    styled_text_primitive_for_entity(
+                        world,
+                        entity,
+                        clip,
+                        TextPlacement {
+                            origin: [x, origin[1]],
+                            text: icon.to_owned(),
+                        },
+                        theme.color(presentation.icon_color),
+                        theme,
+                        false,
+                    ),
+                ));
+                x += presentation.icon_width;
+            }
+            let available =
+                (rect.x + rect.width - x - presentation.reserved_trailing_width).max(0.0);
+            let mut visible = button.label.clone();
+            if measured_text_width(world, entity, &visible, theme) > available {
+                let boundaries: Vec<_> = visible
+                    .char_indices()
+                    .map(|(index, _)| index)
+                    .chain(std::iter::once(visible.len()))
+                    .collect();
+                let mut low = 0;
+                let mut high = boundaries.len() - 1;
+                while low < high {
+                    let mid = (low + high).div_ceil(2);
+                    if measured_text_width(
+                        world,
+                        entity,
+                        &format!("{}…", &visible[..boundaries[mid]]),
+                        theme,
+                    ) <= available
+                    {
+                        low = mid;
+                    } else {
+                        high = mid - 1;
+                    }
+                }
+                visible.truncate(boundaries[low]);
+                visible.push('…');
+            }
+            let query = presentation.query.to_ascii_lowercase();
+            let label_lower = visible.to_ascii_lowercase();
+            let match_range = (!query.is_empty())
+                .then(|| label_lower.find(&query))
+                .flatten()
+                .map(|start| (start, start + query.len()));
+            if let Some((start, end)) = match_range {
+                for (part, highlight) in [
+                    (&visible[..start], false),
+                    (&visible[start..end], true),
+                    (&visible[end..], false),
+                ] {
+                    if part.is_empty() {
+                        continue;
+                    }
+                    camera_items.push(item(
+                        clip,
+                        z.saturating_add(1),
+                        styled_text_primitive_for_entity(
+                            world,
+                            entity,
+                            clip,
+                            TextPlacement {
+                                origin: [x, origin[1]],
+                                text: part.to_owned(),
+                            },
+                            if highlight {
+                                theme.color(presentation.highlight_color)
+                            } else {
+                                text_color
+                            },
+                            theme,
+                            false,
+                        ),
+                    ));
+                    x += measured_text_width(world, entity, part, theme);
+                }
+            } else {
+                camera_items.push(item(
+                    clip,
+                    z.saturating_add(1),
+                    styled_text_primitive_for_entity(
+                        world,
+                        entity,
+                        clip,
+                        TextPlacement {
+                            origin: [x, origin[1]],
+                            text: visible,
+                        },
+                        text_color,
+                        theme,
+                        false,
+                    ),
+                ));
+            }
+        } else {
+            camera_items.push(item(
+                clip,
+                z.saturating_add(1),
+                styled_text_primitive_for_entity(
+                    world,
+                    entity,
+                    clip,
+                    TextPlacement {
+                        origin,
+                        text: button.label.clone(),
+                    },
+                    text_color,
+                    theme,
+                    false,
+                ),
+            ));
+        }
         return true;
     }
     if let Some(button) = world.get::<IconButton>(entity).cloned() {

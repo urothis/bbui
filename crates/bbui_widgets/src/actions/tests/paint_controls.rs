@@ -42,6 +42,60 @@ pub(super) fn command_palette_action_text_is_centered_inside_its_row() {
 }
 
 #[test]
+pub(super) fn palette_action_highlights_match_and_truncates_before_shortcut() {
+    let mut app = App::new();
+    app.add_plugins(WidgetPlugin);
+    let window = app.world_mut().spawn_empty().id();
+    let appearance = crate::commands::CommandPaletteAppearance::default();
+    app.world_mut().spawn((
+        UiNode,
+        UiRole("command-palette-action".into()),
+        Button::new("Very Long Material Processing Command"),
+        crate::commands::PaletteActionText {
+            query: "material".into(),
+            icon: Some("◆".into()),
+            highlight_color: appearance.highlight_color,
+            icon_color: appearance.icon_color,
+            icon_width: appearance.icon_width,
+            reserved_trailing_width: 8.0,
+        },
+        UiLayoutNode {
+            padding: bbui_layout::UiEdges::horizontal_vertical(12.0, 0.0),
+            ..Default::default()
+        },
+        UiLayoutResult {
+            window,
+            rect: UiRect::new(100.0, 200.0, 260.0, 38.0),
+            clip: None,
+            z: 3,
+            content_size: [260.0, 38.0],
+            dpi_scale: 1.0,
+        },
+    ));
+    app.update();
+    let items = app.world().resource::<DisplayList>();
+    let texts: Vec<_> = items
+        .widget_items()
+        .iter()
+        .filter_map(|item| match &item.primitive {
+            Primitive::TextWrapped { text, color, .. } => Some((text.as_str(), *color)),
+            _ => None,
+        })
+        .collect();
+    assert!(texts.iter().any(|(text, _)| *text == "Material"));
+    assert!(texts.iter().any(|(text, _)| text.ends_with('…')));
+    let accent = app
+        .world()
+        .resource::<Theme>()
+        .color(appearance.highlight_color);
+    assert!(
+        texts
+            .iter()
+            .any(|(text, color)| *text == "Material" && *color == accent)
+    );
+}
+
+#[test]
 pub(super) fn widget_paint_uses_computed_colors_opacity_and_corner_radius() {
     let mut app = App::new();
     app.add_plugins(WidgetPlugin);

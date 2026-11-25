@@ -163,6 +163,9 @@ pub(super) fn reconcile_node(
             .is_none_or(|old| old.layout != props.layout || old.scrollable != props.scrollable)
             || (spec_changed && props.layout.is_none())
         {
+            if world.get::<UiBaseLayoutNode>(entity).is_some() {
+                world.entity_mut(entity).insert(UiBaseLayoutNode(layout));
+            }
             world.entity_mut(entity).insert(layout);
         }
         if old_props
@@ -188,6 +191,21 @@ pub(super) fn reconcile_node(
                 }
                 None => {
                     world.entity_mut(entity).remove::<UiVisualEffects>();
+                }
+            }
+        }
+        if old_props
+            .as_ref()
+            .is_none_or(|old| old.palette_action_text != props.palette_action_text)
+        {
+            match &props.palette_action_text {
+                Some(text) => {
+                    world.entity_mut(entity).insert(text.clone());
+                }
+                None => {
+                    world
+                        .entity_mut(entity)
+                        .remove::<crate::commands::PaletteActionText>();
                 }
             }
         }
@@ -320,6 +338,12 @@ pub(super) fn reconcile_node(
         .is_none_or(|children| children.0 != ordered)
     {
         world.entity_mut(entity).insert(UiChildren(ordered));
+        // A structural edit can replace several nested subtrees in one pass.
+        // Rebuild their paint order together instead of assigning local ranks
+        // against sibling ranks that were removed earlier in this reconcile.
+        if let Some(mut dirty) = world.get_resource_mut::<UiDirty>() {
+            dirty.mark_all(UiDirtyDomain::Paint);
+        }
     }
     Ok(entity)
 }
