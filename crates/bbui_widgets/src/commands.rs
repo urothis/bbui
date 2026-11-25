@@ -2,11 +2,11 @@
 
 use bbui_core::search::MenuSearch;
 use bbui_core::{UiKey, UiKeyCode, UiModifiers};
-use bbui_layout::UiLength;
-use bbui_style::{ThemeColorToken, UiInlineStyle, UiStyleProperty};
+use bbui_layout::{UiEdges, UiLength};
+use bbui_style::{ThemeColorToken, UiInlineStyle, UiStyleProperty, UiStyleValue};
 use bevy_ecs::world::World;
 
-use crate::{MenuEntry, WidgetEvent, WidgetNode};
+use crate::{MenuEntry, UiBorderEffect, UiEdgeGlow, UiVisualEffects, WidgetEvent, WidgetNode};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CommandShortcut {
@@ -165,15 +165,129 @@ impl CommandRegistry {
     }
 }
 
+/// Paint and copy for the palette surface. All colors resolve from the active theme
+/// unless callers replace the corresponding inline style or visual effect.
+#[derive(Debug, Clone)]
+pub struct CommandPaletteAppearance {
+    pub title: String,
+    pub subtitle: Option<String>,
+    pub search_placeholder: String,
+    pub empty_message: String,
+    pub footer: Option<String>,
+    pub width: UiLength,
+    pub padding: UiEdges,
+    pub gap: f32,
+    pub row_height: f32,
+    pub surface_style: UiInlineStyle,
+    pub title_style: UiInlineStyle,
+    pub subtitle_style: UiInlineStyle,
+    pub section_style: UiInlineStyle,
+    pub search_style: UiInlineStyle,
+    pub result_style: UiInlineStyle,
+    pub selected_style: UiInlineStyle,
+    pub detail_style: UiInlineStyle,
+    pub shortcut_style: UiInlineStyle,
+    pub footer_style: UiInlineStyle,
+    pub surface_effects: Option<UiVisualEffects>,
+}
+
+fn text_style(size: f32, color: ThemeColorToken) -> UiInlineStyle {
+    let mut style = UiInlineStyle::default();
+    style.set(UiStyleProperty::FontSize, UiStyleValue::Scalar(size));
+    style.set_color_token(UiStyleProperty::Foreground, color);
+    style
+}
+
+impl Default for CommandPaletteAppearance {
+    fn default() -> Self {
+        let mut surface_style = UiInlineStyle::default();
+        surface_style.set_color_token(UiStyleProperty::Background, ThemeColorToken::Surface);
+        surface_style.set(UiStyleProperty::CornerRadius, UiStyleValue::Scalar(12.0));
+        surface_style.set(UiStyleProperty::BorderWidth, UiStyleValue::Scalar(0.0));
+        let mut search_style = text_style(14.0, ThemeColorToken::Text);
+        search_style.set_color_token(UiStyleProperty::Background, ThemeColorToken::Background);
+        search_style.set_color_token(UiStyleProperty::BorderColor, ThemeColorToken::Border);
+        search_style.set(UiStyleProperty::CornerRadius, UiStyleValue::Scalar(6.0));
+        let mut result_style = text_style(14.0, ThemeColorToken::Text);
+        result_style.set_color_token(UiStyleProperty::Background, ThemeColorToken::Background);
+        result_style.set(UiStyleProperty::CornerRadius, UiStyleValue::Scalar(6.0));
+        let mut selected_style = result_style.clone();
+        selected_style.set_color_token(
+            UiStyleProperty::Background,
+            ThemeColorToken::SelectedSurface,
+        );
+        Self {
+            title: "Quick actions".into(),
+            subtitle: Some("Find a command and keep moving.".into()),
+            search_placeholder: "Search commands".into(),
+            empty_message: "No matching commands".into(),
+            footer: Some("↑ ↓  Navigate     Enter  Run     Esc  Close".into()),
+            width: UiLength::Px(620.0),
+            padding: UiEdges::all(22.0),
+            gap: 10.0,
+            row_height: 38.0,
+            surface_style,
+            title_style: text_style(20.0, ThemeColorToken::Text),
+            subtitle_style: text_style(12.0, ThemeColorToken::MutedText),
+            section_style: text_style(10.5, ThemeColorToken::MutedText),
+            search_style,
+            result_style,
+            selected_style,
+            detail_style: text_style(11.5, ThemeColorToken::MutedText),
+            shortcut_style: text_style(11.5, ThemeColorToken::MutedText),
+            footer_style: text_style(11.0, ThemeColorToken::MutedText),
+            surface_effects: Some(
+                UiVisualEffects::default()
+                    .with_border(
+                        UiBorderEffect::gradient(
+                            [
+                                ThemeColorToken::Border,
+                                ThemeColorToken::Accent,
+                                ThemeColorToken::Border,
+                            ],
+                            1.5,
+                            12.0,
+                        )
+                        .with_strength(0.75),
+                    )
+                    .with_edge_glow(
+                        UiEdgeGlow::solid(ThemeColorToken::Accent, 14.0, 0.0).with_strength(0.16),
+                    ),
+            ),
+        }
+    }
+}
+
 /// Host-mounted palette surface. Keep it in an overlay or other app-owned layout region.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct CommandPalette {
     pub open: bool,
     pub query: String,
     pub selected: usize,
+    /// Maximum number of ranked results rendered and visited by keyboard navigation.
+    pub visible_limit: usize,
+}
+
+impl Default for CommandPalette {
+    fn default() -> Self {
+        Self {
+            open: false,
+            query: String::new(),
+            selected: 0,
+            visible_limit: 8,
+        }
+    }
 }
 
 impl CommandPalette {
+    /// Stable key for a host-rendered search field.
+    pub const QUERY_KEY: &'static str = "command-palette:query";
+
+    /// Stable key for a host-rendered command control.
+    pub fn action_key(id: &str) -> String {
+        format!("command-palette:action:{id}")
+    }
+
     pub fn show(&mut self) {
         self.open = true;
         self.query.clear();
@@ -181,45 +295,137 @@ impl CommandPalette {
     }
 
     pub fn view(&self, registry: &CommandRegistry) -> WidgetNode {
+        self.view_with(registry, &CommandPaletteAppearance::default())
+    }
+
+    /// Build a themed surface with caller-selected copy, dimensions, styles, and effects.
+    pub fn view_with(
+        &self,
+        registry: &CommandRegistry,
+        appearance: &CommandPaletteAppearance,
+    ) -> WidgetNode {
         if !self.open {
             return WidgetNode::column([]).with_key("command-palette:closed");
         }
         let results = registry.ranked(&self.query);
-        WidgetNode::column([
-            WidgetNode::label("Commands").with_key("command-palette:title"),
-            WidgetNode::text_field("Search commands", &self.query)
-                .with_key("command-palette:query")
-                .with_width(UiLength::Fill(1.0)),
-            WidgetNode::column(results.into_iter().enumerate().map(|(index, command)| {
-                let label = match &command.shortcut_hint {
-                    Some(hint) => format!("{}  {}", command.label, hint),
-                    None => command.label.clone(),
-                };
-                let label = if index == self.selected {
-                    format!("› {label}")
+        let visible = results.len().min(self.visible_limit.max(1));
+        let mut children = vec![
+            WidgetNode::label(&appearance.title)
+                .with_key("command-palette:title")
+                .with_height(UiLength::Px(29.0))
+                .with_style(appearance.title_style.clone()),
+        ];
+        if let Some(subtitle) = &appearance.subtitle {
+            children.push(
+                WidgetNode::label(subtitle)
+                    .with_key("command-palette:subtitle")
+                    .with_height(UiLength::Px(21.0))
+                    .with_style(appearance.subtitle_style.clone()),
+            );
+        }
+        children.push(
+            WidgetNode::text_field(&appearance.search_placeholder, &self.query)
+                .with_key(Self::QUERY_KEY)
+                .with_width(UiLength::Fill(1.0))
+                .with_height(UiLength::Px(40.0))
+                .with_style(appearance.search_style.clone()),
+        );
+        children.push(
+            WidgetNode::label(format!("{} RESULTS", visible))
+                .with_key("command-palette:count")
+                .with_height(UiLength::Px(21.0))
+                .with_style(appearance.section_style.clone()),
+        );
+        let rows = results
+            .into_iter()
+            .take(visible)
+            .enumerate()
+            .map(|(index, command)| {
+                let selected = index == self.selected.min(visible.saturating_sub(1));
+                let button = WidgetNode::button(if selected {
+                    format!("›  {}", command.label)
                 } else {
-                    label
-                };
-                let button = WidgetNode::button(label)
-                    .with_key(format!("command-palette:action:{}", command.id))
-                    .with_width(UiLength::Fill(1.0));
-                if index == self.selected {
-                    let mut style = UiInlineStyle::default();
-                    style.set_color_token(
-                        UiStyleProperty::Background,
-                        ThemeColorToken::HoverSurface,
+                    format!("   {}", command.label)
+                })
+                .with_key(Self::action_key(&command.id))
+                .with_width(UiLength::Fill(1.0))
+                .with_height(UiLength::Px(appearance.row_height))
+                .with_accessible_name(format!("{}; {}", command.label, command.description))
+                .with_style(if selected {
+                    appearance.selected_style.clone()
+                } else {
+                    appearance.result_style.clone()
+                });
+                let mut row = vec![button];
+                if let Some(hint) = command
+                    .shortcut_hint
+                    .as_deref()
+                    .filter(|hint| !hint.is_empty())
+                {
+                    row.push(
+                        WidgetNode::label(hint)
+                            .with_width(UiLength::Px(80.0))
+                            .with_height(UiLength::Px(appearance.row_height))
+                            .with_style(appearance.shortcut_style.clone()),
                     );
-                    button.with_style(style)
-                } else {
-                    button
                 }
-            }))
-            .with_key("command-palette:results")
-            .with_width(UiLength::Fill(1.0)),
-        ])
-        .with_key("command-palette:root")
-        .with_width(UiLength::Fill(1.0))
-        .with_role("command-palette")
+                let detail = if command.description.is_empty() {
+                    command.category.clone()
+                } else if command.category.is_empty() {
+                    command.description.clone()
+                } else {
+                    format!("{}  ·  {}", command.category, command.description)
+                };
+                let mut content = vec![
+                    WidgetNode::row(row)
+                        .with_width(UiLength::Fill(1.0))
+                        .with_gap(8.0),
+                ];
+                if !detail.is_empty() {
+                    content.push(
+                        WidgetNode::label(detail)
+                            .with_height(UiLength::Px(18.0))
+                            .with_style(appearance.detail_style.clone()),
+                    );
+                }
+                WidgetNode::column(content)
+                    .with_key(format!("command-palette:result:{}", command.id))
+                    .with_width(UiLength::Fill(1.0))
+                    .with_gap(2.0)
+            });
+        if visible == 0 {
+            children.push(
+                WidgetNode::label(&appearance.empty_message)
+                    .with_key("command-palette:empty")
+                    .with_height(UiLength::Px(48.0))
+                    .with_style(appearance.detail_style.clone()),
+            );
+        } else {
+            children.push(
+                WidgetNode::column(rows)
+                    .with_key("command-palette:results")
+                    .with_width(UiLength::Fill(1.0))
+                    .with_gap(appearance.gap),
+            );
+        }
+        if let Some(footer) = &appearance.footer {
+            children.push(
+                WidgetNode::label(footer)
+                    .with_key("command-palette:footer")
+                    .with_height(UiLength::Px(22.0))
+                    .with_style(appearance.footer_style.clone()),
+            );
+        }
+        let mut surface = WidgetNode::boxed(children)
+            .with_key("command-palette:root")
+            .with_width(appearance.width)
+            .with_padding(appearance.padding)
+            .with_gap(appearance.gap)
+            .with_style(appearance.surface_style.clone());
+        if let Some(effects) = &appearance.surface_effects {
+            surface = surface.with_visual_effects(effects.clone());
+        }
+        surface
     }
 
     /// Route widget events from a mounted palette. Returns an activated command ID.
@@ -235,7 +441,7 @@ impl CommandPalette {
             _ => return None,
         };
         let key = world.get::<UiKey>(entity)?.0.as_str();
-        if key == "command-palette:query" {
+        if key == Self::QUERY_KEY {
             if let Some(text) = text {
                 self.query = text.to_owned();
                 self.selected = 0;
@@ -255,7 +461,10 @@ impl CommandPalette {
         if !self.open {
             return None;
         }
-        let count = registry.ranked(&self.query).len();
+        let count = registry
+            .ranked(&self.query)
+            .len()
+            .min(self.visible_limit.max(1));
         match key {
             UiKeyCode::Escape => self.open = false,
             UiKeyCode::ArrowDown if count > 0 => self.selected = (self.selected + 1) % count,
@@ -278,6 +487,13 @@ impl CommandPalette {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn by_key<'a>(node: &'a WidgetNode, key: &str) -> Option<&'a WidgetNode> {
+        if node.key.as_deref() == Some(key) {
+            return Some(node);
+        }
+        node.children.iter().find_map(|child| by_key(child, key))
+    }
 
     #[test]
     fn registry_rejects_conflicts_and_respects_availability() {
@@ -325,5 +541,42 @@ mod tests {
             Some("export".into())
         );
         assert!(!palette.open);
+    }
+
+    #[test]
+    fn palette_appearance_and_visible_limit_keep_rendering_and_navigation_in_sync() {
+        let mut registry = CommandRegistry::default();
+        for id in ["alpha", "beta", "gamma"] {
+            assert_eq!(registry.register(Command::new(id, id)), Ok(()));
+        }
+        let mut palette = CommandPalette::default();
+        palette.show();
+        palette.visible_limit = 2;
+        let appearance = CommandPaletteAppearance {
+            title: "Actions".into(),
+            width: UiLength::Fill(1.0),
+            surface_effects: None,
+            ..Default::default()
+        };
+        let view = palette.view_with(&registry, &appearance);
+        assert_eq!(view.visual_effects, None);
+        assert_eq!(
+            view.layout.map(|layout| layout.size.width),
+            Some(UiLength::Fill(1.0))
+        );
+        assert!(matches!(
+            &by_key(&view, "command-palette:title").map(|node| &node.spec),
+            Some(crate::WidgetSpec::Label { text }) if text == "Actions"
+        ));
+        assert_eq!(
+            by_key(&view, "command-palette:results").map(|node| node.children.len()),
+            Some(2)
+        );
+        palette.handle_key(UiKeyCode::ArrowDown, &mut registry);
+        palette.handle_key(UiKeyCode::ArrowDown, &mut registry);
+        assert_eq!(palette.selected, 0);
+        palette.query = "no such command".into();
+        let empty = palette.view_with(&registry, &appearance);
+        assert!(by_key(&empty, "command-palette:empty").is_some());
     }
 }
