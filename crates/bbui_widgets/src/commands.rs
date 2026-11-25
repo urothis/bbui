@@ -2,6 +2,8 @@
 
 use bbui_core::search::MenuSearch;
 use bbui_core::{UiKey, UiKeyCode, UiModifiers};
+use bbui_layout::UiLength;
+use bbui_style::{ThemeColorToken, UiInlineStyle, UiStyleProperty};
 use bevy_ecs::world::World;
 
 use crate::{MenuEntry, WidgetEvent, WidgetNode};
@@ -186,7 +188,8 @@ impl CommandPalette {
         WidgetNode::column([
             WidgetNode::label("Commands").with_key("command-palette:title"),
             WidgetNode::text_field("Search commands", &self.query)
-                .with_key("command-palette:query"),
+                .with_key("command-palette:query")
+                .with_width(UiLength::Fill(1.0)),
             WidgetNode::column(results.into_iter().enumerate().map(|(index, command)| {
                 let label = match &command.shortcut_hint {
                     Some(hint) => format!("{}  {}", command.label, hint),
@@ -197,11 +200,25 @@ impl CommandPalette {
                 } else {
                     label
                 };
-                WidgetNode::button(label).with_key(format!("command-palette:action:{}", command.id))
+                let button = WidgetNode::button(label)
+                    .with_key(format!("command-palette:action:{}", command.id))
+                    .with_width(UiLength::Fill(1.0));
+                if index == self.selected {
+                    let mut style = UiInlineStyle::default();
+                    style.set_color_token(
+                        UiStyleProperty::Background,
+                        ThemeColorToken::HoverSurface,
+                    );
+                    button.with_style(style)
+                } else {
+                    button
+                }
             }))
-            .with_key("command-palette:results"),
+            .with_key("command-palette:results")
+            .with_width(UiLength::Fill(1.0)),
         ])
         .with_key("command-palette:root")
+        .with_width(UiLength::Fill(1.0))
         .with_role("command-palette")
     }
 
