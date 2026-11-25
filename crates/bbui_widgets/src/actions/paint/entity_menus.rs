@@ -133,6 +133,23 @@ pub(super) fn paint_buttons_and_menus(paint: &mut PaintEntityContext<'_>) -> boo
                 color: background,
             },
         ));
+        if palette_action
+            && world
+                .get_resource::<UiFocus>()
+                .and_then(|focus| focus.state(layout.window))
+                .is_some_and(|state| state.focused == Some(entity))
+        {
+            camera_items.push(item(
+                clip,
+                z.saturating_add(2),
+                Primitive::RoundedBorder {
+                    rect: ClipRect::from(rect),
+                    radius: theme.corner_radius,
+                    width: 2.0,
+                    color: theme.color(ThemeColorToken::Accent),
+                },
+            ));
+        }
         let origin = [
             rect.x
                 + if palette_action {
@@ -144,7 +161,17 @@ pub(super) fn paint_buttons_and_menus(paint: &mut PaintEntityContext<'_>) -> boo
                 },
             rect.y
                 + if palette_action {
-                    ((rect.height - theme.font_size * theme.line_height) * 0.5).max(0.0)
+                    if rect.height >= 52.0
+                        && world
+                            .get::<crate::commands::PaletteActionText>(entity)
+                            .is_some_and(|text| {
+                                !text.category.is_empty() || !text.description.is_empty()
+                            })
+                    {
+                        10.0
+                    } else {
+                        ((rect.height - theme.font_size * theme.line_height) * 0.5).max(0.0)
+                    }
                 } else {
                     theme.spacing.control.padding_y
                 },
@@ -215,12 +242,14 @@ pub(super) fn paint_buttons_and_menus(paint: &mut PaintEntityContext<'_>) -> boo
                 let text_width = measured_text_width(world, entity, hint, &hint_theme);
                 let badge_width = (text_width + badge_padding.left + badge_padding.right + 2.0)
                     .clamp(34.0, max_width);
-                let badge_rect = Rect::new(
-                    right_edge - badge_width,
-                    rect.y + (rect.height - 25.0) * 0.5,
-                    badge_width,
-                    25.0,
-                );
+                let badge_y = if rect.height >= 52.0
+                    && (!presentation.category.is_empty() || !presentation.description.is_empty())
+                {
+                    rect.y + 8.0
+                } else {
+                    rect.y + (rect.height - 25.0) * 0.5
+                };
+                let badge_rect = Rect::new(right_edge - badge_width, badge_y, badge_width, 25.0);
                 let radius = match presentation
                     .shortcut_surface_style
                     .0
@@ -363,6 +392,92 @@ pub(super) fn paint_buttons_and_menus(paint: &mut PaintEntityContext<'_>) -> boo
                         false,
                     ),
                 ));
+            }
+            if rect.height >= 52.0
+                && (!presentation.category.is_empty() || !presentation.description.is_empty())
+            {
+                let mut meta_x = origin[0]
+                    + if presentation.icon.is_some() {
+                        presentation.icon_width
+                    } else {
+                        0.0
+                    };
+                let meta_y = rect.y + 35.0;
+                let mut category_theme = theme.clone();
+                if let Some(UiStyleValue::Scalar(size)) = presentation
+                    .category_style
+                    .0
+                    .get(&UiStyleProperty::FontSize)
+                {
+                    category_theme.font_size = *size;
+                }
+                if !presentation.category.is_empty() {
+                    let category = fit_palette_text(
+                        world,
+                        entity,
+                        &presentation.category,
+                        &category_theme,
+                        (right_edge - meta_x).max(0.0),
+                    );
+                    camera_items.push(item(
+                        clip,
+                        z.saturating_add(1),
+                        styled_text_primitive_for_entity(
+                            world,
+                            entity,
+                            clip,
+                            TextPlacement {
+                                origin: [meta_x, meta_y],
+                                text: category.clone(),
+                            },
+                            palette_style_color(
+                                &presentation.category_style,
+                                UiStyleProperty::Foreground,
+                                base_theme,
+                                base_theme.text_muted,
+                            ),
+                            &category_theme,
+                            false,
+                        ),
+                    ));
+                    meta_x += measured_text_width(world, entity, &category, &category_theme) + 9.0;
+                }
+                if !presentation.description.is_empty() && meta_x < right_edge {
+                    let mut detail_theme = theme.clone();
+                    if let Some(UiStyleValue::Scalar(size)) =
+                        presentation.detail_style.0.get(&UiStyleProperty::FontSize)
+                    {
+                        detail_theme.font_size = *size;
+                    }
+                    let detail = fit_palette_text(
+                        world,
+                        entity,
+                        &presentation.description,
+                        &detail_theme,
+                        (right_edge - meta_x).max(0.0),
+                    );
+                    camera_items.push(item(
+                        clip,
+                        z.saturating_add(1),
+                        styled_text_primitive_for_entity(
+                            world,
+                            entity,
+                            clip,
+                            TextPlacement {
+                                origin: [meta_x, meta_y],
+                                text: detail,
+                            },
+                            palette_style_color(
+                                &presentation.detail_style,
+                                UiStyleProperty::Foreground,
+                                base_theme,
+                                base_theme.text_muted,
+                            ),
+                            &detail_theme,
+                            false,
+                        ),
+                    ));
+                }
             }
         } else {
             camera_items.push(item(

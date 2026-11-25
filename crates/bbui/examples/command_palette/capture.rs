@@ -129,15 +129,17 @@ fn capture_command_palette_dark_and_light() {
         } else {
             "light"
         };
-        for (scenario_index, scenario) in ["default", "empty", "long", "compact", "keyboard"]
-            .into_iter()
-            .enumerate()
+        for (scenario_index, scenario) in [
+            "default", "empty", "long", "compact", "keyboard", "hover", "focus",
+        ]
+        .into_iter()
+        .enumerate()
         {
             let mut state = app
                 .world_mut()
                 .remove_resource::<ExampleState>()
                 .expect("palette state");
-            if scenario == "compact" {
+            if scenario == "default" || scenario == "empty" || scenario == "keyboard" {
                 state.registry.unregister("long");
             }
             state.palette.query = match scenario {
@@ -147,7 +149,7 @@ fn capture_command_palette_dark_and_light() {
                 _ => "material".into(),
             };
             state.palette.selected = if scenario == "keyboard" { 7 } else { 0 };
-            if scenario == "long"
+            if (scenario == "long" || scenario == "compact")
                 && !state
                     .registry
                     .commands()
@@ -184,6 +186,42 @@ fn capture_command_palette_dark_and_light() {
                 );
             }
             app.world_mut().insert_resource(state);
+            {
+                let window = app.world().resource::<ExampleState>().window;
+                let mut focus = app.world_mut().resource_mut::<bbui_core::UiFocus>();
+                let state = focus.state_mut(window);
+                state.hovered = None;
+                state.focused = None;
+                focus.set_active(window);
+            }
+            let mut buttons = app.world_mut().query::<&mut bbui::widgets::Button>();
+            for mut button in buttons.iter_mut(app.world_mut()) {
+                button.status = bbui::widgets::WidgetStatus::Idle;
+            }
+            if scenario == "hover" || scenario == "focus" {
+                let entity = {
+                    let mut actions = app.world_mut().query::<(Entity, &bbui_core::UiKey)>();
+                    actions
+                        .iter(app.world())
+                        .find_map(|(entity, key)| {
+                            (key.0 == CommandPalette::action_key("material-settings"))
+                                .then_some(entity)
+                        })
+                        .expect("interaction action mounted")
+                };
+                let window = app.world().resource::<ExampleState>().window;
+                let mut focus = app.world_mut().resource_mut::<bbui_core::UiFocus>();
+                let state = focus.state_mut(window);
+                state.hovered = (scenario == "hover").then_some(entity);
+                state.focused = (scenario == "focus").then_some(entity);
+                focus.set_active(window);
+                if scenario == "hover" {
+                    app.world_mut()
+                        .get_mut::<bbui::widgets::Button>(entity)
+                        .expect("action button")
+                        .status = bbui::widgets::WidgetStatus::Hovered;
+                }
+            }
             for _ in 0..5 {
                 app.update();
             }
@@ -229,8 +267,17 @@ fn capture_command_palette_dark_and_light() {
                     &item.primitive,
                     bbui::render::Primitive::TextWrapped { text, .. } if text == hint
                 )));
+                if scenario == "default" {
+                    assert!(fragment.items.iter().any(|item| matches!(
+                        &item.primitive,
+                        bbui::render::Primitive::TextWrapped { text, origin, .. }
+                            if text == "Write the material to a file"
+                                && origin[1] > action.rect.y + 30.0
+                                && origin[1] < action.rect.y + action.rect.height
+                    )));
+                }
             }
-            let index = theme_index * 5 + scenario_index;
+            let index = theme_index * 7 + scenario_index;
             let bytes = read_frame(&mut app, &target, index);
             let name = if scenario == "default" {
                 format!("command-palette-{theme_name}.png")

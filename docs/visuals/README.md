@@ -15,7 +15,7 @@ These are captures from runnable Bevy examples and BBUI's offscreen GPU tests. O
 | Editor workspace composition | [Dark](examples/editor-workspace-dark.png) · [Light](examples/editor-workspace-light.png) |
 | Workspace shell | [Dark](examples/workspace-shell-dark.png) · [Light](examples/workspace-shell-light.png) |
 | Modal dialog | [Dark](examples/modal-dialog-dark.png) · [Light](examples/modal-dialog-light.png) |
-| Command palette | [Dark](examples/command-palette-dark.png) · [Light](examples/command-palette-light.png) |
+| Command palette | [Dark](examples/command-palette-dark.png) · [Light](examples/command-palette-light.png) · [Hover](examples/command-palette-hover-dark.png) · [Focus](examples/command-palette-focus-dark.png) |
 | Visual effects | [Gradient border and edge glow](examples/visual-effects-dark.png) · [rotated border](examples/visual-effects-rotated.png) · [eight variants](examples/visual-effect-variants.png) |
 | Progress bars | [Six-style gallery with corner options](examples/progress-gallery.png) |
 
