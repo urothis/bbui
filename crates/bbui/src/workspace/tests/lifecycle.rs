@@ -1,5 +1,6 @@
 use super::*;
 use bbui_core::{UiChildren, UiParent};
+use bbui_layout::{Rect, UiLayoutRoot, UiLength};
 use bbui_widgets::WidgetElement;
 
 #[test]
@@ -92,6 +93,80 @@ fn moving_preserves_live_content_while_closing_rebuilds_it() {
         .unwrap();
     app.update();
     assert_eq!(count.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn embedded_workspace_follows_shell_layout_and_can_return_to_full_window() {
+    let mut app = app();
+    let mut windows = app
+        .world_mut()
+        .query_filtered::<Entity, With<PrimaryWindow>>();
+    let window = windows.single(app.world()).unwrap();
+    let shell = WidgetTree::new(WidgetNode::column([
+        WidgetNode::label("Title and commands")
+            .with_key("shell:top")
+            .with_height(UiLength::Px(48.0)),
+        WidgetNode::column([])
+            .with_key("shell:center")
+            .with_width(UiLength::Fill(1.0))
+            .with_height(UiLength::Fill(1.0)),
+        WidgetNode::label("Job status")
+            .with_key("shell:bottom")
+            .with_height(UiLength::Px(24.0)),
+    ]))
+    .spawn(app.world_mut(), None)
+    .unwrap();
+    app.world_mut().entity_mut(shell).insert(UiLayoutRoot::new(
+        window,
+        Rect::new(0.0, 0.0, 1280.0, 720.0),
+        1.0,
+    ));
+    let center = keyed(app.world_mut(), "shell:center");
+    let mut workspace = Workspace::new(WorkspaceLayout::new(DockNode::Tabs(TabGroup::new(
+        "main-group",
+        vec!["a".into()],
+    ))))
+    .unwrap();
+    workspace.register_pane("a", "A", |world, parent| {
+        WidgetTree::new(WidgetNode::label("Content A"))
+            .spawn(world, Some(parent))
+            .unwrap();
+    });
+    workspace.set_mount_parent(center);
+    app.insert_resource(workspace);
+    app.update();
+    let root = app.world().resource::<Workspace>().root.unwrap();
+    assert_eq!(app.world().get::<UiParent>(root), Some(&UiParent(center)));
+    assert!(app.world().get::<UiLayoutRoot>(root).is_none());
+    let center_rect = app.world().get::<UiLayoutResult>(center).unwrap().rect;
+    let workspace_rect = app.world().get::<UiLayoutResult>(root).unwrap().rect;
+    assert_eq!(workspace_rect, center_rect);
+    assert!(workspace_rect.y >= 48.0);
+    assert!(workspace_rect.height < 720.0);
+
+    app.world_mut()
+        .get_mut::<Window>(window)
+        .unwrap()
+        .resolution
+        .set(1000.0, 600.0);
+    app.update();
+    let center_rect = app.world().get::<UiLayoutResult>(center).unwrap().rect;
+    assert_eq!(
+        app.world().get::<UiLayoutResult>(root).unwrap().rect,
+        center_rect
+    );
+    assert_eq!(center_rect.width, 1000.0);
+
+    app.world_mut()
+        .resource_mut::<Workspace>()
+        .clear_mount_parent();
+    app.update();
+    assert!(app.world().get::<UiParent>(root).is_none());
+    assert!(app.world().get::<UiLayoutRoot>(root).is_some());
+    assert_eq!(
+        app.world().get::<UiLayoutResult>(root).unwrap().rect.height,
+        600.0
+    );
 }
 
 fn app_with_registered_pane() -> App {

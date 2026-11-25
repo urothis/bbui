@@ -70,6 +70,22 @@ pub(crate) fn sync_workspace(world: &mut World) {
         let Some(window) = workspace.window else {
             return;
         };
+        if let Some(parent) = workspace.mount_parent {
+            if world.get::<UiNode>(parent).is_none()
+                || world
+                    .get::<bbui_layout::UiLayoutResult>(parent)
+                    .is_some_and(|layout| layout.window != window)
+            {
+                return;
+            }
+            let mut ancestor = Some(parent);
+            while let Some(entity) = ancestor {
+                if workspace.root == Some(entity) {
+                    return;
+                }
+                ancestor = world.get::<bbui_core::UiParent>(entity).map(|link| link.0);
+            }
+        }
         let declaration = WidgetTree::new(chrome(&workspace.layout.root, &workspace));
         let root = if let Some(root) = workspace.root {
             // Preserve pane entities while chrome is reconciled around them. Restore their
@@ -93,20 +109,30 @@ pub(crate) fn sync_workspace(world: &mut World) {
                     return;
                 }
             }
-        } else if let Ok(root) = declaration.spawn(world, None) {
-            let dimensions = world
-                .get::<Window>(window)
-                .map(|window| [window.resolution.width(), window.resolution.height()])
-                .unwrap_or([720.0, 480.0]);
-            world.entity_mut(root).insert(UiLayoutRoot::new(
-                window,
-                Rect::new(0.0, 0.0, dimensions[0], dimensions[1]),
-                1.0,
-            ));
+        } else if let Ok(root) = declaration.spawn(world, workspace.mount_parent) {
             root
         } else {
             return;
         };
+        if let Some(parent) = workspace.mount_parent {
+            if set_parent(world, root, parent).is_err() {
+                return;
+            }
+            world.entity_mut(root).remove::<UiLayoutRoot>();
+        } else {
+            detach_from_parent(world, root);
+            let dimensions = world
+                .get::<Window>(window)
+                .map(|window| [window.resolution.width(), window.resolution.height()])
+                .unwrap_or([720.0, 480.0]);
+            if world.get::<UiLayoutRoot>(root).is_none() {
+                world.entity_mut(root).insert(UiLayoutRoot::new(
+                    window,
+                    Rect::new(0.0, 0.0, dimensions[0], dimensions[1]),
+                    1.0,
+                ));
+            }
+        }
         workspace.root = Some(root);
 
         let present = open_panes(&workspace.layout);

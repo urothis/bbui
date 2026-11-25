@@ -31,6 +31,16 @@ world.insert_resource(workspace);
 
 The host owns document data. Moving a pane keeps its mounted entity and transient widget state. Closing it unmounts the UI; `WorkspaceOperation::Open` rebuilds it from host state. A saved layout that refers to an unregistered pane shows a placeholder until that pane is registered.
 
+## Place a workspace inside an application shell
+
+Call `workspace.set_mount_parent(parent)` with a BBUI node inside the window's layout tree before inserting the resource. The workspace fills that node and follows its size when the shell or window changes. Its tabs, splitters, and drop targets use the resulting bounds. `clear_mount_parent()` restores the default full-window mounting mode. The [workspace shell example](../crates/bbui/examples/workspace_shell.rs) puts a command row above the dock and a status strip below it.
+
+```rust
+let mut workspace = Workspace::new(layout)?;
+workspace.set_mount_parent(center_region);
+world.insert_resource(workspace);
+```
+
 ## Docking
 
 - Drag a tab onto a group's center to join it, or over another tab to choose its insertion point. Drop on a group edge to create a split. Hold Shift over the center to create a grid.
