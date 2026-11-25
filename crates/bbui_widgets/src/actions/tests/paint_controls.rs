@@ -62,6 +62,10 @@ pub(super) fn palette_action_highlights_match_and_truncates_before_shortcut() {
             shortcut_style: appearance.shortcut_style.clone(),
             shortcut_surface_style: appearance.shortcut_surface_style.clone(),
             reserved_trailing_width: 8.0,
+            category: String::new(),
+            description: String::new(),
+            category_style: appearance.category_style.clone(),
+            detail_style: appearance.detail_style.clone(),
         },
         UiLayoutNode {
             padding: bbui_layout::UiEdges::horizontal_vertical(12.0, 0.0),

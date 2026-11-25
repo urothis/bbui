@@ -8,7 +8,7 @@ Use `CommandPaletteSession::begin(world, window, root)` after mounting to focus 
 
 ## Appearance and composition
 
-`CommandPaletteAppearance` controls copy, width, maximum width and height, results height, padding, spacing, row height, text inset, maximum shortcut badge width, icon width, text and surface styles, accent colors, and border/glow effects. Shortcut badges sit inside each action, so the entire result row shares one highlight and activation target. Category and description have separate styles. Set `show_icons`, `show_shortcuts`, or `show_descriptions` to false for compact layouts. The host can calculate `width` from the window size; the example clamps it to the available width and simplifies the rows below 480 logical pixels. Long names are measured and ellipsized before they reach the shortcut badge.
+`CommandPaletteAppearance` controls copy, width, maximum width and height, results height, padding, spacing, row height, text inset, maximum shortcut badge width, icon width, text and surface styles, accent colors, and border/glow effects. Each action contains its name, shortcut, category, and description, so the entire result row shares one hover, focus, selection, and activation target. Category and description have separate styles. Empty state copy uses `empty_message` and `empty_hint`. The footer uses customizable `footer_hints` and `footer_key_style` / `footer_style`, or a plain `footer` string. Set `show_icons`, `show_shortcuts`, or `show_descriptions` to false for compact layouts. The host can calculate `width` from the window size; the example clamps it to the available width and hides shortcuts below 480 logical pixels. Long names and descriptions are measured and ellipsized within their rows.
 
 ```rust
 let mut appearance = CommandPaletteAppearance {
@@ -40,5 +40,7 @@ let palette_node = palette.view_with(&registry, &appearance);
 | Long command | [Preview](visuals/examples/command-palette-long-dark.png) | [Preview](visuals/examples/command-palette-long-light.png) |
 | Compact width | [Preview](visuals/examples/command-palette-compact-dark.png) | [Preview](visuals/examples/command-palette-compact-light.png) |
 | Keyboard selection | [Preview](visuals/examples/command-palette-keyboard-dark.png) | [Preview](visuals/examples/command-palette-keyboard-light.png) |
+| Hover | [Preview](visuals/examples/command-palette-hover-dark.png) | [Preview](visuals/examples/command-palette-hover-light.png) |
+| Keyboard focus | [Preview](visuals/examples/command-palette-focus-dark.png) | [Preview](visuals/examples/command-palette-focus-light.png) |
 
 Run `cargo run -p bbui --example command_palette` to use the palette over the docked editor. Run the ignored capture test to refresh gallery images. For ranking and lookup measurements, run `cargo bench -p bbui --bench performance --locked -- commands`.

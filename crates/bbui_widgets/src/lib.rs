@@ -39,8 +39,9 @@ pub use collections::{
     TableRow, TreeModel, TreeNode,
 };
 pub use commands::{
-    Command, CommandError, CommandPalette, CommandPaletteAppearance, CommandPaletteSession,
-    CommandPaletteSlots, CommandRegistry, CommandShortcut, PaletteActionText,
+    Command, CommandError, CommandPalette, CommandPaletteAppearance, CommandPaletteFooterHint,
+    CommandPaletteSession, CommandPaletteSlots, CommandRegistry, CommandShortcut,
+    PaletteActionText,
 };
 pub use controls::{
     Button, Checkbox, CheckboxValue, Dropdown, IconButton, IconButtonAsset, IconButtonAssetState,

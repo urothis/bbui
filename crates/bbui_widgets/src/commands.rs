@@ -80,6 +80,25 @@ pub struct PaletteActionText {
     pub shortcut_style: UiInlineStyle,
     pub shortcut_surface_style: UiInlineStyle,
     pub reserved_trailing_width: f32,
+    pub category: String,
+    pub description: String,
+    pub category_style: UiInlineStyle,
+    pub detail_style: UiInlineStyle,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommandPaletteFooterHint {
+    pub key: String,
+    pub action: String,
+}
+
+impl CommandPaletteFooterHint {
+    pub fn new(key: impl Into<String>, action: impl Into<String>) -> Self {
+        Self {
+            key: key.into(),
+            action: action.into(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -208,7 +227,9 @@ pub struct CommandPaletteAppearance {
     pub subtitle: Option<String>,
     pub search_placeholder: String,
     pub empty_message: String,
+    pub empty_hint: String,
     pub footer: Option<String>,
+    pub footer_hints: Vec<CommandPaletteFooterHint>,
     pub width: UiLength,
     pub max_width: f32,
     pub max_height: Option<f32>,
@@ -238,6 +259,7 @@ pub struct CommandPaletteAppearance {
     pub shortcut_style: UiInlineStyle,
     pub shortcut_surface_style: UiInlineStyle,
     pub footer_style: UiInlineStyle,
+    pub footer_key_style: UiInlineStyle,
     pub surface_effects: Option<UiVisualEffects>,
 }
 
@@ -278,7 +300,13 @@ impl Default for CommandPaletteAppearance {
             subtitle: Some("Find a command and keep moving.".into()),
             search_placeholder: "Search commands".into(),
             empty_message: "No matching commands".into(),
-            footer: Some("↑ ↓  Navigate     Enter  Run     Esc  Close".into()),
+            empty_hint: "Try a different search.".into(),
+            footer: None,
+            footer_hints: vec![
+                CommandPaletteFooterHint::new("↑ ↓", "Navigate"),
+                CommandPaletteFooterHint::new("Enter", "Run"),
+                CommandPaletteFooterHint::new("Esc", "Close"),
+            ],
             width: UiLength::Px(620.0),
             max_width: 620.0,
             max_height: Some(600.0),
@@ -286,7 +314,7 @@ impl Default for CommandPaletteAppearance {
             min_results_height: 0.0,
             padding: UiEdges::all(22.0),
             gap: 10.0,
-            row_height: 38.0,
+            row_height: 60.0,
             result_padding_x: 12.0,
             shortcut_column_width: 116.0,
             icon_width: 24.0,
@@ -313,7 +341,8 @@ impl Default for CommandPaletteAppearance {
             category_style: text_style(11.5, ThemeColorToken::Accent),
             shortcut_style: text_style(11.5, ThemeColorToken::MutedText),
             shortcut_surface_style,
-            footer_style: text_style(11.0, ThemeColorToken::MutedText),
+            footer_style: text_style(11.5, ThemeColorToken::MutedText),
+            footer_key_style: text_style(11.5, ThemeColorToken::Text),
             surface_effects: Some(
                 UiVisualEffects::default()
                     .with_border(
@@ -471,7 +500,7 @@ impl CommandPalette {
         if !self.open {
             return;
         }
-        let stride = appearance.row_height + 20.0 + appearance.gap;
+        let stride = appearance.row_height + appearance.gap;
         let bottom = (self.selected + 1) as f32 * stride;
         let top = self.selected as f32 * stride;
         fn find(world: &World, entity: Entity) -> Option<Entity> {
@@ -566,10 +595,17 @@ impl CommandPalette {
         );
         if visible == 0 {
             children.push(slots.empty.unwrap_or_else(|| {
-                WidgetNode::label(&appearance.empty_message)
-                    .with_key("command-palette:empty")
-                    .with_height(UiLength::Px(48.0))
-                    .with_style(appearance.detail_style.clone())
+                WidgetNode::column([
+                    WidgetNode::label(&appearance.empty_message)
+                        .with_style(appearance.result_style.clone())
+                        .with_height(UiLength::Px(21.0)),
+                    WidgetNode::label(&appearance.empty_hint)
+                        .with_style(appearance.detail_style.clone())
+                        .with_height(UiLength::Px(19.0)),
+                ])
+                .with_key("command-palette:empty")
+                .with_height(UiLength::Px(56.0))
+                .with_gap(2.0)
             }));
         } else {
             let rows = results
@@ -586,7 +622,7 @@ impl CommandPalette {
             let mut scroll_layout = UiLayoutNode::column(0.0);
             let limit = Self::results_viewport_limit(appearance);
             scroll_layout.size.height = UiLength::Px(
-                (visible as f32 * (appearance.row_height + 20.0 + appearance.gap))
+                (visible as f32 * (appearance.row_height + appearance.gap))
                     .clamp(appearance.min_results_height.min(limit), limit),
             );
             children.push(
@@ -612,6 +648,28 @@ impl CommandPalette {
                     .with_key("command-palette:footer")
                     .with_height(UiLength::Px(22.0))
                     .with_style(appearance.footer_style.clone()),
+            );
+        } else if !appearance.footer_hints.is_empty() {
+            children.push(
+                WidgetNode::row(
+                    appearance
+                        .footer_hints
+                        .iter()
+                        .enumerate()
+                        .map(|(index, hint)| {
+                            WidgetNode::row([
+                                WidgetNode::label(&hint.key)
+                                    .with_key(format!("command-palette:footer-key:{index}"))
+                                    .with_style(appearance.footer_key_style.clone()),
+                                WidgetNode::label(&hint.action)
+                                    .with_style(appearance.footer_style.clone()),
+                            ])
+                            .with_gap(8.0)
+                        }),
+                )
+                .with_key("command-palette:footer")
+                .with_height(UiLength::Px(25.0))
+                .with_gap(20.0),
             );
         }
         let mut layout = UiLayoutNode::column(appearance.gap);
@@ -676,6 +734,14 @@ impl CommandPalette {
                 shortcut_style: appearance.shortcut_style.clone(),
                 shortcut_surface_style: appearance.shortcut_surface_style.clone(),
                 reserved_trailing_width: appearance.result_padding_x,
+                category: command.category.clone(),
+                description: if appearance.show_descriptions {
+                    command.description.clone()
+                } else {
+                    String::new()
+                },
+                category_style: appearance.category_style.clone(),
+                detail_style: appearance.detail_style.clone(),
             })
             .with_style(if selected {
                 appearance.selected_style.clone()
@@ -685,38 +751,7 @@ impl CommandPalette {
         if selected && let Some(effects) = &appearance.selected_effects {
             button = button.with_visual_effects(effects.clone());
         }
-        let mut content = vec![button];
-        if !command.category.is_empty() || !command.description.is_empty() {
-            let mut metadata = Vec::new();
-            if !command.category.is_empty() {
-                metadata.push(
-                    WidgetNode::label(&command.category)
-                        .with_style(appearance.category_style.clone()),
-                );
-            }
-            if appearance.show_descriptions && !command.description.is_empty() {
-                metadata.push(
-                    WidgetNode::label(&command.description)
-                        .with_width(UiLength::Fill(1.0))
-                        .with_style(appearance.detail_style.clone()),
-                );
-            }
-            content.push(
-                WidgetNode::row([
-                    WidgetNode::column([]).with_width(UiLength::Px(appearance.result_padding_x)),
-                    WidgetNode::row(metadata)
-                        .with_width(UiLength::Fill(1.0))
-                        .with_height(UiLength::Px(18.0))
-                        .with_gap(8.0),
-                ])
-                .with_width(UiLength::Fill(1.0))
-                .with_height(UiLength::Px(18.0)),
-            );
-        }
-        WidgetNode::column(content)
-            .with_key(format!("command-palette:result:{}", command.id))
-            .with_width(UiLength::Fill(1.0))
-            .with_gap(2.0)
+        button
     }
 
     /// Route widget events from a mounted palette. Returns an activated command ID.
@@ -869,6 +904,27 @@ mod tests {
         palette.query = "no such command".into();
         let empty = palette.view_with(&registry, &appearance);
         assert!(by_key(&empty, "command-palette:empty").is_some());
+    }
+
+    #[test]
+    fn palette_result_metadata_stays_inside_the_action() {
+        let mut registry = CommandRegistry::default();
+        let mut command = Command::new("export", "Export material");
+        command.category = "File".into();
+        command.description = "Write the active material to disk".into();
+        registry.register(command).unwrap();
+        let mut palette = CommandPalette::default();
+        palette.show();
+        let view = palette.view(&registry);
+        let action = by_key(&view, &CommandPalette::action_key("export")).unwrap();
+        assert!(matches!(action.spec, crate::WidgetSpec::Button { .. }));
+        assert!(action.children.is_empty());
+        let presentation = action.palette_action_text.as_ref().unwrap();
+        assert_eq!(presentation.category, "File");
+        assert_eq!(
+            presentation.description,
+            "Write the active material to disk"
+        );
     }
 
     #[test]

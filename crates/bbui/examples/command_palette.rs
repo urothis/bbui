@@ -3,8 +3,8 @@
 
 use bbui::prelude::*;
 use bbui::widgets::{
-    Command, CommandPalette, CommandPaletteAppearance, CommandPaletteSession, CommandRegistry,
-    WidgetEventQueue,
+    Command, CommandPalette, CommandPaletteAppearance, CommandPaletteFooterHint,
+    CommandPaletteSession, CommandRegistry, WidgetEventQueue,
 };
 use bbui_core::{UiRoutedEvent, UiRoutedEvents};
 use bbui_style::Rgba;
@@ -49,16 +49,18 @@ fn palette_page(
     let mut appearance = CommandPaletteAppearance {
         title: "Workspace commands".into(),
         subtitle: Some("Search actions across the material editor".into()),
-        footer: Some("↑ ↓  Move     Enter  Run command     Esc  Dismiss".into()),
         width: UiLength::Px((viewport_width - 32.0).clamp(100.0, 620.0)),
         max_height: Some((viewport_height - 24.0).max(180.0)),
         ..Default::default()
     };
     if viewport_width <= 480.0 {
         appearance.subtitle = None;
-        appearance.footer = Some("↑ ↓ Navigate    Enter Run    Esc Close".into());
         appearance.show_shortcuts = false;
-        appearance.show_descriptions = false;
+        appearance.footer_hints = vec![
+            CommandPaletteFooterHint::new("↑↓", "Move"),
+            CommandPaletteFooterHint::new("↵", "Run"),
+            CommandPaletteFooterHint::new("Esc", "Close"),
+        ];
     }
     appearance
         .surface_style
@@ -129,19 +131,19 @@ fn install_palette(world: &mut World) {
     };
     let mut registry = CommandRegistry::default();
     for (id, label, category, hint, icon) in [
-        ("add-noise", "Add Noise Texture", "Nodes", "Shift+A", "✦"),
-        ("add-ramp", "Add Color Ramp", "Nodes", "Shift+R", "◈"),
-        ("frame-nodes", "Frame Selected Nodes", "View", "Home", "⌗"),
+        ("add-noise", "Add Noise Texture", "Nodes", "Shift+A", "◇"),
+        ("add-ramp", "Add Color Ramp", "Nodes", "Shift+R", "◇"),
+        ("frame-nodes", "Frame Selected Nodes", "View", "Home", "◎"),
         ("assign-material", "Assign Material", "Material", "M", "◆"),
         (
             "material-settings",
             "Edit Material Settings",
             "Material",
             "",
-            "⚙",
+            "◆",
         ),
-        ("save", "Save Workspace", "File", "Ctrl+S", "▣"),
-        ("export", "Export Material", "File", "Ctrl+E", "↗"),
+        ("save", "Save Workspace", "File", "Ctrl+S", "□"),
+        ("export", "Export Material", "File", "Ctrl+E", "□"),
         ("render", "Render Material Preview", "Render", "F12", "◉"),
     ] {
         let mut command = Command::new(id, label);
