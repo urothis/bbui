@@ -38,7 +38,10 @@ pub use collections::{
     DataTable, ListItem, ListModel, ListSelection, PreviewGrid, PreviewGridItem, TableColumn,
     TableRow, TreeModel, TreeNode,
 };
-pub use commands::{Command, CommandError, CommandPalette, CommandRegistry, CommandShortcut};
+pub use commands::{
+    Command, CommandError, CommandPalette, CommandPaletteAppearance, CommandRegistry,
+    CommandShortcut,
+};
 pub use controls::{
     Button, Checkbox, CheckboxValue, Dropdown, IconButton, IconButtonAsset, IconButtonAssetState,
     IconButtonAssetStatus, Label, RadioGroup, TextArea, TextField, Tooltip, WidgetStatus,

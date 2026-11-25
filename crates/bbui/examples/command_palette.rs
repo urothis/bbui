@@ -2,8 +2,10 @@
 //! Run with `cargo run -p bbui --example command_palette`.
 
 use bbui::prelude::*;
-use bbui::widgets::{Command, CommandPalette, CommandRegistry, WidgetEventQueue};
-use bbui_style::{Rgba, ThemeColorToken};
+use bbui::widgets::{
+    Command, CommandPalette, CommandPaletteAppearance, CommandRegistry, WidgetEventQueue,
+};
+use bbui_style::Rgba;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 
@@ -32,38 +34,32 @@ fn palette_page(palette: &CommandPalette, registry: &CommandRegistry) -> WidgetT
     let mut backdrop = UiInlineStyle::default();
     backdrop.set(
         UiStyleProperty::Background,
-        UiStyleValue::Color(Rgba(0.0, 0.0, 0.0, 0.52)),
+        UiStyleValue::Color(Rgba(0.0, 0.0, 0.0, 0.62)),
     );
     backdrop.set(UiStyleProperty::ZIndex, UiStyleValue::Integer(10_000));
-    let mut card = UiInlineStyle::default();
-    card.set_color_token(UiStyleProperty::Background, ThemeColorToken::Surface);
-    card.set_color_token(UiStyleProperty::BorderColor, ThemeColorToken::Border);
-    card.set(UiStyleProperty::BorderWidth, UiStyleValue::Scalar(1.0));
-    card.set(UiStyleProperty::ZIndex, UiStyleValue::Integer(10_002));
+    let mut appearance = CommandPaletteAppearance {
+        title: "Workspace commands".into(),
+        subtitle: Some("Search actions across the material editor".into()),
+        footer: Some("↑ ↓  Move     Enter  Run command     Esc  Dismiss".into()),
+        ..Default::default()
+    };
+    appearance
+        .surface_style
+        .set(UiStyleProperty::ZIndex, UiStyleValue::Integer(10_002));
+    let mut panel = palette.view_with(registry, &appearance);
+    panel.children = panel.children.into_iter().map(foreground).collect();
     let mut layout = UiLayoutNode::column(0.0);
     layout.align_items = UiAlign::Center;
     layout.justify_content = UiJustify::Center;
     layout.z_index = 10_000;
     WidgetTree::new(
-        WidgetNode::column([WidgetNode::column([
-            foreground(WidgetNode::label("Quick Actions").with_role("modal-title")),
-            foreground(WidgetNode::label(
-                "Find an action for the material graph or workspace.",
-            )),
-            foreground(palette.view(registry)),
-        ])
-        .with_key("command-palette:card")
-        .with_width(UiLength::Px(520.0))
-        .with_gap(10.0)
-        .with_padding(UiEdges::all(20.0))
-        .with_style(card)
-        .with_role("box")])
-        .with_key("command-palette:backdrop")
-        .with_role("box")
-        .with_layout(layout)
-        .with_style(backdrop)
-        .with_width(UiLength::Fill(1.0))
-        .with_height(UiLength::Fill(1.0)),
+        WidgetNode::column([panel])
+            .with_key("command-palette:backdrop")
+            .with_role("box")
+            .with_layout(layout)
+            .with_style(backdrop)
+            .with_width(UiLength::Fill(1.0))
+            .with_height(UiLength::Fill(1.0)),
     )
 }
 
@@ -132,6 +128,18 @@ fn install_palette(world: &mut World) {
     ] {
         let mut command = Command::new(id, label);
         command.category = category.into();
+        command.description = match id {
+            "add-noise" => "Add procedural variation to the graph",
+            "add-ramp" => "Map values to a color gradient",
+            "frame-nodes" => "Fit selected nodes in the canvas",
+            "assign-material" => "Apply Material.001 to the selected object",
+            "material-settings" => "Open the material properties panel",
+            "save" => "Save the current editor layout",
+            "export" => "Write the material to a file",
+            "render" => "Generate a material preview image",
+            _ => "",
+        }
+        .into();
         command.shortcut_hint = Some(hint.into());
         if let Err(error) = registry.register(command) {
             error!("Command registration failed: {error:?}");
