@@ -29,6 +29,7 @@ pub struct DesktopChromeAppearance {
     pub padding: UiEdges,
     pub gap: f32,
     pub control_width: f32,
+    pub document_title_width: f32,
     pub native_button_inset: f32,
     pub menu_label: String,
     pub minimize_label: String,
@@ -37,6 +38,7 @@ pub struct DesktopChromeAppearance {
     pub show_window_controls: bool,
     pub surface_style: UiInlineStyle,
     pub title_style: UiInlineStyle,
+    pub document_title_style: UiInlineStyle,
     pub menu_style: UiInlineStyle,
     pub control_style: UiInlineStyle,
     pub close_style: UiInlineStyle,
@@ -59,6 +61,7 @@ impl Default for DesktopChromeAppearance {
             padding: UiEdges::horizontal_vertical(10.0, 6.0),
             gap: 6.0,
             control_width: 36.0,
+            document_title_width: 220.0,
             native_button_inset: MACOS_BUTTON_INSET,
             menu_label: "Commands".into(),
             minimize_label: "−".into(),
@@ -67,6 +70,11 @@ impl Default for DesktopChromeAppearance {
             show_window_controls: true,
             surface_style,
             title_style: chrome_style(14.0, ThemeColorToken::Text, Some(ThemeColorToken::Surface)),
+            document_title_style: chrome_style(
+                12.5,
+                ThemeColorToken::MutedText,
+                Some(ThemeColorToken::Surface),
+            ),
             menu_style: chrome_style(
                 12.0,
                 ThemeColorToken::MutedText,
@@ -183,13 +191,21 @@ pub const MACOS_BUTTON_INSET: f32 = 90.0;
 #[derive(Debug, Clone)]
 pub struct DesktopChrome {
     pub title: String,
+    pub document_title: Option<String>,
 }
 
 impl DesktopChrome {
     pub fn new(title: impl Into<String>) -> Self {
         Self {
             title: title.into(),
+            document_title: None,
         }
+    }
+
+    /// Set the current document shown at the horizontal center of the titlebar.
+    pub fn with_document_title(mut self, title: impl Into<String>) -> Self {
+        self.document_title = Some(title.into());
+        self
     }
 
     pub fn view(&self, commands: &CommandRegistry) -> WidgetNode {
@@ -270,10 +286,42 @@ impl DesktopChrome {
                 );
             }
         }
-        WidgetNode::boxed([WidgetNode::row(row)
+        let mut layers = vec![
+            WidgetNode::row(row)
+                .with_width(UiLength::Fill(1.0))
+                .with_height(UiLength::Fill(1.0))
+                .with_gap(appearance.gap),
+        ];
+        if let Some(title) = self
+            .document_title
+            .as_deref()
+            .filter(|title| !title.is_empty())
+            && appearance.document_title_width > 0.0
+        {
+            let mut style = appearance.document_title_style.clone();
+            style
+                .0
+                .entry(UiStyleProperty::ZIndex)
+                .or_insert(UiStyleValue::Integer(2));
+            layers.push(
+                WidgetNode::row([
+                    WidgetNode::column([]).with_width(UiLength::Fill(1.0)),
+                    WidgetNode::button(title)
+                        .with_key("chrome:document-drag")
+                        .with_role("titlebar-document-drag")
+                        .with_accessible_name(format!("Move window; current document {title}"))
+                        .with_width(UiLength::Px(appearance.document_title_width))
+                        .with_height(UiLength::Fill(1.0))
+                        .with_style(style),
+                    WidgetNode::column([]).with_width(UiLength::Fill(1.0)),
+                ])
+                .with_width(UiLength::Fill(1.0))
+                .with_height(UiLength::Fill(1.0)),
+            );
+        }
+        WidgetNode::boxed([WidgetNode::overlay(layers)
             .with_width(UiLength::Fill(1.0))
-            .with_height(UiLength::Fill(1.0))
-            .with_gap(appearance.gap)])
+            .with_height(UiLength::Fill(1.0))])
         .with_key("chrome:desktop")
         .with_role("box")
         .with_width(UiLength::Fill(1.0))
@@ -445,7 +493,7 @@ pub fn handle_chrome_press(world: &mut World, event: &UiRoutedEvent) -> bool {
     };
     if world
         .get::<UiKey>(*target)
-        .is_none_or(|key| key.0 != "chrome:drag")
+        .is_none_or(|key| key.0 != "chrome:drag" && key.0 != "chrome:document-drag")
     {
         return false;
     }
@@ -520,16 +568,19 @@ mod tests {
             show_window_controls: false,
             ..Default::default()
         };
-        let desktop = DesktopChrome::new("Editor").view_with_slots(
-            &commands,
-            &appearance,
-            DesktopChromeSlots {
-                leading: Some(WidgetNode::label("Brand").with_key("host:brand")),
-                trailing: None,
-            },
-        );
+        let desktop = DesktopChrome::new("Editor")
+            .with_document_title("Current.bbui")
+            .view_with_slots(
+                &commands,
+                &appearance,
+                DesktopChromeSlots {
+                    leading: Some(WidgetNode::label("Brand").with_key("host:brand")),
+                    trailing: None,
+                },
+            );
         assert!(find(&desktop, "host:brand").is_some());
         assert!(find(&desktop, "chrome:drag").is_some());
+        assert!(find(&desktop, "chrome:document-drag").is_some());
         assert!(find(&desktop, "chrome:commands").is_some());
         assert!(find(&desktop, "chrome:close").is_none());
         assert_eq!(desktop.layout.unwrap().size.height, UiLength::Px(56.0));
@@ -554,6 +605,7 @@ mod tests {
         let mut world = World::new();
         let window = world.spawn(Window::default()).id();
         let drag = world.spawn(UiKey("chrome:drag".into())).id();
+        let document_drag = world.spawn(UiKey("chrome:document-drag".into())).id();
         let close = world.spawn(UiKey("chrome:close".into())).id();
         let commands = world.spawn(UiKey("chrome:commands".into())).id();
         assert_eq!(
@@ -577,6 +629,15 @@ mod tests {
                 target: drag,
                 button: UiPointerButton::Primary,
                 position: [20.0, 10.0],
+            }
+        ));
+        assert!(handle_chrome_press(
+            &mut world,
+            &UiRoutedEvent::PointerDown {
+                window,
+                target: document_drag,
+                button: UiPointerButton::Primary,
+                position: [400.0, 10.0],
             }
         ));
         assert!(!handle_chrome_press(

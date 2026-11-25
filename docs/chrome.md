@@ -4,6 +4,8 @@
 
 `view_with` accepts `DesktopChromeAppearance` for titlebar height, padding, spacing, labels, control width, native button inset, control visibility, and themed styles for the surface, title, menu, and window controls. `view_with_slots` adds host content before or after the drag region. Controls retain stable keys for routing. Set `close_style` separately when the close action needs a distinct treatment.
 
+Set the current document with `DesktopChrome::new("Editor").with_document_title("Project.blend")`. It is centered against the full titlebar width, stays draggable on a primary press, and truncates within `document_title_width`. `document_title_style` controls its text and surface. The host updates the title when the active document changes; omit it or narrow its width when the window is too tight for a centered title.
+
 The default minimize, maximize, and close marks are drawn as centered geometry inside equal-sized controls. Their size follows `control_style` / `close_style` font size. Replacing a control label in the appearance uses centered text instead, while its accessible name and action key remain stable.
 
 `MobileChrome` builds a compact toolbar, content area, bottom navigation, and optional sheet from host-supplied content. Use `compact_chrome(window.resolution.width())` to switch at 600 logical pixels. Navigation returns stable IDs for the host to handle. The sheet is dismissible and remains within the shell layout.

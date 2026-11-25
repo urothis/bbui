@@ -158,6 +158,39 @@ fn capture(kind: ThemeKind, mode: &str, width: u32, height: u32) {
         app.update();
     }
     if mode.starts_with("desktop") {
+        let document = {
+            let mut keys = app.world_mut().query::<(Entity, &UiKey)>();
+            keys.iter(app.world())
+                .find_map(|(entity, key)| (key.0 == "chrome:document-drag").then_some(entity))
+                .expect("document drag target")
+        };
+        let chrome = {
+            let mut keys = app.world_mut().query::<(Entity, &UiKey)>();
+            keys.iter(app.world())
+                .find_map(|(entity, key)| (key.0 == "chrome:desktop").then_some(entity))
+                .expect("desktop chrome")
+        };
+        let document_rect = app
+            .world()
+            .get::<bbui_layout::UiLayoutResult>(document)
+            .expect("document layout")
+            .rect;
+        let chrome_rect = app
+            .world()
+            .get::<bbui_layout::UiLayoutResult>(chrome)
+            .expect("chrome layout")
+            .rect;
+        let center = [
+            document_rect.x + document_rect.width * 0.5,
+            document_rect.y + document_rect.height * 0.5,
+        ];
+        assert!((center[0] - (chrome_rect.x + chrome_rect.width * 0.5)).abs() < 1.0);
+        assert!(
+            app.world()
+                .get::<bbui_core::UiHitBox>(document)
+                .expect("document hitbox")
+                .contains(center)
+        );
         for (control, expected_lines) in [("minimize", 1), ("maximize", 0), ("close", 2)] {
             let entity = {
                 let mut keys = app.world_mut().query::<(Entity, &UiKey)>();
@@ -229,6 +262,60 @@ fn capture(kind: ThemeKind, mode: &str, width: u32, height: u32) {
             &output.join(format!("chrome-controls-{theme}.png")),
             &bytes,
             width,
+        );
+    }
+    if mode.starts_with("desktop") {
+        let document = {
+            let mut keys = app.world_mut().query::<(Entity, &UiKey)>();
+            keys.iter(app.world())
+                .find_map(|(entity, key)| (key.0 == "chrome:document-drag").then_some(entity))
+                .expect("document drag target")
+        };
+        let rect = app
+            .world()
+            .get::<bbui_layout::UiLayoutResult>(document)
+            .expect("document layout")
+            .rect;
+        let position = [rect.x + rect.width * 0.5, rect.y + rect.height * 0.5];
+        let window = {
+            let mut windows = app
+                .world_mut()
+                .query_filtered::<Entity, With<PrimaryWindow>>();
+            windows.single(app.world()).expect("primary window")
+        };
+        app.world_mut()
+            .resource_mut::<bbui_core::UiInputQueue>()
+            .push(bbui_core::UiInputEvent::PointerMove {
+                window,
+                position,
+                time_seconds: 1.0,
+            });
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<bbui_core::UiFocus>()
+                .state(window)
+                .and_then(|state| state.hovered),
+            Some(document)
+        );
+        app.world_mut()
+            .resource_mut::<bbui_core::UiInputQueue>()
+            .push(bbui_core::UiInputEvent::PointerButton {
+                window,
+                button: bbui_core::UiPointerButton::Primary,
+                pressed: true,
+                position,
+                time_seconds: 1.1,
+            });
+        app.update();
+        assert!(
+            app.world()
+                .resource::<bbui_core::UiRoutedEvents>()
+                .events
+                .iter()
+                .any(|event| matches!(event,
+                    bbui_core::UiRoutedEvent::PointerDown { target, .. } if *target == document
+                ))
         );
     }
 }

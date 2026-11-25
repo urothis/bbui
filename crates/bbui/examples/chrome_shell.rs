@@ -47,21 +47,21 @@ fn editor_layout() -> WorkspaceLayout {
 fn desktop_page() -> WidgetNode {
     let mut accent = UiInlineStyle::default();
     accent.set_color_token(UiStyleProperty::Foreground, ThemeColorToken::Accent);
-    let mut muted = UiInlineStyle::default();
-    muted.set_color_token(UiStyleProperty::Foreground, ThemeColorToken::MutedText);
     WidgetNode::column([
-        DesktopChrome::new("Material Studio").view_with_slots(
-            &commands(),
-            &DesktopChromeAppearance::default(),
-            DesktopChromeSlots {
-                leading: Some(
-                    WidgetNode::label("◆")
-                        .with_width(UiLength::Px(18.0))
-                        .with_style(accent),
-                ),
-                trailing: Some(WidgetNode::label("Material.001").with_style(muted)),
-            },
-        ),
+        DesktopChrome::new("Material Studio")
+            .with_document_title("Material.001")
+            .view_with_slots(
+                &commands(),
+                &DesktopChromeAppearance::default(),
+                DesktopChromeSlots {
+                    leading: Some(
+                        WidgetNode::label("◆")
+                            .with_width(UiLength::Px(18.0))
+                            .with_style(accent),
+                    ),
+                    trailing: None,
+                },
+            ),
         WidgetNode::column([])
             .with_key("chrome:workspace")
             .with_width(UiLength::Fill(1.0))
