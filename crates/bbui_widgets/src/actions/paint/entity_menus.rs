@@ -133,6 +133,56 @@ pub(super) fn paint_buttons_and_menus(paint: &mut PaintEntityContext<'_>) -> boo
                 color: background,
             },
         ));
+        if matches!(
+            role.as_deref(),
+            Some("chrome-mobile-nav-item" | "chrome-mobile-action")
+        ) {
+            if role.as_deref() == Some("chrome-mobile-nav-item")
+                && world
+                    .get::<bbui_core::UiTab>(entity)
+                    .is_some_and(|tab| tab.selected)
+            {
+                camera_items.push(item(
+                    clip,
+                    z.saturating_add(1),
+                    Primitive::RoundedRect {
+                        rect: ClipRect {
+                            x: rect.x + rect.width * 0.35,
+                            y: rect.y + 2.0,
+                            width: rect.width * 0.3,
+                            height: 2.0,
+                        },
+                        radius: 1.0,
+                        color: theme.color(ThemeColorToken::Accent),
+                    },
+                ));
+            }
+            let width = measured_text_width(world, entity, &button.label, theme);
+            camera_items.push(item(
+                clip,
+                z.saturating_add(2),
+                styled_text_primitive_for_entity(
+                    world,
+                    entity,
+                    clip,
+                    TextPlacement {
+                        origin: [
+                            rect.x + (rect.width - width) * 0.5,
+                            rect.y + (rect.height - theme.font_size * theme.line_height) * 0.5,
+                        ],
+                        text: button.label.clone(),
+                    },
+                    if !enabled || !button.enabled {
+                        theme.color(ThemeColorToken::DisabledText)
+                    } else {
+                        theme.text
+                    },
+                    theme,
+                    false,
+                ),
+            ));
+            return true;
+        }
         if let Some(control) = role
             .as_deref()
             .and_then(|role| role.strip_prefix("chrome-window-"))
@@ -721,6 +771,9 @@ pub(super) fn paint_buttons_and_menus(paint: &mut PaintEntityContext<'_>) -> boo
         return true;
     }
     if let Some(menu) = world.get::<MenuControl>(entity) {
+        let centered_menu = world
+            .get::<UiRole>(entity)
+            .is_some_and(|role| role.0 == "chrome-mobile-menu");
         let properties_menu = world
             .get::<UiRole>(entity)
             .is_some_and(|role| matches!(role.0.as_str(), "flat-menu" | EditorRole::FLAT_MENU));
@@ -923,6 +976,9 @@ pub(super) fn paint_buttons_and_menus(paint: &mut PaintEntityContext<'_>) -> boo
         let flat_text_width = flat_label
             .as_ref()
             .map(|label| measured_text_width(world, entity, label, theme));
+        let normal_text_width = normal_label
+            .as_ref()
+            .map(|label| measured_text_width(world, entity, label, theme));
         // Center the line box, then compensate for glyphs sitting high within it.
         let flat_text_y = rect.y
             + (rect.height - theme.font_size * theme.line_height).max(0.0) * 0.5
@@ -953,8 +1009,17 @@ pub(super) fn paint_buttons_and_menus(paint: &mut PaintEntityContext<'_>) -> boo
                     clip,
                     TextPlacement {
                         origin: [
-                            rect.x + theme.spacing.menu.padding_x,
-                            rect.y + theme.spacing.menu.padding_y,
+                            if centered_menu {
+                                rect.x
+                                    + (rect.width - normal_text_width.unwrap_or(0.0)).max(0.0) * 0.5
+                            } else {
+                                rect.x + theme.spacing.menu.padding_x
+                            },
+                            if centered_menu {
+                                flat_text_y
+                            } else {
+                                rect.y + theme.spacing.menu.padding_y
+                            },
                         ],
                         text: normal_label.unwrap_or_default(),
                     },

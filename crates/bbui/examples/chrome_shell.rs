@@ -93,44 +93,165 @@ fn desktop_page(center: Option<WidgetNode>) -> WidgetNode {
 }
 
 fn mobile_page() -> WidgetNode {
-    let mut mobile = MobileChrome::new(
-        "Material Studio",
-        vec![
-            MobileNavItem::new("scene", "Scene"),
-            MobileNavItem::new("material", "Material"),
-            MobileNavItem::new("assets", "Assets"),
-        ],
+    let mut brand_style = UiInlineStyle::default();
+    brand_style.set_color_token(UiStyleProperty::Foreground, ThemeColorToken::Accent);
+    brand_style.set(UiStyleProperty::FontSize, UiStyleValue::Scalar(20.0));
+    let mut title_style = UiInlineStyle::default();
+    title_style.set_color_token(UiStyleProperty::Foreground, ThemeColorToken::Text);
+    title_style.set(UiStyleProperty::FontSize, UiStyleValue::Scalar(15.0));
+    let mut muted_style = UiInlineStyle::default();
+    muted_style.set_color_token(UiStyleProperty::Foreground, ThemeColorToken::MutedText);
+    muted_style.set(UiStyleProperty::FontSize, UiStyleValue::Scalar(11.0));
+    let mut menu_style = UiInlineStyle::default();
+    menu_style.set_color_token(UiStyleProperty::Foreground, ThemeColorToken::MutedText);
+    menu_style.set_color_token(UiStyleProperty::Background, ThemeColorToken::Background);
+    menu_style.set(UiStyleProperty::CornerRadius, UiStyleValue::Scalar(7.0));
+    let toolbar = WidgetNode::row([
+        WidgetNode::label("◆")
+            .with_width(UiLength::Px(22.0))
+            .with_style(brand_style),
+        WidgetNode::column([
+            WidgetNode::label("Material Studio").with_style(title_style.clone()),
+            WidgetNode::label("WORKSPACE").with_style(muted_style.clone()),
+        ])
+        .with_width(UiLength::Fill(1.0))
+        .with_gap(1.0),
+        WidgetNode::menu("Actions", commands().menu_entries())
+            .with_key("chrome:mobile:commands")
+            .with_role("chrome-mobile-menu")
+            .with_accessible_name("Workspace actions")
+            .with_style(menu_style)
+            .with_width(UiLength::Px(96.0))
+            .with_height(UiLength::Px(40.0)),
+    ])
+    .with_gap(9.0);
+    let mut done_style = UiInlineStyle::default();
+    done_style.set_color_token(UiStyleProperty::Foreground, ThemeColorToken::Text);
+    done_style.set_color_token(
+        UiStyleProperty::Background,
+        ThemeColorToken::SelectedSurface,
     );
-    mobile.selected = Some("scene".into());
-    mobile.sheet_title = Some("Material.001".into());
-    mobile.view(
-        &commands(),
-        WidgetNode::scroll([
+    done_style.set(UiStyleProperty::CornerRadius, UiStyleValue::Scalar(7.0));
+    let mut handle_style = UiInlineStyle::default();
+    handle_style.set_color_token(UiStyleProperty::Background, ThemeColorToken::MutedText);
+    handle_style.set(UiStyleProperty::CornerRadius, UiStyleValue::Scalar(3.0));
+    let sheet = WidgetNode::column([
+        WidgetNode::row([
+            WidgetNode::column([]).with_width(UiLength::Fill(1.0)),
+            WidgetNode::boxed([])
+                .with_width(UiLength::Px(36.0))
+                .with_height(UiLength::Px(4.0))
+                .with_style(handle_style),
+            WidgetNode::column([]).with_width(UiLength::Fill(1.0)),
+        ])
+        .with_width(UiLength::Fill(1.0))
+        .with_height(UiLength::Px(7.0)),
+        WidgetNode::row([
+            WidgetNode::column([
+                WidgetNode::label("Material settings").with_style(title_style),
+                WidgetNode::label("Material.001  ·  Surface").with_style(muted_style),
+            ])
+            .with_width(UiLength::Fill(1.0))
+            .with_gap(3.0),
+            WidgetNode::button("Done")
+                .with_key("chrome:mobile:sheet-close")
+                .with_role("chrome-mobile-action")
+                .with_accessible_name("Close material sheet")
+                .with_style(done_style)
+                .with_width(UiLength::Px(64.0))
+                .with_height(UiLength::Px(40.0)),
+        ])
+        .with_width(UiLength::Fill(1.0)),
+        WidgetNode::column([
+            WidgetNode::property_row_with_decorator(
+                "Metallic",
+                WidgetNode::slider_range("", 0.35, 0.0, 1.0, 0.01),
+            ),
+            WidgetNode::property_row_with_decorator(
+                "Roughness",
+                WidgetNode::slider_range("", 0.45, 0.0, 1.0, 0.01),
+            ),
+        ])
+        .with_gap(6.0),
+        WidgetNode::row([
+            WidgetNode::button("Assign material")
+                .with_role("chrome-mobile-action")
+                .with_style({
+                    let mut style = UiInlineStyle::default();
+                    style.set_color_token(UiStyleProperty::Foreground, ThemeColorToken::Text);
+                    style.set_color_token(
+                        UiStyleProperty::Background,
+                        ThemeColorToken::SelectedSurface,
+                    );
+                    style.set(UiStyleProperty::CornerRadius, UiStyleValue::Scalar(8.0));
+                    style
+                })
+                .with_width(UiLength::Fill(1.0))
+                .with_height(UiLength::Px(40.0)),
+            WidgetNode::button("Edit graph")
+                .with_role("chrome-mobile-action")
+                .with_style({
+                    let mut style = UiInlineStyle::default();
+                    style.set_color_token(UiStyleProperty::Foreground, ThemeColorToken::MutedText);
+                    style.set_color_token(UiStyleProperty::Background, ThemeColorToken::Background);
+                    style.set(UiStyleProperty::CornerRadius, UiStyleValue::Scalar(8.0));
+                    style
+                })
+                .with_width(UiLength::Fill(1.0))
+                .with_height(UiLength::Px(40.0)),
+        ])
+        .with_width(UiLength::Fill(1.0))
+        .with_gap(8.0),
+    ])
+    .with_width(UiLength::Fill(1.0))
+    .with_gap(12.0);
+    let mut selected_style = UiInlineStyle::default();
+    selected_style.set_color_token(UiStyleProperty::Foreground, ThemeColorToken::Text);
+    selected_style.set_color_token(
+        UiStyleProperty::Background,
+        ThemeColorToken::SelectedSurface,
+    );
+    selected_style.set(UiStyleProperty::CornerRadius, UiStyleValue::Scalar(9.0));
+    let mut nav_style = UiInlineStyle::default();
+    nav_style.set_color_token(UiStyleProperty::Foreground, ThemeColorToken::MutedText);
+    nav_style.set_color_token(UiStyleProperty::Background, ThemeColorToken::Surface);
+    nav_style.set(UiStyleProperty::CornerRadius, UiStyleValue::Scalar(9.0));
+    let navigation = WidgetNode::row(
+        [
+            ("scene", "◆  Scene", true),
+            ("material", "◇  Material", false),
+            ("assets", "▦  Assets", false),
+        ]
+        .into_iter()
+        .map(|(id, label, selected)| {
+            WidgetNode::button(label)
+                .with_key(format!("chrome:mobile:nav:{id}"))
+                .with_role("chrome-mobile-nav-item")
+                .with_accessible_name(id)
+                .with_tab_selected(selected)
+                .with_style(if selected {
+                    selected_style.clone()
+                } else {
+                    nav_style.clone()
+                })
+                .with_width(UiLength::Fill(1.0))
+                .with_height(UiLength::Fill(1.0))
+        }),
+    )
+    .with_width(UiLength::Fill(1.0))
+    .with_height(UiLength::Fill(1.0))
+    .with_gap(7.0);
+    MobileChrome.view(MobileChromeSlots {
+        toolbar,
+        content: WidgetNode::scroll([
             editor_content::scene_pane().with_height(UiLength::Px(310.0)),
             editor_content::console_pane().with_height(UiLength::Px(190.0)),
         ])
         .with_width(UiLength::Fill(1.0))
         .with_height(UiLength::Fill(1.0)),
-        Some(
-            WidgetNode::column([
-                WidgetNode::property_row_with_decorator(
-                    "Metallic",
-                    WidgetNode::slider_range("", 0.35, 0.0, 1.0, 0.01),
-                ),
-                WidgetNode::property_row_with_decorator(
-                    "Roughness",
-                    WidgetNode::slider_range("", 0.45, 0.0, 1.0, 0.01),
-                ),
-                WidgetNode::row([
-                    WidgetNode::button("Assign material"),
-                    WidgetNode::button("Edit graph"),
-                ])
-                .with_gap(8.0),
-            ])
-            .with_gap(8.0)
-            .with_height(UiLength::Px(130.0)),
-        ),
-    )
+        sheet: Some(sheet),
+        navigation,
+    })
 }
 
 fn install_chrome(world: &mut World) {

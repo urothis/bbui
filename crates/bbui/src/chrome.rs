@@ -96,70 +96,35 @@ pub struct MobileChromeAppearance {
     pub navigation_height: f32,
     pub sheet_padding: UiEdges,
     pub sheet_gap: f32,
-    pub menu_label: String,
-    pub close_sheet_label: String,
-    pub selected_indicator: String,
     pub toolbar_style: UiInlineStyle,
-    pub title_style: UiInlineStyle,
-    pub menu_style: UiInlineStyle,
     pub navigation_style: UiInlineStyle,
-    pub navigation_item_style: UiInlineStyle,
-    pub selected_item_style: UiInlineStyle,
     pub sheet_style: UiInlineStyle,
-    pub sheet_title_style: UiInlineStyle,
-    pub sheet_close_style: UiInlineStyle,
 }
 
 impl Default for MobileChromeAppearance {
     fn default() -> Self {
-        let mut selected_item_style = chrome_style(
-            12.0,
-            ThemeColorToken::Text,
-            Some(ThemeColorToken::SelectedSurface),
-        );
-        selected_item_style.set(UiStyleProperty::CornerRadius, UiStyleValue::Scalar(6.0));
         let mut sheet_style =
             chrome_style(12.0, ThemeColorToken::Text, Some(ThemeColorToken::Surface));
         sheet_style.set_color_token(UiStyleProperty::BorderColor, ThemeColorToken::Border);
         sheet_style.set(UiStyleProperty::BorderWidth, UiStyleValue::Scalar(1.0));
+        sheet_style.set(UiStyleProperty::CornerRadius, UiStyleValue::Scalar(12.0));
         sheet_style.set(UiStyleProperty::ZIndex, UiStyleValue::Integer(1));
+        let mut toolbar_style =
+            chrome_style(12.0, ThemeColorToken::Text, Some(ThemeColorToken::Surface));
+        toolbar_style.set_color_token(UiStyleProperty::BorderColor, ThemeColorToken::Border);
+        toolbar_style.set(UiStyleProperty::BorderWidth, UiStyleValue::Scalar(1.0));
+        let mut navigation_style =
+            chrome_style(12.0, ThemeColorToken::Text, Some(ThemeColorToken::Surface));
+        navigation_style.set_color_token(UiStyleProperty::BorderColor, ThemeColorToken::Border);
+        navigation_style.set(UiStyleProperty::BorderWidth, UiStyleValue::Scalar(1.0));
         Self {
-            toolbar_height: 52.0,
-            navigation_height: 56.0,
-            sheet_padding: UiEdges::all(12.0),
-            sheet_gap: 10.0,
-            menu_label: "Actions".into(),
-            close_sheet_label: "Done".into(),
-            selected_indicator: "●".into(),
-            toolbar_style: chrome_style(
-                12.0,
-                ThemeColorToken::Text,
-                Some(ThemeColorToken::Surface),
-            ),
-            title_style: chrome_style(15.0, ThemeColorToken::Text, None),
-            menu_style: chrome_style(
-                12.0,
-                ThemeColorToken::MutedText,
-                Some(ThemeColorToken::Background),
-            ),
-            navigation_style: chrome_style(
-                12.0,
-                ThemeColorToken::Text,
-                Some(ThemeColorToken::Surface),
-            ),
-            navigation_item_style: chrome_style(
-                12.0,
-                ThemeColorToken::MutedText,
-                Some(ThemeColorToken::Surface),
-            ),
-            selected_item_style,
+            toolbar_height: 60.0,
+            navigation_height: 68.0,
+            sheet_padding: UiEdges::horizontal_vertical(16.0, 12.0),
+            sheet_gap: 12.0,
+            toolbar_style,
+            navigation_style,
             sheet_style,
-            sheet_title_style: chrome_style(14.0, ThemeColorToken::Text, None),
-            sheet_close_style: chrome_style(
-                12.0,
-                ThemeColorToken::Accent,
-                Some(ThemeColorToken::Background),
-            ),
         }
     }
 }
@@ -339,141 +304,74 @@ fn centered_chrome_layer(content: WidgetNode) -> WidgetNode {
     .with_height(UiLength::Fill(1.0))
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MobileNavItem {
-    pub id: String,
-    pub label: String,
+/// Host-owned content for each region of the compact shell.
+#[derive(Debug)]
+pub struct MobileChromeSlots {
+    pub toolbar: WidgetNode,
+    pub content: WidgetNode,
+    pub sheet: Option<WidgetNode>,
+    pub navigation: WidgetNode,
 }
 
-impl MobileNavItem {
-    pub fn new(id: impl Into<String>, label: impl Into<String>) -> Self {
-        Self {
-            id: id.into(),
-            label: label.into(),
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct MobileChrome {
-    pub title: String,
-    pub navigation: Vec<MobileNavItem>,
-    pub selected: Option<String>,
-    pub sheet_title: Option<String>,
-}
+#[derive(Debug, Default, Clone, Copy)]
+pub struct MobileChrome;
 
 impl MobileChrome {
-    pub fn new(title: impl Into<String>, navigation: Vec<MobileNavItem>) -> Self {
-        Self {
-            title: title.into(),
-            navigation,
-            selected: None,
-            sheet_title: None,
-        }
-    }
-
-    /// Build a toolbar, content region, optional sheet, and bottom navigation.
-    /// The application supplies both the main page and sheet contents.
-    pub fn view(
-        &self,
-        commands: &CommandRegistry,
-        content: WidgetNode,
-        sheet: Option<WidgetNode>,
-    ) -> WidgetNode {
-        self.view_with(commands, content, sheet, &MobileChromeAppearance::default())
+    /// Place host widgets in the toolbar, page, optional sheet, and navigation regions.
+    pub fn view(&self, slots: MobileChromeSlots) -> WidgetNode {
+        self.view_with(slots, &MobileChromeAppearance::default())
     }
 
     pub fn view_with(
         &self,
-        commands: &CommandRegistry,
-        content: WidgetNode,
-        sheet: Option<WidgetNode>,
+        slots: MobileChromeSlots,
         appearance: &MobileChromeAppearance,
     ) -> WidgetNode {
-        let toolbar = WidgetNode::boxed([WidgetNode::row([
-            WidgetNode::label(&self.title)
-                .with_width(UiLength::Fill(1.0))
-                .with_style(appearance.title_style.clone()),
-            WidgetNode::menu(&appearance.menu_label, commands.menu_entries())
-                .with_key("chrome:mobile:commands")
-                .with_style(appearance.menu_style.clone()),
-        ])
-        .with_width(UiLength::Fill(1.0))
-        .with_height(UiLength::Fill(1.0))])
+        let MobileChromeSlots {
+            toolbar,
+            content,
+            sheet,
+            navigation,
+        } = slots;
+        let toolbar = WidgetNode::boxed([toolbar
+            .with_width(UiLength::Fill(1.0))
+            .with_height(UiLength::Fill(1.0))])
         .with_key("chrome:mobile:toolbar")
         .with_role("box")
+        .with_style(appearance.toolbar_style.clone())
         .with_height(UiLength::Px(appearance.toolbar_height))
-        .with_padding(UiEdges::all(8.0))
-        .with_style(appearance.toolbar_style.clone());
+        .with_padding(UiEdges::horizontal_vertical(14.0, 8.0));
         let mut body = vec![
             toolbar,
             content
                 .with_width(UiLength::Fill(1.0))
                 .with_height(UiLength::Fill(1.0)),
         ];
-        if let (Some(title), Some(sheet)) = (&self.sheet_title, sheet) {
+        if let Some(sheet) = sheet {
             body.push(
-                WidgetNode::column([
-                    sheet_foreground(WidgetNode::row([
-                        WidgetNode::label(title)
-                            .with_width(UiLength::Fill(1.0))
-                            .with_style(appearance.sheet_title_style.clone()),
-                        WidgetNode::button(&appearance.close_sheet_label)
-                            .with_key("chrome:mobile:sheet-close")
-                            .with_accessible_name("Close sheet")
-                            .with_style(appearance.sheet_close_style.clone()),
-                    ])),
-                    sheet_foreground(sheet),
-                ])
-                .with_key("chrome:mobile:sheet")
-                .with_role("box")
-                .with_style(appearance.sheet_style.clone())
-                .with_padding(appearance.sheet_padding)
-                .with_gap(appearance.sheet_gap),
+                WidgetNode::column([sheet_foreground(sheet)])
+                    .with_key("chrome:mobile:sheet")
+                    .with_role("box")
+                    .with_style(appearance.sheet_style.clone())
+                    .with_padding(appearance.sheet_padding)
+                    .with_gap(appearance.sheet_gap),
             );
         }
         body.push(
-            WidgetNode::boxed([WidgetNode::row(self.navigation.iter().map(|item| {
-                let label = if self.selected.as_deref() == Some(&item.id) {
-                    format!("{} {}", appearance.selected_indicator, item.label)
-                } else {
-                    item.label.clone()
-                };
-                WidgetNode::button(label)
-                    .with_key(format!("chrome:mobile:nav:{}", item.id))
-                    .with_width(UiLength::Fill(1.0))
-                    .with_accessible_name(&item.label)
-                    .with_tab_selected(self.selected.as_deref() == Some(&item.id))
-                    .with_style(if self.selected.as_deref() == Some(&item.id) {
-                        appearance.selected_item_style.clone()
-                    } else {
-                        appearance.navigation_item_style.clone()
-                    })
-            }))
-            .with_width(UiLength::Fill(1.0))
-            .with_height(UiLength::Fill(1.0))
-            .with_gap(6.0)])
+            WidgetNode::boxed([navigation
+                .with_width(UiLength::Fill(1.0))
+                .with_height(UiLength::Fill(1.0))])
             .with_key("chrome:mobile:bottom-nav")
             .with_role("box")
             .with_tab_list()
+            .with_style(appearance.navigation_style.clone())
             .with_height(UiLength::Px(appearance.navigation_height))
-            .with_padding(UiEdges::all(6.0))
-            .with_gap(6.0)
-            .with_style(appearance.navigation_style.clone()),
+            .with_padding(UiEdges::horizontal_vertical(8.0, 7.0)),
         );
         WidgetNode::column(body)
             .with_key("chrome:mobile")
             .with_width(UiLength::Fill(1.0))
             .with_height(UiLength::Fill(1.0))
-    }
-
-    pub fn navigate(&mut self, id: &str, title: impl Into<String>) -> bool {
-        if !self.navigation.iter().any(|item| item.id == id) {
-            return false;
-        }
-        self.selected = Some(id.to_owned());
-        self.sheet_title = Some(title.into());
-        true
     }
 }
 
@@ -560,16 +458,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn compact_breakpoint_and_navigation_state() {
+    fn compact_breakpoint() {
         assert!(!compact_chrome(600.0));
         assert!(compact_chrome(599.0));
         assert!(compact_chrome_at(700.0, 720.0));
         assert!(!compact_chrome_at(f32::NAN, 720.0));
-        let mut chrome = MobileChrome::new("Editor", vec![MobileNavItem::new("files", "Files")]);
-        assert!(!chrome.navigate("missing", "Missing"));
-        assert!(chrome.navigate("files", "Files"));
-        assert_eq!(chrome.selected.as_deref(), Some("files"));
-        assert_eq!(chrome.sheet_title.as_deref(), Some("Files"));
     }
 
     #[test]
@@ -609,18 +502,35 @@ mod tests {
         assert!(find(&desktop, "chrome:commands").is_some());
         assert!(find(&desktop, "chrome:close").is_none());
         assert_eq!(desktop.layout.unwrap().size.height, UiLength::Px(56.0));
-        let mut mobile = MobileChrome::new("Editor", vec![MobileNavItem::new("files", "Files")]);
-        mobile.selected = Some("files".into());
-        mobile.sheet_title = Some("Details".into());
-        let compact = mobile.view_with(
-            &commands,
-            WidgetNode::column([]),
-            Some(WidgetNode::label("Body")),
+        let compact = MobileChrome.view_with(
+            MobileChromeSlots {
+                toolbar: WidgetNode::row([
+                    WidgetNode::label("Editor"),
+                    WidgetNode::menu("Actions", commands.menu_entries())
+                        .with_key("chrome:mobile:commands"),
+                ])
+                .with_key("host:toolbar"),
+                content: WidgetNode::label("Body"),
+                sheet: Some(
+                    WidgetNode::column([
+                        WidgetNode::label("Details"),
+                        WidgetNode::button("Done").with_key("chrome:mobile:sheet-close"),
+                    ])
+                    .with_key("host:sheet"),
+                ),
+                navigation: WidgetNode::row([
+                    WidgetNode::button("Files").with_key("chrome:mobile:nav:files")
+                ])
+                .with_key("host:navigation"),
+            },
             &MobileChromeAppearance {
-                close_sheet_label: "Done".into(),
+                navigation_height: 72.0,
                 ..Default::default()
             },
         );
+        assert!(find(&compact, "host:toolbar").is_some());
+        assert!(find(&compact, "host:sheet").is_some());
+        assert!(find(&compact, "host:navigation").is_some());
         assert!(find(&compact, "chrome:mobile:nav:files").is_some());
         assert!(find(&compact, "chrome:mobile:sheet-close").is_some());
     }
@@ -635,6 +545,9 @@ mod tests {
         let center_button = world.spawn((UiParent(center_drag), UiFocusable)).id();
         let close = world.spawn(UiKey("chrome:close".into())).id();
         let commands = world.spawn(UiKey("chrome:commands".into())).id();
+        let mobile_commands = world.spawn(UiKey("chrome:mobile:commands".into())).id();
+        let mobile_nav = world.spawn(UiKey("chrome:mobile:nav:files".into())).id();
+        let sheet_close = world.spawn(UiKey("chrome:mobile:sheet-close".into())).id();
         assert_eq!(
             chrome_action(
                 &world,
@@ -648,6 +561,29 @@ mod tests {
         assert_eq!(
             chrome_action(&world, &WidgetEvent::Activated { target: close }),
             Some(ChromeAction::CloseRequested)
+        );
+        assert_eq!(
+            chrome_action(
+                &world,
+                &WidgetEvent::MenuCommand {
+                    target: mobile_commands,
+                    command_id: "save".into(),
+                }
+            ),
+            Some(ChromeAction::Command("save".into()))
+        );
+        assert_eq!(
+            chrome_action(&world, &WidgetEvent::Activated { target: mobile_nav }),
+            Some(ChromeAction::Navigate("files".into()))
+        );
+        assert_eq!(
+            chrome_action(
+                &world,
+                &WidgetEvent::Activated {
+                    target: sheet_close
+                }
+            ),
+            Some(ChromeAction::DismissSheet)
         );
         assert!(handle_chrome_press(
             &mut world,

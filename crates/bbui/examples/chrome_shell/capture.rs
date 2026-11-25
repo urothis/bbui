@@ -263,6 +263,34 @@ fn capture(kind: ThemeKind, mode: &str, width: u32, height: u32) {
             );
         }
     }
+    if mode.starts_with("mobile") {
+        for key in [
+            "chrome:mobile:commands",
+            "chrome:mobile:sheet-close",
+            "chrome:mobile:nav:scene",
+            "chrome:mobile:nav:material",
+            "chrome:mobile:nav:assets",
+        ] {
+            let entity = {
+                let mut keys = app.world_mut().query::<(Entity, &UiKey)>();
+                keys.iter(app.world())
+                    .find_map(|(entity, found)| (found.0 == key).then_some(entity))
+                    .expect("mobile chrome action")
+            };
+            let rect = app
+                .world()
+                .get::<bbui_layout::UiLayoutResult>(entity)
+                .expect("mobile action layout")
+                .rect;
+            assert!(rect.height >= 40.0, "{key} has height {}", rect.height);
+            assert!(
+                app.world()
+                    .get::<bbui_core::UiHitBox>(entity)
+                    .expect("mobile action hitbox")
+                    .contains([rect.x + rect.width * 0.5, rect.y + rect.height * 0.5])
+            );
+        }
+    }
     let bytes = read_frame(&mut app, &target);
     let output =
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/visuals/examples");

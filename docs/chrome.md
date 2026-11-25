@@ -8,9 +8,9 @@ Pass a BBUI tree as `DesktopChromeSlots.center`. It occupies a `center_width`-pi
 
 The default minimize, maximize, and close marks are drawn as centered geometry inside equal-sized controls. Their size follows `control_style` / `close_style` font size. Replacing a control label in the appearance uses centered text instead, while its accessible name and action key remain stable.
 
-`MobileChrome` builds a compact toolbar, content area, bottom navigation, and optional sheet from host-supplied content. Use `compact_chrome(window.resolution.width())` to switch at 600 logical pixels. Navigation returns stable IDs for the host to handle. The sheet is dismissible and remains within the shell layout.
+`MobileChrome` lays out four host-owned widget regions through `MobileChromeSlots`: `toolbar`, `content`, optional `sheet`, and `navigation`. The shell supplies themed surfaces and dimensions; hosts compose every label, icon, menu, button, selected state, and sheet header inside those regions. Set `chrome:mobile:commands` on a command menu, `chrome:mobile:sheet-close` on a dismiss control, and `chrome:mobile:nav:<id>` on a navigation control when using `chrome_action`. The host owns the active navigation ID and decides when to show or dismiss the sheet.
 
-`MobileChromeAppearance` controls toolbar and navigation height, sheet padding and spacing, copy, selected indicator, and separate theme-aware styles for each surface and control. Pass it to `view_with`. Use `compact_chrome_at(width, breakpoint)` for a host-selected breakpoint. The sheet's content remains a host-owned `WidgetNode`, so its controls and layout can be composed independently.
+`MobileChromeAppearance` controls toolbar and navigation height, sheet padding and spacing, and the three surface styles. Pass it to `view_with`. Use `compact_chrome(window.resolution.width())` to switch at 600 logical pixels or `compact_chrome_at(width, breakpoint)` for a host-selected breakpoint. The example composes a two-line toolbar, a material sheet, and navigation buttons with explicit selected state; none of those contents are built into the shell.
 
 | Mode | Dark theme | Light theme |
 | --- | --- | --- |
