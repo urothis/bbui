@@ -16,7 +16,7 @@ These are captures from runnable Bevy examples and BBUI's offscreen GPU tests. O
 | Workspace shell | [Dark](examples/workspace-shell-dark.png) · [Light](examples/workspace-shell-light.png) |
 | Modal dialog | [Dark](examples/modal-dialog-dark.png) · [Light](examples/modal-dialog-light.png) |
 | Command palette | [Dark](examples/command-palette-dark.png) · [Light](examples/command-palette-light.png) · [Hover](examples/command-palette-hover-dark.png) · [Focus](examples/command-palette-focus-dark.png) |
-| Window chrome | [Desktop dark](examples/chrome-desktop-dark.png) · [desktop light](examples/chrome-desktop-light.png) · [compact dark](examples/chrome-mobile-dark.png) · [compact light](examples/chrome-mobile-light.png) |
+| Window chrome | [Desktop dark](examples/chrome-desktop-dark.png) · [desktop light](examples/chrome-desktop-light.png) · [compact dark](examples/chrome-mobile-dark.png) · [compact light](examples/chrome-mobile-light.png) · [control hover](examples/chrome-desktop-hover-dark.png) · [navigation hover](examples/chrome-mobile-hover-dark.png) |
 | Visual effects | [Gradient border and edge glow](examples/visual-effects-dark.png) · [rotated border](examples/visual-effects-rotated.png) · [eight variants](examples/visual-effect-variants.png) |
 | Progress bars | [Six-style gallery with corner options](examples/progress-gallery.png) |
 

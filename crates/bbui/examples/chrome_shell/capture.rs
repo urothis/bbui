@@ -114,6 +114,23 @@ fn capture(kind: ThemeKind, mode: &str, width: u32, height: u32) {
         PrimaryWindow,
     ));
     install_chrome(app.world_mut());
+    if mode.ends_with("hover") {
+        let key = if mode.starts_with("desktop") {
+            "chrome:close"
+        } else {
+            "chrome:mobile:nav:assets"
+        };
+        let entity = {
+            let mut keys = app.world_mut().query::<(Entity, &UiKey)>();
+            keys.iter(app.world())
+                .find_map(|(entity, found)| (found.0 == key).then_some(entity))
+                .expect("hover target mounted")
+        };
+        app.world_mut()
+            .get_mut::<bbui::widgets::Button>(entity)
+            .expect("hover button")
+            .status = bbui::widgets::WidgetStatus::Hovered;
+    }
     for _ in 0..5 {
         app.update();
     }
@@ -140,5 +157,7 @@ fn capture_chrome_dark_and_light() {
     for kind in [ThemeKind::Dark, ThemeKind::Light] {
         capture(kind, "desktop", 1536, 900);
         capture(kind, "mobile", 390, 844);
+        capture(kind, "desktop-hover", 1536, 900);
+        capture(kind, "mobile-hover", 390, 844);
     }
 }

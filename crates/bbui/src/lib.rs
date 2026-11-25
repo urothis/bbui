@@ -114,8 +114,9 @@ pub mod prelude {
     pub use crate::BbuiPlugin;
     pub use crate::bbui;
     pub use crate::chrome::{
-        ChromeAction, DesktopChrome, MobileChrome, MobileNavItem, apply_native_chrome_action,
-        chrome_action, compact_chrome, handle_chrome_press,
+        ChromeAction, DesktopChrome, DesktopChromeAppearance, DesktopChromeSlots, MobileChrome,
+        MobileChromeAppearance, MobileNavItem, apply_native_chrome_action, chrome_action,
+        compact_chrome, compact_chrome_at, handle_chrome_press,
     };
     pub use crate::modal::{
         ModalAction, ModalDialog, ModalDialogs, ModalDismissal, ModalError, ModalEvent,
