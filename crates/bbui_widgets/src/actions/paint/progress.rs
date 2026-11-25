@@ -12,7 +12,10 @@ pub(super) fn paint_progress(paint: &mut PaintEntityContext<'_>) {
     if rect.width <= 0.0 || rect.height <= 0.0 {
         return;
     }
-    let radius = paint.theme.corner_radius.min(rect.height * 0.5);
+    let radius = progress
+        .style
+        .corners
+        .radius(rect.width, rect.height, paint.theme.corner_radius);
     let properties_progress = paint
         .world
         .get::<UiRole>(paint.entity)
@@ -56,18 +59,6 @@ pub(super) fn paint_progress(paint: &mut PaintEntityContext<'_>) {
         width: end - start,
         ..rect
     };
-    if let Some(glow) = &progress.style.fill_glow {
-        push_effect_glow(
-            paint.output,
-            paint.layout.clip.map(ClipRect::from),
-            paint.z.saturating_add(1),
-            fill_rect,
-            radius,
-            glow,
-            paint.theme,
-        );
-    }
-
     let gradient_colors = match &progress.style.fill {
         ProgressFill::Gradient(colors) if colors.len() >= 2 => Some(
             colors
@@ -78,6 +69,7 @@ pub(super) fn paint_progress(paint: &mut PaintEntityContext<'_>) {
         _ => None,
     };
 
+    let mut pieces = Vec::new();
     match progress.style.segments {
         Some(count) if count >= 2 => {
             let count = count.min(128);
@@ -89,38 +81,61 @@ pub(super) fn paint_progress(paint: &mut PaintEntityContext<'_>) {
                     let left = segment_start.max(start);
                     let right = (segment_start + width).min(end);
                     if right > left {
-                        paint_fill_piece(
-                            paint,
-                            &progress,
-                            ClipRect {
-                                x: left,
-                                width: right - left,
-                                ..rect
-                            },
-                            fill_rect,
-                            gradient_colors.as_deref(),
-                        );
+                        pieces.push(ClipRect {
+                            x: left,
+                            width: right - left,
+                            ..rect
+                        });
                     }
                 }
             }
         }
-        _ => paint_fill_piece(
+        _ => pieces.push(fill_rect),
+    }
+    for &piece in &pieces {
+        let radius =
+            progress
+                .style
+                .corners
+                .radius(piece.width, piece.height, paint.theme.corner_radius);
+        if let Some(glow) = &progress.style.fill_glow {
+            push_effect_glow(
+                paint.output,
+                paint.layout.clip.map(ClipRect::from),
+                paint.z.saturating_add(1),
+                piece,
+                radius,
+                glow,
+                paint.theme,
+            );
+        }
+    }
+    for &piece in &pieces {
+        paint_fill_piece(
             paint,
             &progress,
-            fill_rect,
+            piece,
             fill_rect,
             gradient_colors.as_deref(),
-        ),
+        );
     }
     if let Some(border) = &progress.style.fill_border {
-        push_effect_border(
-            paint.output,
-            paint.clip,
-            paint.z.saturating_add(3),
-            fill_rect,
-            border,
-            paint.theme,
-        );
+        for &piece in &pieces {
+            let mut border = border.clone();
+            border.radius =
+                progress
+                    .style
+                    .corners
+                    .radius(piece.width, piece.height, paint.theme.corner_radius);
+            push_effect_border(
+                paint.output,
+                paint.clip,
+                paint.z.saturating_add(3),
+                piece,
+                &border,
+                paint.theme,
+            );
+        }
     }
 }
 
@@ -131,7 +146,11 @@ fn paint_fill_piece(
     entire_fill: ClipRect,
     gradient_colors: Option<&[Rgba]>,
 ) {
-    let radius = paint.theme.corner_radius.min(piece.height * 0.5);
+    let radius =
+        progress
+            .style
+            .corners
+            .radius(piece.width, piece.height, paint.theme.corner_radius);
     let primitive = match (&progress.style.fill, gradient_colors) {
         (ProgressFill::ThemeAccent, _) => Primitive::RoundedRect {
             rect: piece,

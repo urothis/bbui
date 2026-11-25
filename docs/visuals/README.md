@@ -14,7 +14,7 @@ These are captures from runnable Bevy examples and BBUI's offscreen GPU tests. O
 | Docking workspace | [Dark](examples/workspace-dark.png) · [Light](examples/workspace-light.png) · [edge drop preview](examples/workspace-drop.png) |
 | Editor workspace composition | [Dark](examples/editor-workspace-dark.png) · [Light](examples/editor-workspace-light.png) |
 | Visual effects | [Gradient border and edge glow](examples/visual-effects-dark.png) · [rotated border](examples/visual-effects-rotated.png) · [eight variants](examples/visual-effect-variants.png) |
-| Progress bars | [Five-style gallery](examples/progress-gallery.png) |
+| Progress bars | [Six-style gallery with corner options](examples/progress-gallery.png) |
 
 The [properties editor source map](properties-editor-reference.md) records the composition and visual reference. The desktop and FPS examples use the same shared widget tree.
 

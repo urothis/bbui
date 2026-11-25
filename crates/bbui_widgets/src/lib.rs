@@ -68,7 +68,7 @@ pub use numeric::{
 };
 pub use panels::{Panel, PanelExpansionStore, PanelGroup, PanelOrderStore, PanelState};
 pub use progress::{
-    Progress, ProgressFill, ProgressStyle, progress_border_phase_binding,
+    Progress, ProgressCorners, ProgressFill, ProgressStyle, progress_border_phase_binding,
     progress_border_strength_binding, progress_glow_phase_binding, progress_glow_strength_binding,
     progress_palette_phase_binding, progress_value_binding,
 };
@@ -90,8 +90,8 @@ pub mod prelude {
         MenuSession, NodeCategory, NodeGraph, NodeGraphNodeControl, NodeGraphSocketControl,
         NodeGraphTypeRegistry, NodeId, NodeLink, NodeModel, NodeSocket, NodeTypeDefinition,
         NumberField, NumericExpressionVariables, NumericField, PaneId, Panel, PanelGroup,
-        PanelOrderStore, PreviewGrid, Progress, ProgressFill, ProgressStyle, RadioGroup,
-        RadioOptionControl, Slider, SocketDirection, SocketEditorDefinition, SocketId,
+        PanelOrderStore, PreviewGrid, Progress, ProgressCorners, ProgressFill, ProgressStyle,
+        RadioGroup, RadioOptionControl, Slider, SocketDirection, SocketEditorDefinition, SocketId,
         SocketPlacement, SocketType, SocketTypeDefinition, SplitAxis, TabGroup, TabGroupOptions,
         TextArea, TextField, TreeModel, UiBorderEffect, UiEdgeGlow, UiEffectColor, UiVisualEffects,
         WidgetActionQueue, WidgetEventQueue, WidgetPlugin, WidgetTree, WorkspaceEvent,

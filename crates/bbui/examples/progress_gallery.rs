@@ -76,9 +76,13 @@ fn loop_motion(world: &mut World, key: &str, clip: MotionClip) {
 
 fn install_ui(world: &mut World, window: Entity) {
     let root = root(world, window);
-    let gradient = ProgressStyle::gradient([CYAN, BLUE, VIOLET, PINK]);
-    let segmented = ProgressStyle::solid(CYAN).with_segments(14);
+    let gradient =
+        ProgressStyle::gradient([CYAN, BLUE, VIOLET, PINK]).with_corners(ProgressCorners::Pill);
+    let segmented = ProgressStyle::solid(CYAN)
+        .with_segments(14)
+        .with_corners(ProgressCorners::Pill);
     let luminous = ProgressStyle::gradient([CYAN, BLUE, VIOLET, PINK])
+        .with_corners(ProgressCorners::Radius(8.0))
         .with_fill_border(UiBorderEffect::gradient(
             [CYAN, BLUE, VIOLET, PINK],
             1.5,
@@ -97,7 +101,7 @@ fn install_ui(world: &mut World, window: Entity) {
     let tree = WidgetTree::new(
         WidgetNode::column([
             WidgetNode::label("PROGRESS  /  LIVE PREVIEW").with_height(UiLength::Px(28.0)),
-            WidgetNode::label("Shape, palette, and light can be configured independently")
+            WidgetNode::label("Corners, shape, palette, and light can be configured independently")
                 .with_height(UiLength::Px(42.0)),
             WidgetNode::row([
                 card(
@@ -107,14 +111,14 @@ fn install_ui(world: &mut World, window: Entity) {
                 ),
                 card(
                     "Gradient",
-                    "Four colors / moving palette",
+                    "Pill corners / moving palette",
                     WidgetNode::progress(0.68)
                         .with_progress_style(gradient)
                         .with_key("gradient-bar"),
                 ),
                 card(
                     "Segmented",
-                    "Fourteen steps / changing value",
+                    "Rounded segments / changing value",
                     WidgetNode::progress(0.52)
                         .with_progress_style(segmented)
                         .with_key("segmented-bar"),
@@ -125,7 +129,7 @@ fn install_ui(world: &mut World, window: Entity) {
             WidgetNode::row([
                 card(
                     "Luminous",
-                    "Fill border / animated edge light",
+                    "8 px corners / animated edge light",
                     WidgetNode::progress(0.72)
                         .with_progress_style(luminous)
                         .with_key("luminous-bar"),
@@ -133,7 +137,20 @@ fn install_ui(world: &mut World, window: Entity) {
                 card(
                     "Indeterminate",
                     "Moving indicator / still in reduced motion",
-                    WidgetNode::indeterminate_progress().with_key("indeterminate-bar"),
+                    WidgetNode::indeterminate_progress()
+                        .with_progress_style(
+                            ProgressStyle::default().with_corners(ProgressCorners::Pill),
+                        )
+                        .with_key("indeterminate-bar"),
+                ),
+                card(
+                    "Square",
+                    "Zero-radius track and fill",
+                    WidgetNode::progress(0.64)
+                        .with_progress_style(
+                            ProgressStyle::solid(BLUE).with_corners(ProgressCorners::Square),
+                        )
+                        .with_key("square-bar"),
                 ),
             ])
             .with_gap(24.0)
