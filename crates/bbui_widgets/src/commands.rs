@@ -324,11 +324,19 @@ impl CommandPalette {
             );
         }
         children.push(
-            WidgetNode::text_field(&appearance.search_placeholder, &self.query)
-                .with_key(Self::QUERY_KEY)
-                .with_width(UiLength::Fill(1.0))
-                .with_height(UiLength::Px(40.0))
-                .with_style(appearance.search_style.clone()),
+            WidgetNode::text_field(
+                if self.query.is_empty() {
+                    &appearance.search_placeholder
+                } else {
+                    ""
+                },
+                &self.query,
+            )
+            .with_key(Self::QUERY_KEY)
+            .with_accessible_name(&appearance.search_placeholder)
+            .with_width(UiLength::Fill(1.0))
+            .with_height(UiLength::Px(40.0))
+            .with_style(appearance.search_style.clone()),
         );
         children.push(
             WidgetNode::label(format!("{} RESULTS", visible))
@@ -360,19 +368,10 @@ impl CommandPalette {
                 } else {
                     appearance.result_style.clone()
                 });
-                let mut row = vec![button];
-                if let Some(hint) = command
-                    .shortcut_hint
-                    .as_deref()
-                    .filter(|hint| !hint.is_empty())
-                {
-                    row.push(
-                        WidgetNode::label(hint)
-                            .with_width(UiLength::Px(80.0))
-                            .with_height(UiLength::Px(appearance.row_height))
-                            .with_style(appearance.shortcut_style.clone()),
-                    );
-                }
+                let shortcut = WidgetNode::label(command.shortcut_hint.as_deref().unwrap_or(""))
+                    .with_width(UiLength::Px(80.0))
+                    .with_height(UiLength::Px(appearance.row_height))
+                    .with_style(appearance.shortcut_style.clone());
                 let detail = if command.description.is_empty() {
                     command.category.clone()
                 } else if command.category.is_empty() {
@@ -381,7 +380,7 @@ impl CommandPalette {
                     format!("{}  ·  {}", command.category, command.description)
                 };
                 let mut content = vec![
-                    WidgetNode::row(row)
+                    WidgetNode::row([button, shortcut])
                         .with_width(UiLength::Fill(1.0))
                         .with_gap(8.0),
                 ];
