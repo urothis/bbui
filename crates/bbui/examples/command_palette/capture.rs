@@ -187,6 +187,34 @@ fn capture_command_palette_dark_and_light() {
             for _ in 0..5 {
                 app.update();
             }
+            if let Some(hint) = match scenario {
+                "default" => Some("Ctrl+E"),
+                "long" => Some("Ctrl+Shift+M"),
+                _ => None,
+            } {
+                let mut labels = app.world_mut().query::<(Entity, &bbui::widgets::Label)>();
+                let entity = labels
+                    .iter(app.world())
+                    .find_map(|(entity, label)| (label.text == hint).then_some(entity))
+                    .expect("shortcut label mounted");
+                let label = app
+                    .world()
+                    .get::<bbui_layout::UiLayoutResult>(entity)
+                    .expect("shortcut label layout");
+                let parent = app
+                    .world()
+                    .get::<bbui_core::UiParent>(entity)
+                    .expect("shortcut badge parent")
+                    .0;
+                let badge = app
+                    .world()
+                    .get::<bbui_layout::UiLayoutResult>(parent)
+                    .expect("shortcut badge layout");
+                let clip = badge.clip.expect("results scroll clip");
+                assert!(badge.rect.x + badge.rect.width <= clip.x + clip.width - 6.0);
+                assert!(label.rect.y >= badge.rect.y + 4.0);
+                assert!(label.rect.y + label.rect.height <= badge.rect.y + badge.rect.height - 4.0);
+            }
             let index = theme_index * 5 + scenario_index;
             let bytes = read_frame(&mut app, &target, index);
             let name = if scenario == "default" {

@@ -589,6 +589,12 @@ impl CommandPalette {
                 WidgetNode::scroll([WidgetNode::column(rows)
                     .with_key("command-palette:results")
                     .with_width(UiLength::Fill(1.0))
+                    .with_padding(UiEdges {
+                        left: 0.0,
+                        top: 0.0,
+                        right: 10.0,
+                        bottom: 0.0,
+                    })
                     .with_gap(appearance.gap)])
                 .with_key("command-palette:results-scroll")
                 .with_layout(scroll_layout),
@@ -609,10 +615,19 @@ impl CommandPalette {
         layout.max_size[0] = Some(appearance.max_width);
         layout.max_size[1] = appearance.max_height;
         layout.padding = appearance.padding;
+        let mut surface_style = appearance.surface_style.clone();
+        surface_style
+            .0
+            .entry(UiStyleProperty::Padding)
+            .or_insert(UiStyleValue::Edges(appearance.padding));
+        surface_style
+            .0
+            .entry(UiStyleProperty::Gap)
+            .or_insert(UiStyleValue::Scalar(appearance.gap));
         let mut surface = WidgetNode::boxed(children)
             .with_key("command-palette:root")
             .with_layout(layout)
-            .with_style(appearance.surface_style.clone());
+            .with_style(surface_style);
         if let Some(effects) = &appearance.surface_effects {
             surface = surface.with_visual_effects(effects.clone());
         }
@@ -669,6 +684,16 @@ impl CommandPalette {
         let shortcut = if let Some(hint) = shortcut {
             let column_width = appearance.shortcut_column_width.max(34.0);
             let key_width = (hint.chars().count() as f32 * 7.5 + 18.0).clamp(34.0, column_width);
+            let badge_padding = UiEdges::horizontal_vertical(8.0, 5.0);
+            let mut badge_style = appearance.shortcut_surface_style.clone();
+            badge_style
+                .0
+                .entry(UiStyleProperty::Padding)
+                .or_insert(UiStyleValue::Edges(badge_padding));
+            badge_style
+                .0
+                .entry(UiStyleProperty::Gap)
+                .or_insert(UiStyleValue::Scalar(0.0));
             let mut keycap_layout = UiLayoutNode::column(0.0);
             keycap_layout.align_items = UiAlign::Center;
             keycap_layout.justify_content = bbui_layout::UiJustify::Center;
@@ -679,8 +704,8 @@ impl CommandPalette {
             .with_layout(keycap_layout)
             .with_width(UiLength::Px(key_width))
             .with_height(UiLength::Px(27.0))
-            .with_padding(UiEdges::all(5.0))
-            .with_style(appearance.shortcut_surface_style.clone());
+            .with_padding(badge_padding)
+            .with_style(badge_style);
             let mut layout = UiLayoutNode::row(0.0);
             layout.align_items = UiAlign::Center;
             WidgetNode::row([
