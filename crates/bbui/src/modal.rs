@@ -186,6 +186,7 @@ impl ModalDialog {
             window,
             ActiveModal {
                 root,
+                dialog: dialog_entity,
                 buttons,
                 previous_focus,
                 dismiss_on_escape: self.dismiss_on_escape,
@@ -219,6 +220,7 @@ pub struct ModalEvent {
 
 struct ActiveModal {
     root: Entity,
+    dialog: Entity,
     buttons: Vec<(Entity, String)>,
     previous_focus: Option<Entity>,
     dismiss_on_escape: bool,
@@ -336,6 +338,24 @@ fn process_modal_events(world: &mut World) {
     }
 }
 
+fn sync_modal_width(
+    windows: Query<&Window>,
+    dialogs: Res<ModalDialogs>,
+    mut styles: Query<&mut UiInlineStyle>,
+) {
+    for (&window, active) in &dialogs.active {
+        let (Ok(window), Ok(mut style)) = (windows.get(window), styles.get_mut(active.dialog))
+        else {
+            continue;
+        };
+        let width =
+            UiStyleValue::Length(UiLength::Px((window.resolution.width() * 0.9).min(520.0)));
+        if style.0.get(&UiStyleProperty::Width) != Some(&width) {
+            style.set(UiStyleProperty::Width, width);
+        }
+    }
+}
+
 pub struct ModalPlugin;
 
 impl Plugin for ModalPlugin {
@@ -343,6 +363,7 @@ impl Plugin for ModalPlugin {
         app.init_resource::<ModalDialogs>()
             .init_resource::<UiModalScopes>()
             .add_message::<ModalEvent>()
+            .add_systems(PreUpdate, sync_modal_width)
             .add_systems(
                 Update,
                 process_modal_events
@@ -430,6 +451,20 @@ mod tests {
             .unwrap()
             .rect;
         assert!(dialog_rect.x > root_rect.x && dialog_rect.right() < root_rect.right());
+        app.world_mut()
+            .get_mut::<Window>(window)
+            .unwrap()
+            .resolution
+            .set(400.0, 500.0);
+        app.update();
+        app.update();
+        let resized = app
+            .world()
+            .get::<UiLayoutResult>(dialog_entity)
+            .unwrap()
+            .rect;
+        assert_eq!(resized.width, 360.0);
+        assert_eq!(resized.x, 20.0);
         assert_eq!(
             app.world()
                 .get::<bevy::a11y::AccessibilityNode>(dialog_entity)
