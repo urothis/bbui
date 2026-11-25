@@ -4,6 +4,38 @@ on:
   pull_request:
 
 jobs:
+  mobile-library-checks:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: aarch64-apple-ios
+          - os: ubuntu-latest
+            target: aarch64-linux-android
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.99.0
+          targets: ${{ matrix.target }}
+      - uses: android-actions/setup-android@v3
+        if: matrix.target == 'aarch64-linux-android'
+      - name: Install Android NDK
+        if: matrix.target == 'aarch64-linux-android'
+        run: sdkmanager 'ndk;27.2.12479018'
+      - name: Check Android library
+        if: matrix.target == 'aarch64-linux-android'
+        run: |
+          NDK_BIN="$ANDROID_HOME/ndk/27.2.12479018/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          export CC_aarch64_linux_android="$NDK_BIN/aarch64-linux-android24-clang"
+          export AR_aarch64_linux_android="$NDK_BIN/llvm-ar"
+          cargo check -p bbui --target aarch64-linux-android --locked
+      - name: Check iOS library
+        if: matrix.target == 'aarch64-apple-ios'
+        run: cargo check -p bbui --target aarch64-apple-ios --locked
+
   checks:
     strategy:
       fail-fast: false
