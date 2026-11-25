@@ -59,9 +59,13 @@ impl ModalDialog {
 
     /// Show one dialog in `window`. Returns after mounting its widgets and trapping focus.
     pub fn show(self, world: &mut World, window: Entity) -> Result<(), ModalError> {
-        if world.get::<Window>(window).is_none() {
+        let Some(window_state) = world.get::<Window>(window) else {
             return Err(ModalError::MissingWindow);
-        }
+        };
+        let dimensions = [
+            window_state.resolution.width(),
+            window_state.resolution.height(),
+        ];
         if self.actions.is_empty() || self.actions.iter().any(|action| action.id.is_empty()) {
             return Err(ModalError::InvalidActions);
         }
@@ -82,27 +86,45 @@ impl ModalDialog {
             UiStyleProperty::Background,
             UiStyleValue::Color(Rgba(0.0, 0.0, 0.0, 0.62)),
         );
+        backdrop_style.set(UiStyleProperty::BorderWidth, UiStyleValue::Scalar(0.0));
         let mut dialog_style = UiInlineStyle::default();
         dialog_style.set_color_token(UiStyleProperty::Background, ThemeColorToken::Surface);
         dialog_style.set_color_token(UiStyleProperty::BorderColor, ThemeColorToken::Border);
         dialog_style.set(UiStyleProperty::BorderWidth, UiStyleValue::Scalar(1.0));
+        dialog_style.set(UiStyleProperty::ZIndex, UiStyleValue::Integer(10_002));
+        let mut content_style = UiInlineStyle::default();
+        content_style.set(UiStyleProperty::ZIndex, UiStyleValue::Integer(10_004));
+        let mut action_style = content_style.clone();
+        action_style.set_color_token(UiStyleProperty::Background, ThemeColorToken::HoverSurface);
         let buttons = self.actions.iter().enumerate().map(|(index, action)| {
-            WidgetNode::button(action.label.clone()).with_key(format!("modal:action:{index}"))
+            WidgetNode::button(action.label.clone())
+                .with_key(format!("modal:action:{index}"))
+                .with_style(action_style.clone())
         });
         let mut dialog_layout = UiLayoutNode::column(12.0);
         dialog_layout.max_size[0] = Some(520.0);
-        let dialog = WidgetNode::column([
-            WidgetNode::label(&self.title).with_role("modal-title"),
-            WidgetNode::label(&self.message).with_role("modal-message"),
-            WidgetNode::row(buttons).with_gap(8.0),
+        let card = WidgetNode::column([
+            WidgetNode::label(&self.title)
+                .with_role("modal-title")
+                .with_style(content_style.clone()),
+            WidgetNode::label(&self.message)
+                .with_role("modal-message")
+                .with_style(content_style.clone()),
+            WidgetNode::row(buttons)
+                .with_gap(8.0)
+                .with_style(content_style),
         ])
-        .with_key("modal:dialog")
-        .with_role("modal-dialog")
-        .with_accessible_name(&self.title)
-        .with_layout(dialog_layout)
+        .with_role("box")
         .with_style(dialog_style)
-        .with_width(UiLength::Percent(0.9))
+        .with_width(UiLength::Fill(1.0))
         .with_padding(UiEdges::all(20.0));
+        dialog_layout.z_index = 10_001;
+        let dialog = WidgetNode::column([card])
+            .with_key("modal:dialog")
+            .with_role("modal-dialog")
+            .with_accessible_name(&self.title)
+            .with_layout(dialog_layout)
+            .with_width(UiLength::Px((dimensions[0] * 0.9).min(520.0)));
         let mut root_layout = UiLayoutNode::column(0.0);
         root_layout.align_items = UiAlign::Center;
         root_layout.justify_content = UiJustify::Center;
@@ -110,7 +132,7 @@ impl ModalDialog {
         let root = WidgetTree::new(
             WidgetNode::column([dialog])
                 .with_key("modal:backdrop")
-                .with_role("modal-backdrop")
+                .with_role("box")
                 .with_layout(root_layout)
                 .with_style(backdrop_style)
                 .with_width(UiLength::Fill(1.0))
@@ -118,27 +140,31 @@ impl ModalDialog {
         )
         .spawn(world, None)
         .map_err(ModalError::Widget)?;
-        let size = &world.get::<Window>(window).unwrap().resolution;
-        let dimensions = [size.width(), size.height()];
         world.entity_mut(root).insert(UiLayoutRoot::new(
             window,
             Rect::new(0.0, 0.0, dimensions[0], dimensions[1]),
             1.0,
         ));
-        let dialog_entity = find_key(world, root, "modal:dialog").expect("mounted dialog key");
-        world
-            .entity_mut(dialog_entity)
-            .insert(ModalDialogMarker(self.title));
-        let buttons: Vec<_> = self
+        let Some(dialog_entity) = find_key(world, root, "modal:dialog") else {
+            remove_dialog_tree(world, root);
+            return Err(ModalError::MissingMountedControl);
+        };
+        let buttons: Option<Vec<_>> = self
             .actions
             .into_iter()
             .enumerate()
             .map(|(index, action)| {
-                let entity = find_key(world, root, &format!("modal:action:{index}"))
-                    .expect("mounted action key");
-                (entity, action.id)
+                find_key(world, root, &format!("modal:action:{index}"))
+                    .map(|entity| (entity, action.id))
             })
             .collect();
+        let Some(buttons) = buttons else {
+            remove_dialog_tree(world, root);
+            return Err(ModalError::MissingMountedControl);
+        };
+        world
+            .entity_mut(dialog_entity)
+            .insert(ModalDialogMarker(self.title));
         let previous_focus = world
             .get_resource::<UiFocus>()
             .and_then(|focus| focus.state(window))
@@ -172,6 +198,7 @@ impl ModalDialog {
 #[derive(Debug)]
 pub enum ModalError {
     MissingWindow,
+    MissingMountedControl,
     AlreadyOpen,
     InvalidActions,
     Widget(WidgetTreeError),
@@ -472,11 +499,10 @@ mod tests {
         app.update();
         assert!(!app.world().resource::<ModalDialogs>().is_open(window));
         assert!(
-            app.world()
+            !app.world()
                 .resource::<ModalDialogs>()
                 .active
-                .get(&window)
-                .is_none()
+                .contains_key(&window)
         );
         assert_eq!(
             app.world()

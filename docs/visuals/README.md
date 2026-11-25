@@ -13,6 +13,7 @@ These are captures from runnable Bevy examples and BBUI's offscreen GPU tests. O
 | Live themes | [Theme gallery](examples/theme_gallery.png) |
 | Docking workspace | [Dark](examples/workspace-dark.png) · [Light](examples/workspace-light.png) · [edge drop preview](examples/workspace-drop.png) |
 | Editor workspace composition | [Dark](examples/editor-workspace-dark.png) · [Light](examples/editor-workspace-light.png) |
+| Modal dialog | [Dark](examples/modal-dialog-dark.png) · [Light](examples/modal-dialog-light.png) |
 | Visual effects | [Gradient border and edge glow](examples/visual-effects-dark.png) · [rotated border](examples/visual-effects-rotated.png) · [eight variants](examples/visual-effect-variants.png) |
 
 The [properties editor source map](properties-editor-reference.md) records the composition and visual reference. The desktop and FPS examples use the same shared widget tree.
@@ -65,6 +66,8 @@ python3 scripts/capture_visual_effect_variants.py
 The workspace captures come from `cargo test -p bbui workspace::gpu::capture_workspace_dark_and_light --lib -- --ignored`; copy the resulting `target/workspace-preview-*.png` files into `docs/visuals/examples/` after visual review.
 
 The editor workspace captures come from `cargo test -p bbui --example editor_workspace --locked -- --ignored`; the capture test writes both themes directly to `docs/visuals/examples/`.
+
+The modal dialog captures come from `cargo test -p bbui --example modal_dialog --locked -- --ignored`; the capture test writes both themes directly to `docs/visuals/examples/`.
 
 `capture_visual_effect_animations.py` uses offscreen GPU readback to write the visual effects stills and four 120-frame WebP clips. Each clip is two seconds at 60 fps. Pass `--frames-dir` to encode an existing set of capture frames.
 

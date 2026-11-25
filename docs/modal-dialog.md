@@ -2,6 +2,10 @@
 
 `ModalDialog` composes a window-scoped confirmation from BBUI labels and buttons. While it is open, BBUI routes pointer, keyboard, and focus traversal only to that dialog's subtree. The backdrop blocks the rest of the BBUI window. The dialog is exposed to accessibility as a modal dialog, and the previous focus is restored on dismissal.
 
+| Dark | Light |
+| --- | --- |
+| ![Modal confirmation in the dark theme](visuals/examples/modal-dialog-dark.png) | ![Modal confirmation in the light theme](visuals/examples/modal-dialog-light.png) |
+
 ```rust
 ModalDialog::new(
     "Unsaved changes",
