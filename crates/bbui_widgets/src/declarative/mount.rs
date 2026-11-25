@@ -182,6 +182,9 @@ pub(super) fn spawn_node(
     if let Some(key) = &node.key {
         entity.insert(UiKey(key.clone()));
     }
+    if let Some(text) = &node.palette_action_text {
+        entity.insert(text.clone());
+    }
     if let Some(name) = &node.accessible_name {
         entity.insert(UiAccessibleName(name.clone()));
     }

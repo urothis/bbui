@@ -8,7 +8,7 @@ use bbui_layout::{
     Rect, UiContentReveal, UiEdges, UiFlexDirection, UiLayoutMode, UiLayoutNode, UiLength,
     UiScroll, UiWheelHandled,
 };
-use bbui_style::{Rgba, UiInlineStyle, UiRole, UiStyleProperty, UiStyleValue};
+use bbui_style::{Rgba, UiBaseLayoutNode, UiInlineStyle, UiRole, UiStyleProperty, UiStyleValue};
 use bbui_text::{TextBuffer, UiExternalClipboard, UiMultiline, UiTextLayout};
 use bevy_ecs::prelude::{Changed, Component, Entity, Or, Query, ResMut, With, World};
 use std::path::PathBuf;

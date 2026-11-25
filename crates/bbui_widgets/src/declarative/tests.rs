@@ -81,6 +81,23 @@ fn reconcile_reorders_keyed_controls_without_losing_live_edits() {
 }
 
 #[test]
+fn reconcile_refreshes_cached_base_layout_when_declaration_resizes() {
+    let mut world = World::new();
+    let root = WidgetTree::new(WidgetNode::boxed([]).with_width(UiLength::Px(620.0)))
+        .spawn(&mut world, None)
+        .unwrap();
+    let original = *world.get::<UiLayoutNode>(root).unwrap();
+    world.entity_mut(root).insert(UiBaseLayoutNode(original));
+    WidgetTree::new(WidgetNode::boxed([]).with_width(UiLength::Px(380.0)))
+        .reconcile(&mut world, root)
+        .unwrap();
+    assert_eq!(
+        world.get::<UiBaseLayoutNode>(root).unwrap().0.size.width,
+        UiLength::Px(380.0)
+    );
+}
+
+#[test]
 fn reconcile_removes_old_children_and_rejects_duplicate_keys_before_editing() {
     let mut world = World::new();
     let root = WidgetTree::new(WidgetNode::column([

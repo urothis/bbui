@@ -162,6 +162,7 @@ pub struct WidgetNode {
     pub accessible_name: Option<String>,
     pub tab_selected: Option<bool>,
     pub tab_list: bool,
+    pub palette_action_text: Option<crate::commands::PaletteActionText>,
 }
 
 #[derive(Component, Debug, Clone, PartialEq)]
@@ -174,6 +175,7 @@ pub(crate) struct WidgetProps {
     pub accessible_name: Option<String>,
     pub tab_selected: Option<bool>,
     pub tab_list: bool,
+    pub palette_action_text: Option<crate::commands::PaletteActionText>,
 }
 
 impl From<&WidgetNode> for WidgetProps {
@@ -187,6 +189,7 @@ impl From<&WidgetNode> for WidgetProps {
             accessible_name: node.accessible_name.clone(),
             tab_selected: node.tab_selected,
             tab_list: node.tab_list,
+            palette_action_text: node.palette_action_text.clone(),
         }
     }
 }
@@ -205,6 +208,7 @@ impl WidgetNode {
             accessible_name: None,
             tab_selected: None,
             tab_list: false,
+            palette_action_text: None,
         }
     }
     pub fn column(children: impl IntoIterator<Item = Self>) -> Self {
@@ -338,6 +342,7 @@ impl WidgetNode {
             accessible_name: None,
             tab_selected: None,
             tab_list: false,
+            palette_action_text: None,
         }
     }
     pub fn container(kind: WidgetContainer, children: impl IntoIterator<Item = Self>) -> Self {
@@ -367,6 +372,7 @@ impl WidgetNode {
             accessible_name: None,
             tab_selected: None,
             tab_list: false,
+            palette_action_text: None,
         }
     }
     pub fn label(text: impl Into<String>) -> Self {
@@ -485,6 +491,7 @@ impl WidgetNode {
             accessible_name: None,
             tab_selected: None,
             tab_list: false,
+            palette_action_text: None,
         }
     }
     pub fn text_field(label: impl Into<String>, value: impl Into<String>) -> Self {
@@ -703,6 +710,11 @@ impl WidgetNode {
     }
     pub fn with_visual_effects(mut self, effects: UiVisualEffects) -> Self {
         self.visual_effects = Some(effects);
+        self
+    }
+
+    pub fn with_palette_action_text(mut self, text: crate::commands::PaletteActionText) -> Self {
+        self.palette_action_text = Some(text);
         self
     }
     pub fn with_role(mut self, role: impl Into<String>) -> Self {
