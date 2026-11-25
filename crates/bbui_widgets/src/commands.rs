@@ -947,6 +947,6 @@ mod tests {
             world.resource::<UiFocus>().state(window).unwrap().focused,
             Some(previous)
         );
-        assert!(world.resource::<UiModalScopes>().0.get(&window).is_none());
+        assert!(!world.resource::<UiModalScopes>().0.contains_key(&window));
     }
 }
