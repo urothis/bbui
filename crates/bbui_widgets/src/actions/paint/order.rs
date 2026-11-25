@@ -195,7 +195,20 @@ pub(in crate::actions) fn assign_widget_rank_block(
     order_keys: &mut BTreeMap<u64, Entity>,
 ) -> HashSet<Entity> {
     let mut left_selected = Vec::new();
-    let mut right_selected = Vec::new();
+    // A hierarchy update can leave ranks between the requested bounds while
+    // sibling snapshots are catching up. Include them in the local relabel so
+    // a generated rank never replaces a still-live neighbor.
+    let mut right_selected: Vec<_> = if lower < upper {
+        order_keys
+            .range((
+                std::ops::Bound::Excluded(lower),
+                std::ops::Bound::Excluded(upper),
+            ))
+            .map(|(rank, entity)| (*rank, *entity))
+            .collect()
+    } else {
+        Vec::new()
+    };
     let mut left = order_keys
         .range(..=lower)
         .next_back()

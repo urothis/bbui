@@ -192,28 +192,43 @@ fn capture_command_palette_dark_and_light() {
                 "long" => Some("Ctrl+Shift+M"),
                 _ => None,
             } {
-                let mut labels = app.world_mut().query::<(Entity, &bbui::widgets::Label)>();
-                let entity = labels
+                let mut actions = app
+                    .world_mut()
+                    .query::<(Entity, &bbui::widgets::PaletteActionText)>();
+                let entity = actions
                     .iter(app.world())
-                    .find_map(|(entity, label)| (label.text == hint).then_some(entity))
-                    .expect("shortcut label mounted");
-                let label = app
+                    .find_map(|(entity, action)| {
+                        (action.shortcut_hint.as_deref() == Some(hint)).then_some(entity)
+                    })
+                    .expect("shortcut action mounted");
+                let action = app
                     .world()
                     .get::<bbui_layout::UiLayoutResult>(entity)
-                    .expect("shortcut label layout");
-                let parent = app
+                    .expect("shortcut action layout");
+                let fragment = app
                     .world()
-                    .get::<bbui_core::UiParent>(entity)
-                    .expect("shortcut badge parent")
-                    .0;
-                let badge = app
-                    .world()
-                    .get::<bbui_layout::UiLayoutResult>(parent)
-                    .expect("shortcut badge layout");
-                let clip = badge.clip.expect("results scroll clip");
-                assert!(badge.rect.x + badge.rect.width <= clip.x + clip.width - 6.0);
-                assert!(label.rect.y >= badge.rect.y + 4.0);
-                assert!(label.rect.y + label.rect.height <= badge.rect.y + badge.rect.height - 4.0);
+                    .resource::<bbui::render::DisplayList>()
+                    .widget_fragments()
+                    .get(&entity)
+                    .expect("shortcut action paint");
+                let badge = fragment
+                    .items
+                    .iter()
+                    .find_map(|item| match item.primitive {
+                        bbui::render::Primitive::RoundedRect { rect, .. }
+                            if rect.width < action.rect.width =>
+                        {
+                            Some(rect)
+                        }
+                        _ => None,
+                    })
+                    .expect("shortcut badge painted");
+                assert!(badge.x >= action.rect.x + action.rect.width * 0.5);
+                assert!(badge.x + badge.width <= action.rect.x + action.rect.width - 8.0);
+                assert!(fragment.items.iter().any(|item| matches!(
+                    &item.primitive,
+                    bbui::render::Primitive::TextWrapped { text, .. } if text == hint
+                )));
             }
             let index = theme_index * 5 + scenario_index;
             let bytes = read_frame(&mut app, &target, index);

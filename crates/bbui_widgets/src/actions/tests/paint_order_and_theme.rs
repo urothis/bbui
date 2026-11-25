@@ -50,6 +50,30 @@ pub(super) fn local_paint_order_expands_exhausted_rank_gaps_without_collisions()
 }
 
 #[test]
+pub(super) fn local_paint_order_keeps_neighbors_inside_stale_bounds() {
+    let mut world = World::new();
+    let first = world.spawn_empty().id();
+    let middle = world.spawn_empty().id();
+    let last = world.spawn_empty().id();
+    let inserted = world.spawn_empty().id();
+    let mut ranks = HashMap::from([(first, 100), (middle, 150), (last, 200)]);
+    let mut order_keys = BTreeMap::from([(100, first), (150, middle), (200, last)]);
+    assign_widget_rank_block(
+        &[inserted],
+        &HashMap::new(),
+        100,
+        200,
+        &mut ranks,
+        &mut order_keys,
+    );
+    assert_eq!(
+        order_keys.values().copied().collect::<Vec<_>>(),
+        vec![first, inserted, middle, last]
+    );
+    assert_eq!(order_keys.len(), ranks.len());
+}
+
+#[test]
 pub(super) fn ten_thousand_peers_only_repaint_for_inherited_state_and_active_menu_changes() {
     let mut app = App::new();
     app.add_plugins(WidgetPlugin);

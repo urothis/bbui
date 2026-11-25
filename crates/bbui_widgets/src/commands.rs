@@ -4,7 +4,7 @@ use bbui_core::search::MenuSearch;
 use bbui_core::{
     UiChildren, UiDirty, UiDirtyDomain, UiFocus, UiKey, UiKeyCode, UiModalScopes, UiModifiers,
 };
-use bbui_layout::{UiAlign, UiEdges, UiLayoutNode, UiLength, UiScroll};
+use bbui_layout::{UiEdges, UiLayoutNode, UiLength, UiScroll};
 use bbui_style::{ThemeColorToken, UiInlineStyle, UiStyleProperty, UiStyleValue};
 use bevy_ecs::component::Component;
 use bevy_ecs::entity::Entity;
@@ -75,6 +75,10 @@ pub struct PaletteActionText {
     pub highlight_color: ThemeColorToken,
     pub icon_color: ThemeColorToken,
     pub icon_width: f32,
+    pub shortcut_hint: Option<String>,
+    pub shortcut_max_width: f32,
+    pub shortcut_style: UiInlineStyle,
+    pub shortcut_surface_style: UiInlineStyle,
     pub reserved_trailing_width: f32,
 }
 
@@ -663,7 +667,15 @@ impl CommandPalette {
                 highlight_color: appearance.highlight_color,
                 icon_color: appearance.icon_color,
                 icon_width: appearance.icon_width,
-                reserved_trailing_width: 8.0,
+                shortcut_hint: appearance
+                    .show_shortcuts
+                    .then(|| command.shortcut_hint.clone())
+                    .flatten()
+                    .filter(|hint| !hint.is_empty()),
+                shortcut_max_width: appearance.shortcut_column_width,
+                shortcut_style: appearance.shortcut_style.clone(),
+                shortcut_surface_style: appearance.shortcut_surface_style.clone(),
+                reserved_trailing_width: appearance.result_padding_x,
             })
             .with_style(if selected {
                 appearance.selected_style.clone()
@@ -673,61 +685,7 @@ impl CommandPalette {
         if selected && let Some(effects) = &appearance.selected_effects {
             button = button.with_visual_effects(effects.clone());
         }
-        let shortcut = if appearance.show_shortcuts {
-            command
-                .shortcut_hint
-                .as_deref()
-                .filter(|hint| !hint.is_empty())
-        } else {
-            None
-        };
-        let shortcut = if let Some(hint) = shortcut {
-            let column_width = appearance.shortcut_column_width.max(34.0);
-            let key_width = (hint.chars().count() as f32 * 7.5 + 18.0).clamp(34.0, column_width);
-            let badge_padding = UiEdges::horizontal_vertical(8.0, 5.0);
-            let mut badge_style = appearance.shortcut_surface_style.clone();
-            badge_style
-                .0
-                .entry(UiStyleProperty::Padding)
-                .or_insert(UiStyleValue::Edges(badge_padding));
-            badge_style
-                .0
-                .entry(UiStyleProperty::Gap)
-                .or_insert(UiStyleValue::Scalar(0.0));
-            let mut keycap_layout = UiLayoutNode::column(0.0);
-            keycap_layout.align_items = UiAlign::Center;
-            keycap_layout.justify_content = bbui_layout::UiJustify::Center;
-            let keycap = WidgetNode::boxed([WidgetNode::label(hint)
-                .with_role("centered-label")
-                .with_height(UiLength::Px(16.0))
-                .with_style(appearance.shortcut_style.clone())])
-            .with_layout(keycap_layout)
-            .with_width(UiLength::Px(key_width))
-            .with_height(UiLength::Px(27.0))
-            .with_padding(badge_padding)
-            .with_style(badge_style);
-            let mut layout = UiLayoutNode::row(0.0);
-            layout.align_items = UiAlign::Center;
-            WidgetNode::row([
-                WidgetNode::column([]).with_width(UiLength::Fill(1.0)),
-                keycap,
-            ])
-            .with_layout(layout)
-            .with_width(UiLength::Px(column_width))
-            .with_height(UiLength::Px(appearance.row_height))
-        } else if appearance.show_shortcuts {
-            WidgetNode::column([])
-                .with_width(UiLength::Px(appearance.shortcut_column_width.max(34.0)))
-        } else {
-            WidgetNode::column([]).with_width(UiLength::Px(0.0))
-        };
-        let mut content = vec![if appearance.show_shortcuts {
-            WidgetNode::row([button, shortcut])
-                .with_width(UiLength::Fill(1.0))
-                .with_gap(8.0)
-        } else {
-            WidgetNode::row([button]).with_width(UiLength::Fill(1.0))
-        }];
+        let mut content = vec![button];
         if !command.category.is_empty() || !command.description.is_empty() {
             let mut metadata = Vec::new();
             if !command.category.is_empty() {
