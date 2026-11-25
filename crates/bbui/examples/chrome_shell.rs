@@ -53,7 +53,7 @@ fn desktop_page(center: Option<WidgetNode>) -> WidgetNode {
         muted.set(UiStyleProperty::FontSize, UiStyleValue::Scalar(12.5));
         WidgetNode::row([WidgetNode::label("Material.001")
             .with_key("host:center-title")
-            .with_role("centered-label")
+            .with_role("centered-ellipsis-label")
             .with_width(UiLength::Fill(1.0))
             .with_style(muted)])
         .with_layout(UiLayoutNode {
@@ -92,7 +92,12 @@ fn desktop_page(center: Option<WidgetNode>) -> WidgetNode {
     .with_height(UiLength::Fill(1.0))
 }
 
-fn mobile_page() -> WidgetNode {
+fn mobile_page(sheet_open: bool, safe_area: UiEdges, long_copy: bool) -> WidgetNode {
+    let app_title = if long_copy {
+        "Material Studio — Experimental Production Workspace"
+    } else {
+        "Material Studio"
+    };
     let mut brand_style = UiInlineStyle::default();
     brand_style.set_color_token(UiStyleProperty::Foreground, ThemeColorToken::Accent);
     brand_style.set(UiStyleProperty::FontSize, UiStyleValue::Scalar(20.0));
@@ -111,7 +116,10 @@ fn mobile_page() -> WidgetNode {
             .with_width(UiLength::Px(22.0))
             .with_style(brand_style),
         WidgetNode::column([
-            WidgetNode::label("Material Studio").with_style(title_style.clone()),
+            WidgetNode::label(app_title)
+                .with_key("host:mobile-title")
+                .with_role("ellipsis-label")
+                .with_style(title_style.clone()),
             WidgetNode::label("WORKSPACE").with_style(muted_style.clone()),
         ])
         .with_width(UiLength::Fill(1.0))
@@ -148,8 +156,12 @@ fn mobile_page() -> WidgetNode {
         .with_height(UiLength::Px(7.0)),
         WidgetNode::row([
             WidgetNode::column([
-                WidgetNode::label("Material settings").with_style(title_style),
-                WidgetNode::label("Material.001  ·  Surface").with_style(muted_style),
+                WidgetNode::label("Material settings")
+                    .with_role("ellipsis-label")
+                    .with_style(title_style),
+                WidgetNode::label("Material.001  ·  Surface")
+                    .with_role("ellipsis-label")
+                    .with_style(muted_style),
             ])
             .with_width(UiLength::Fill(1.0))
             .with_gap(3.0),
@@ -218,7 +230,15 @@ fn mobile_page() -> WidgetNode {
     nav_style.set(UiStyleProperty::CornerRadius, UiStyleValue::Scalar(9.0));
     let navigation = WidgetNode::row(
         [
-            ("scene", "◆  Scene", true),
+            (
+                "scene",
+                if long_copy {
+                    "◆  Scene and Collections"
+                } else {
+                    "◆  Scene"
+                },
+                true,
+            ),
             ("material", "◇  Material", false),
             ("assets", "▦  Assets", false),
         ]
@@ -241,17 +261,24 @@ fn mobile_page() -> WidgetNode {
     .with_width(UiLength::Fill(1.0))
     .with_height(UiLength::Fill(1.0))
     .with_gap(7.0);
-    MobileChrome.view(MobileChromeSlots {
-        toolbar,
-        content: WidgetNode::scroll([
-            editor_content::scene_pane().with_height(UiLength::Px(310.0)),
-            editor_content::console_pane().with_height(UiLength::Px(190.0)),
-        ])
-        .with_width(UiLength::Fill(1.0))
-        .with_height(UiLength::Fill(1.0)),
-        sheet: Some(sheet),
-        navigation,
-    })
+    MobileChrome.view_with(
+        MobileChromeSlots {
+            toolbar,
+            content: WidgetNode::scroll([
+                editor_content::scene_pane().with_height(UiLength::Px(310.0)),
+                editor_content::console_pane().with_height(UiLength::Px(190.0)),
+            ])
+            .with_key("host:mobile-content")
+            .with_width(UiLength::Fill(1.0))
+            .with_height(UiLength::Fill(1.0)),
+            sheet: sheet_open.then_some(sheet),
+            navigation,
+        },
+        &MobileChromeAppearance {
+            safe_area,
+            ..Default::default()
+        },
+    )
 }
 
 fn install_chrome(world: &mut World) {
@@ -259,6 +286,16 @@ fn install_chrome(world: &mut World) {
 }
 
 fn install_chrome_with_center(world: &mut World, center: Option<WidgetNode>) {
+    install_chrome_with_options(world, center, true, UiEdges::ZERO, false);
+}
+
+fn install_chrome_with_options(
+    world: &mut World,
+    center: Option<WidgetNode>,
+    sheet_open: bool,
+    safe_area: UiEdges,
+    long_copy: bool,
+) {
     editor_content::configure_theme(&mut world.resource_mut::<Theme>());
     let mut windows = world.query_filtered::<Entity, With<PrimaryWindow>>();
     let Ok(window) = windows.single(world) else {
@@ -272,7 +309,7 @@ fn install_chrome_with_center(world: &mut World, center: Option<WidgetNode>) {
     };
     let compact = compact_chrome(size[0]);
     let page = if compact {
-        mobile_page()
+        mobile_page(sheet_open, safe_area, long_copy)
     } else {
         desktop_page(center)
     };

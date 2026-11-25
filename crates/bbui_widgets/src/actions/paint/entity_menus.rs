@@ -13,40 +13,6 @@ fn palette_style_color(
     }
 }
 
-fn fit_palette_text(
-    world: &mut World,
-    entity: Entity,
-    text: &str,
-    theme: &Theme,
-    available: f32,
-) -> String {
-    if measured_text_width(world, entity, text, theme) <= available {
-        return text.to_owned();
-    }
-    let boundaries: Vec<_> = text
-        .char_indices()
-        .map(|(index, _)| index)
-        .chain(std::iter::once(text.len()))
-        .collect();
-    let mut low = 0;
-    let mut high = boundaries.len() - 1;
-    while low < high {
-        let mid = (low + high).div_ceil(2);
-        if measured_text_width(
-            world,
-            entity,
-            &format!("{}…", &text[..boundaries[mid]]),
-            theme,
-        ) <= available
-        {
-            low = mid;
-        } else {
-            high = mid - 1;
-        }
-    }
-    format!("{}…", &text[..boundaries[low]])
-}
-
 pub(super) fn paint_buttons_and_menus(paint: &mut PaintEntityContext<'_>) -> bool {
     let world = &mut *paint.world;
     let entity = paint.entity;
@@ -117,6 +83,18 @@ pub(super) fn paint_buttons_and_menus(paint: &mut PaintEntityContext<'_>) -> boo
             }
             return true;
         }
+        if role.as_deref() == Some("chrome-mobile-sheet-backdrop") {
+            camera_items.push(item(
+                clip,
+                z,
+                Primitive::RoundedRect {
+                    rect: ClipRect::from(rect),
+                    radius: 0.0,
+                    color: theme.surface,
+                },
+            ));
+            return true;
+        }
         let background = if !enabled || !button.enabled {
             theme.color(ThemeColorToken::ButtonDisabledSurface)
         } else if button.status == crate::WidgetStatus::Hovered {
@@ -133,6 +111,35 @@ pub(super) fn paint_buttons_and_menus(paint: &mut PaintEntityContext<'_>) -> boo
                 color: background,
             },
         ));
+        if role.as_deref() == Some("titlebar-drag") {
+            let visible = fit_text_to_width(
+                world,
+                entity,
+                &button.label,
+                theme,
+                (rect.width - 16.0).max(0.0),
+            );
+            camera_items.push(item(
+                clip,
+                z.saturating_add(1),
+                styled_text_primitive_for_entity(
+                    world,
+                    entity,
+                    clip,
+                    TextPlacement {
+                        origin: [
+                            rect.x + 8.0,
+                            rect.y + (rect.height - theme.font_size * theme.line_height) * 0.5,
+                        ],
+                        text: visible,
+                    },
+                    theme.text,
+                    theme,
+                    false,
+                ),
+            ));
+            return true;
+        }
         if matches!(
             role.as_deref(),
             Some("chrome-mobile-nav-item" | "chrome-mobile-action")
@@ -157,7 +164,14 @@ pub(super) fn paint_buttons_and_menus(paint: &mut PaintEntityContext<'_>) -> boo
                     },
                 ));
             }
-            let width = measured_text_width(world, entity, &button.label, theme);
+            let visible = fit_text_to_width(
+                world,
+                entity,
+                &button.label,
+                theme,
+                (rect.width - 16.0).max(0.0),
+            );
+            let width = measured_text_width(world, entity, &visible, theme);
             camera_items.push(item(
                 clip,
                 z.saturating_add(2),
@@ -170,7 +184,7 @@ pub(super) fn paint_buttons_and_menus(paint: &mut PaintEntityContext<'_>) -> boo
                             rect.x + (rect.width - width) * 0.5,
                             rect.y + (rect.height - theme.font_size * theme.line_height) * 0.5,
                         ],
-                        text: button.label.clone(),
+                        text: visible,
                     },
                     if !enabled || !button.enabled {
                         theme.color(ThemeColorToken::DisabledText)
@@ -442,7 +456,7 @@ pub(super) fn paint_buttons_and_menus(paint: &mut PaintEntityContext<'_>) -> boo
                         },
                     ));
                 }
-                let visible_hint = fit_palette_text(
+                let visible_hint = fit_text_to_width(
                     world,
                     entity,
                     hint,
@@ -482,7 +496,7 @@ pub(super) fn paint_buttons_and_menus(paint: &mut PaintEntityContext<'_>) -> boo
                 right_edge
             };
             let available = (badge_left - x).max(0.0);
-            let visible = fit_palette_text(world, entity, &button.label, theme, available);
+            let visible = fit_text_to_width(world, entity, &button.label, theme, available);
             let query = presentation.query.to_ascii_lowercase();
             let label_lower = visible.to_ascii_lowercase();
             let match_range = (!query.is_empty())
@@ -557,7 +571,7 @@ pub(super) fn paint_buttons_and_menus(paint: &mut PaintEntityContext<'_>) -> boo
                     category_theme.font_size = *size;
                 }
                 if !presentation.category.is_empty() {
-                    let category = fit_palette_text(
+                    let category = fit_text_to_width(
                         world,
                         entity,
                         &presentation.category,
@@ -594,7 +608,7 @@ pub(super) fn paint_buttons_and_menus(paint: &mut PaintEntityContext<'_>) -> boo
                     {
                         detail_theme.font_size = *size;
                     }
-                    let detail = fit_palette_text(
+                    let detail = fit_text_to_width(
                         world,
                         entity,
                         &presentation.description,
@@ -972,6 +986,13 @@ pub(super) fn paint_buttons_and_menus(paint: &mut PaintEntityContext<'_>) -> boo
                 menu.label,
                 if menu.session.open { "▴" } else { "▾" }
             )
+        });
+        let normal_label = normal_label.map(|label| {
+            if centered_menu {
+                fit_text_to_width(world, entity, &label, theme, (rect.width - 12.0).max(0.0))
+            } else {
+                label
+            }
         });
         let flat_text_width = flat_label
             .as_ref()

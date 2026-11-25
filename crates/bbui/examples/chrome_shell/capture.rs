@@ -155,6 +155,23 @@ fn capture(kind: ThemeKind, mode: &str, width: u32, height: u32) {
                 .with_gap(8.0),
             ),
         );
+    } else if mode.starts_with("mobile") {
+        install_chrome_with_options(
+            app.world_mut(),
+            None,
+            matches!(mode, "mobile" | "mobile-insets-open"),
+            if mode.starts_with("mobile-insets") {
+                UiEdges {
+                    left: 12.0,
+                    top: 28.0,
+                    right: 12.0,
+                    bottom: 24.0,
+                }
+            } else {
+                UiEdges::ZERO
+            },
+            mode == "mobile-long",
+        );
     } else {
         install_chrome(app.world_mut());
     }
@@ -264,13 +281,16 @@ fn capture(kind: ThemeKind, mode: &str, width: u32, height: u32) {
         }
     }
     if mode.starts_with("mobile") {
-        for key in [
+        let mut keys = vec![
             "chrome:mobile:commands",
-            "chrome:mobile:sheet-close",
             "chrome:mobile:nav:scene",
             "chrome:mobile:nav:material",
             "chrome:mobile:nav:assets",
-        ] {
+        ];
+        if matches!(mode, "mobile" | "mobile-insets-open") {
+            keys.push("chrome:mobile:sheet-close");
+        }
+        for key in keys {
             let entity = {
                 let mut keys = app.world_mut().query::<(Entity, &UiKey)>();
                 keys.iter(app.world())
@@ -289,6 +309,59 @@ fn capture(kind: ThemeKind, mode: &str, width: u32, height: u32) {
                     .expect("mobile action hitbox")
                     .contains([rect.x + rect.width * 0.5, rect.y + rect.height * 0.5])
             );
+        }
+        if mode.starts_with("mobile-insets") {
+            for (key, expected_height) in [
+                ("chrome:mobile:toolbar", 88.0),
+                ("chrome:mobile:bottom-nav", 92.0),
+            ] {
+                let entity = {
+                    let mut keys = app.world_mut().query::<(Entity, &UiKey)>();
+                    keys.iter(app.world())
+                        .find_map(|(entity, found)| (found.0 == key).then_some(entity))
+                        .expect("safe-area chrome region")
+                };
+                let rect = app
+                    .world()
+                    .get::<bbui_layout::UiLayoutResult>(entity)
+                    .expect("safe-area region layout")
+                    .rect;
+                assert!((rect.height - expected_height).abs() < 1.0);
+            }
+            let content = {
+                let mut keys = app.world_mut().query::<(Entity, &UiKey)>();
+                keys.iter(app.world())
+                    .find_map(|(entity, found)| {
+                        (found.0 == "host:mobile-content").then_some(entity)
+                    })
+                    .expect("mobile content")
+            };
+            let rect = app
+                .world()
+                .get::<bbui_layout::UiLayoutResult>(content)
+                .expect("content layout")
+                .rect;
+            assert!(rect.x >= 12.0 && rect.x + rect.width <= width as f32 - 12.0);
+        }
+        if mode == "mobile-long" {
+            for key in ["host:mobile-title", "chrome:mobile:nav:scene"] {
+                let entity = {
+                    let mut keys = app.world_mut().query::<(Entity, &UiKey)>();
+                    keys.iter(app.world())
+                        .find_map(|(entity, found)| (found.0 == key).then_some(entity))
+                        .expect("long mobile label")
+                };
+                let fragment = app
+                    .world()
+                    .resource::<bbui::render::DisplayList>()
+                    .widget_fragments()
+                    .get(&entity)
+                    .expect("long label paint");
+                assert!(fragment.items.iter().any(|item| matches!(
+                    &item.primitive,
+                    bbui::render::Primitive::TextWrapped { text, .. } if text.ends_with('…')
+                )));
+            }
         }
     }
     let bytes = read_frame(&mut app, &target);
@@ -311,6 +384,59 @@ fn capture(kind: ThemeKind, mode: &str, width: u32, height: u32) {
             &output.join(format!("chrome-controls-{theme}.png")),
             &bytes,
             width,
+        );
+    }
+    if mode == "mobile" {
+        let backdrop = {
+            let mut keys = app.world_mut().query::<(Entity, &UiKey)>();
+            keys.iter(app.world())
+                .find_map(|(entity, key)| {
+                    (key.0 == "chrome:mobile:sheet-backdrop").then_some(entity)
+                })
+                .expect("sheet backdrop")
+        };
+        let position = [width as f32 * 0.5, height as f32 * 0.6];
+        let window = {
+            let mut windows = app
+                .world_mut()
+                .query_filtered::<Entity, With<PrimaryWindow>>();
+            windows.single(app.world()).expect("primary window")
+        };
+        app.world_mut()
+            .resource_mut::<bbui_core::UiInputQueue>()
+            .push(bbui_core::UiInputEvent::PointerMove {
+                window,
+                position,
+                time_seconds: 1.0,
+            });
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<bbui_core::UiFocus>()
+                .state(window)
+                .and_then(|state| state.hovered),
+            Some(backdrop)
+        );
+        for (pressed, time_seconds) in [(true, 1.1), (false, 1.2)] {
+            app.world_mut()
+                .resource_mut::<bbui_core::UiInputQueue>()
+                .push(bbui_core::UiInputEvent::PointerButton {
+                    window,
+                    button: bbui_core::UiPointerButton::Primary,
+                    pressed,
+                    position,
+                    time_seconds,
+                });
+            app.update();
+        }
+        assert!(
+            app.world()
+                .resource::<WidgetEventQueue>()
+                .0
+                .iter()
+                .any(|event| {
+                    chrome_action(app.world(), event) == Some(ChromeAction::DismissSheet)
+                })
         );
     }
     if mode.starts_with("desktop") {
@@ -385,6 +511,10 @@ fn capture_chrome_dark_and_light() {
         capture(kind, "desktop", 1536, 900);
         capture(kind, "desktop-progress", 1536, 900);
         capture(kind, "mobile", 390, 844);
+        capture(kind, "mobile-closed", 390, 844);
+        capture(kind, "mobile-insets", 390, 844);
+        capture(kind, "mobile-insets-open", 390, 844);
+        capture(kind, "mobile-long", 390, 844);
         capture(kind, "desktop-hover", 1536, 900);
         capture(kind, "mobile-hover", 390, 844);
     }

@@ -2,11 +2,21 @@
 
 use bbui_core::{UiFocusable, UiKey, UiParent, UiPointerButton, UiRoutedEvent};
 use bbui_layout::{UiEdges, UiLength};
-use bbui_style::{ThemeColorToken, UiInlineStyle, UiStyleProperty, UiStyleValue};
+use bbui_style::{
+    Rgba, ThemeColorToken, UiBoxShadow, UiInlineStyle, UiStyleProperty, UiStyleValue,
+};
 use bbui_widgets::{CommandRegistry, WidgetEvent, WidgetNode};
 use bevy::prelude::*;
 
 const MOBILE_BREAKPOINT: f32 = 600.0;
+
+fn safe_inset(value: f32) -> f32 {
+    if value.is_finite() {
+        value.max(0.0)
+    } else {
+        0.0
+    }
+}
 
 fn chrome_style(
     size: f32,
@@ -90,15 +100,26 @@ pub struct DesktopChromeSlots {
 }
 
 /// Theme-aware layout and paint for the compact shell.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum MobileSheetPresentation {
+    Inline,
+    #[default]
+    Overlay,
+}
+
 #[derive(Debug, Clone)]
 pub struct MobileChromeAppearance {
     pub toolbar_height: f32,
     pub navigation_height: f32,
+    /// Logical pixels reserved for platform cutouts and gesture areas.
+    pub safe_area: UiEdges,
     pub sheet_padding: UiEdges,
     pub sheet_gap: f32,
+    pub sheet_presentation: MobileSheetPresentation,
     pub toolbar_style: UiInlineStyle,
     pub navigation_style: UiInlineStyle,
     pub sheet_style: UiInlineStyle,
+    pub scrim_style: UiInlineStyle,
 }
 
 impl Default for MobileChromeAppearance {
@@ -108,7 +129,23 @@ impl Default for MobileChromeAppearance {
         sheet_style.set_color_token(UiStyleProperty::BorderColor, ThemeColorToken::Border);
         sheet_style.set(UiStyleProperty::BorderWidth, UiStyleValue::Scalar(1.0));
         sheet_style.set(UiStyleProperty::CornerRadius, UiStyleValue::Scalar(12.0));
-        sheet_style.set(UiStyleProperty::ZIndex, UiStyleValue::Integer(1));
+        sheet_style.set(UiStyleProperty::ZIndex, UiStyleValue::Integer(3));
+        sheet_style.set(
+            UiStyleProperty::BoxShadow,
+            UiStyleValue::BoxShadow(UiBoxShadow::themed(
+                ThemeColorToken::PopupShadow,
+                0.0,
+                -4.0,
+                0.0,
+                16.0,
+            )),
+        );
+        let mut scrim_style = UiInlineStyle::default();
+        scrim_style.set(
+            UiStyleProperty::Background,
+            UiStyleValue::Color(Rgba::new(0.0, 0.0, 0.0, 0.36)),
+        );
+        scrim_style.set(UiStyleProperty::ZIndex, UiStyleValue::Integer(2));
         let mut toolbar_style =
             chrome_style(12.0, ThemeColorToken::Text, Some(ThemeColorToken::Surface));
         toolbar_style.set_color_token(UiStyleProperty::BorderColor, ThemeColorToken::Border);
@@ -120,18 +157,24 @@ impl Default for MobileChromeAppearance {
         Self {
             toolbar_height: 60.0,
             navigation_height: 68.0,
+            safe_area: UiEdges::ZERO,
             sheet_padding: UiEdges::horizontal_vertical(16.0, 12.0),
             sheet_gap: 12.0,
+            sheet_presentation: MobileSheetPresentation::Overlay,
             toolbar_style,
             navigation_style,
             sheet_style,
+            scrim_style,
         }
     }
 }
 
 fn sheet_foreground(mut node: WidgetNode) -> WidgetNode {
     let style = node.style.get_or_insert_with(UiInlineStyle::default);
-    style.set(UiStyleProperty::ZIndex, UiStyleValue::Integer(2));
+    style
+        .0
+        .entry(UiStyleProperty::ZIndex)
+        .or_insert(UiStyleValue::Integer(4));
     node.children = node.children.into_iter().map(sheet_foreground).collect();
     node
 }
@@ -333,29 +376,63 @@ impl MobileChrome {
             sheet,
             navigation,
         } = slots;
+        let safe = UiEdges {
+            left: safe_inset(appearance.safe_area.left),
+            top: safe_inset(appearance.safe_area.top),
+            right: safe_inset(appearance.safe_area.right),
+            bottom: safe_inset(appearance.safe_area.bottom),
+        };
         let toolbar = WidgetNode::boxed([toolbar
             .with_width(UiLength::Fill(1.0))
             .with_height(UiLength::Fill(1.0))])
         .with_key("chrome:mobile:toolbar")
         .with_role("box")
         .with_style(appearance.toolbar_style.clone())
-        .with_height(UiLength::Px(appearance.toolbar_height))
-        .with_padding(UiEdges::horizontal_vertical(14.0, 8.0));
+        .with_height(UiLength::Px(appearance.toolbar_height + safe.top))
+        .with_padding(UiEdges {
+            left: 14.0 + safe.left,
+            top: 8.0 + safe.top,
+            right: 14.0 + safe.right,
+            bottom: 8.0,
+        });
         let mut body = vec![
             toolbar,
-            content
+            WidgetNode::column([content
                 .with_width(UiLength::Fill(1.0))
-                .with_height(UiLength::Fill(1.0)),
+                .with_height(UiLength::Fill(1.0))])
+            .with_width(UiLength::Fill(1.0))
+            .with_height(UiLength::Fill(1.0))
+            .with_padding(UiEdges {
+                left: safe.left,
+                top: 0.0,
+                right: safe.right,
+                bottom: 0.0,
+            }),
         ];
-        if let Some(sheet) = sheet {
-            body.push(
-                WidgetNode::column([sheet_foreground(sheet)])
-                    .with_key("chrome:mobile:sheet")
-                    .with_role("box")
-                    .with_style(appearance.sheet_style.clone())
-                    .with_padding(appearance.sheet_padding)
-                    .with_gap(appearance.sheet_gap),
-            );
+        let sheet = sheet.map(|content| {
+            let pad = appearance.sheet_padding;
+            WidgetNode::column([sheet_foreground(content)])
+                .with_key("chrome:mobile:sheet")
+                .with_role("box")
+                .with_style(appearance.sheet_style.clone())
+                .with_padding(UiEdges {
+                    left: safe_inset(pad.left) + safe.left,
+                    top: safe_inset(pad.top),
+                    right: safe_inset(pad.right) + safe.right,
+                    bottom: safe_inset(pad.bottom)
+                        + if appearance.sheet_presentation == MobileSheetPresentation::Overlay {
+                            safe.bottom
+                        } else {
+                            0.0
+                        },
+                })
+                .with_gap(appearance.sheet_gap)
+                .with_width(UiLength::Fill(1.0))
+        });
+        if appearance.sheet_presentation == MobileSheetPresentation::Inline
+            && let Some(sheet) = sheet.clone()
+        {
+            body.push(sheet);
         }
         body.push(
             WidgetNode::boxed([navigation
@@ -365,13 +442,43 @@ impl MobileChrome {
             .with_role("box")
             .with_tab_list()
             .with_style(appearance.navigation_style.clone())
-            .with_height(UiLength::Px(appearance.navigation_height))
-            .with_padding(UiEdges::horizontal_vertical(8.0, 7.0)),
+            .with_height(UiLength::Px(appearance.navigation_height + safe.bottom))
+            .with_padding(UiEdges {
+                left: 8.0 + safe.left,
+                top: 7.0,
+                right: 8.0 + safe.right,
+                bottom: 7.0 + safe.bottom,
+            }),
         );
-        WidgetNode::column(body)
+        let base = WidgetNode::column(body)
             .with_key("chrome:mobile")
             .with_width(UiLength::Fill(1.0))
+            .with_height(UiLength::Fill(1.0));
+        if appearance.sheet_presentation == MobileSheetPresentation::Overlay
+            && let Some(sheet) = sheet
+        {
+            WidgetNode::overlay([
+                base,
+                WidgetNode::button("")
+                    .with_key("chrome:mobile:sheet-backdrop")
+                    .with_role("chrome-mobile-sheet-backdrop")
+                    .with_accessible_name("Dismiss sheet")
+                    .with_style(appearance.scrim_style.clone())
+                    .with_width(UiLength::Fill(1.0))
+                    .with_height(UiLength::Fill(1.0)),
+                WidgetNode::column([
+                    WidgetNode::column([]).with_height(UiLength::Fill(1.0)),
+                    sheet,
+                ])
+                .with_width(UiLength::Fill(1.0))
+                .with_height(UiLength::Fill(1.0)),
+            ])
+            .with_key("chrome:mobile:overlay")
+            .with_width(UiLength::Fill(1.0))
             .with_height(UiLength::Fill(1.0))
+        } else {
+            base
+        }
     }
 }
 
@@ -437,7 +544,9 @@ pub fn chrome_action(world: &World, event: &WidgetEvent) -> Option<ChromeAction>
         "chrome:close" => Some(ChromeAction::CloseRequested),
         "chrome:minimize" => Some(ChromeAction::Minimize),
         "chrome:maximize" => Some(ChromeAction::ToggleMaximize),
-        "chrome:mobile:sheet-close" => Some(ChromeAction::DismissSheet),
+        "chrome:mobile:sheet-close" | "chrome:mobile:sheet-backdrop" => {
+            Some(ChromeAction::DismissSheet)
+        }
         _ => key
             .strip_prefix("chrome:mobile:nav:")
             .map(|id| ChromeAction::Navigate(id.to_owned())),
@@ -525,6 +634,12 @@ mod tests {
             },
             &MobileChromeAppearance {
                 navigation_height: 72.0,
+                safe_area: UiEdges {
+                    left: 12.0,
+                    top: 28.0,
+                    right: 12.0,
+                    bottom: 24.0,
+                },
                 ..Default::default()
             },
         );
@@ -533,6 +648,44 @@ mod tests {
         assert!(find(&compact, "host:navigation").is_some());
         assert!(find(&compact, "chrome:mobile:nav:files").is_some());
         assert!(find(&compact, "chrome:mobile:sheet-close").is_some());
+        assert!(find(&compact, "chrome:mobile:sheet-backdrop").is_some());
+        assert_eq!(
+            find(&compact, "chrome:mobile:toolbar")
+                .and_then(|node| node.layout)
+                .map(|layout| layout.size.height),
+            Some(UiLength::Px(88.0))
+        );
+        assert_eq!(
+            find(&compact, "chrome:mobile:bottom-nav")
+                .and_then(|node| node.layout)
+                .map(|layout| layout.size.height),
+            Some(UiLength::Px(96.0))
+        );
+        assert_eq!(
+            find(&compact, "chrome:mobile:sheet")
+                .and_then(|node| node.layout)
+                .map(|layout| layout.padding),
+            Some(UiEdges {
+                left: 28.0,
+                top: 12.0,
+                right: 28.0,
+                bottom: 36.0,
+            })
+        );
+        let inline = MobileChrome.view_with(
+            MobileChromeSlots {
+                toolbar: WidgetNode::label("Editor"),
+                content: WidgetNode::label("Body"),
+                sheet: Some(WidgetNode::label("Sheet")),
+                navigation: WidgetNode::label("Navigation"),
+            },
+            &MobileChromeAppearance {
+                sheet_presentation: MobileSheetPresentation::Inline,
+                ..Default::default()
+            },
+        );
+        assert!(find(&inline, "chrome:mobile:sheet").is_some());
+        assert!(find(&inline, "chrome:mobile:sheet-backdrop").is_none());
     }
 
     #[test]
@@ -548,6 +701,9 @@ mod tests {
         let mobile_commands = world.spawn(UiKey("chrome:mobile:commands".into())).id();
         let mobile_nav = world.spawn(UiKey("chrome:mobile:nav:files".into())).id();
         let sheet_close = world.spawn(UiKey("chrome:mobile:sheet-close".into())).id();
+        let sheet_backdrop = world
+            .spawn(UiKey("chrome:mobile:sheet-backdrop".into()))
+            .id();
         assert_eq!(
             chrome_action(
                 &world,
@@ -581,6 +737,15 @@ mod tests {
                 &world,
                 &WidgetEvent::Activated {
                     target: sheet_close
+                }
+            ),
+            Some(ChromeAction::DismissSheet)
+        );
+        assert_eq!(
+            chrome_action(
+                &world,
+                &WidgetEvent::Activated {
+                    target: sheet_backdrop
                 }
             ),
             Some(ChromeAction::DismissSheet)
