@@ -1,4 +1,28 @@
 use super::*;
+use bevy::ecs::hierarchy::ChildOf;
+
+fn valid_mount_parent(
+    world: &World,
+    parent: Entity,
+    window: Entity,
+    workspace_root: Option<Entity>,
+) -> bool {
+    let mut current = Some(parent);
+    let mut seen = HashSet::new();
+    while let Some(entity) = current {
+        if !seen.insert(entity) || workspace_root == Some(entity) {
+            return false;
+        }
+        if let Some(root) = world.get::<UiLayoutRoot>(entity) {
+            return root.window == window;
+        }
+        current = world
+            .get::<bbui_core::UiParent>(entity)
+            .map(|link| link.0)
+            .or_else(|| world.get::<ChildOf>(entity).map(ChildOf::parent));
+    }
+    false
+}
 
 fn restore_live_panes(
     world: &mut World,
@@ -70,21 +94,11 @@ pub(crate) fn sync_workspace(world: &mut World) {
         let Some(window) = workspace.window else {
             return;
         };
-        if let Some(parent) = workspace.mount_parent {
-            if world.get::<UiNode>(parent).is_none()
-                || world
-                    .get::<bbui_layout::UiLayoutResult>(parent)
-                    .is_some_and(|layout| layout.window != window)
-            {
-                return;
-            }
-            let mut ancestor = Some(parent);
-            while let Some(entity) = ancestor {
-                if workspace.root == Some(entity) {
-                    return;
-                }
-                ancestor = world.get::<bbui_core::UiParent>(entity).map(|link| link.0);
-            }
+        if let Some(parent) = workspace.mount_parent
+            && (world.get::<UiNode>(parent).is_none()
+                || !valid_mount_parent(world, parent, window, workspace.root))
+        {
+            return;
         }
         let declaration = WidgetTree::new(chrome(&workspace.layout.root, &workspace));
         let root = if let Some(root) = workspace.root {
@@ -291,6 +305,45 @@ mod tests {
     use super::*;
     use bbui_core::UiParent;
     use bbui_widgets::TabGroup;
+
+    #[test]
+    fn mount_parent_requires_an_unrelated_root_in_the_workspace_window() {
+        let mut world = World::new();
+        let window = world.spawn_empty().id();
+        let other_window = world.spawn_empty().id();
+        let root = world
+            .spawn((
+                UiNode,
+                UiLayoutRoot::new(window, Rect::new(0.0, 0.0, 800.0, 600.0), 1.0),
+            ))
+            .id();
+        let other_root = world
+            .spawn((
+                UiNode,
+                UiLayoutRoot::new(other_window, Rect::new(0.0, 0.0, 800.0, 600.0), 1.0),
+            ))
+            .id();
+        let detached = world.spawn(UiNode).id();
+        let parent = world.spawn(UiNode).id();
+        let workspace_root = world.spawn(UiNode).id();
+        set_parent(&mut world, parent, root).unwrap();
+        assert!(valid_mount_parent(&world, parent, window, None));
+        assert!(!valid_mount_parent(&world, detached, window, None));
+        assert!(!valid_mount_parent(&world, parent, other_window, None));
+        assert!(!valid_mount_parent(&world, parent, window, Some(root)));
+        set_parent(&mut world, parent, workspace_root).unwrap();
+        assert!(!valid_mount_parent(
+            &world,
+            parent,
+            window,
+            Some(workspace_root)
+        ));
+        set_parent(&mut world, parent, other_root).unwrap();
+        assert!(!valid_mount_parent(&world, parent, window, None));
+        world.entity_mut(parent).insert(UiParent(detached));
+        world.entity_mut(detached).insert(UiParent(parent));
+        assert!(!valid_mount_parent(&world, parent, window, None));
+    }
 
     #[test]
     fn restore_live_panes_uses_destination_host_if_previous_parent_was_removed() {
