@@ -524,8 +524,8 @@ pub(super) fn insert_control(
                 UiRole::new(role),
             ));
         }
-        WidgetSpec::Progress { value } => {
-            world.entity_mut(entity).insert(Progress::new(*value));
+        WidgetSpec::Progress { progress } => {
+            world.entity_mut(entity).insert(progress.clone());
         }
         WidgetSpec::FileBrowser { directory } => {
             let mut browser =

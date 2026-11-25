@@ -26,6 +26,9 @@ use entity_text::*;
 mod entity_misc;
 use entity_misc::*;
 
+mod progress;
+use progress::*;
+
 mod dirty;
 pub use dirty::collect_widget_paint;
 pub(super) use dirty::{collect_widget_paint_changes, styled_theme};

@@ -313,6 +313,12 @@ pub(super) fn dropdown_panel_and_progress_expose_named_live_values() {
     assert_eq!(progress_node.label(), Some("Progress"));
     assert_eq!(progress_node.numeric_value(), Some(f64::from(0.4_f32)));
 
+    world.get_mut::<Progress>(progress).unwrap().indeterminate = true;
+    sync_accessibility(&mut world);
+    let progress_node = &world.get::<AccessibilityNode>(progress).unwrap().0;
+    assert_eq!(progress_node.value(), Some("In progress"));
+    assert_eq!(progress_node.numeric_value(), None);
+
     world.get_mut::<Dropdown>(dropdown).unwrap().open();
     world.get_mut::<Panel>(panel).unwrap().state.target_expanded = false;
     sync_accessibility(&mut world);
