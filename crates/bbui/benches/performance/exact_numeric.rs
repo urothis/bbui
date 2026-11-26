@@ -1,8 +1,12 @@
 use bbui_text::expression::{evaluate_exact_i64, evaluate_exact_u64};
-use bbui_widgets::numeric::{NumericField, NumericValue};
+use bbui_widgets::numeric::NumericField;
 use criterion::Criterion;
 use std::hint::black_box;
 
+#[expect(
+    clippy::expect_used,
+    reason = "the fixed finite benchmark input must construct"
+)]
 pub fn bench(c: &mut Criterion) {
     c.bench_function("numeric/exact_i64_expression", |b| {
         b.iter(|| {
@@ -15,11 +19,20 @@ pub fn bench(c: &mut Criterion) {
     c.bench_function("numeric/exact_u64_expression", |b| {
         b.iter(|| black_box(evaluate_exact_u64(black_box("x - 1"), black_box(u64::MAX))))
     });
-    let mut field = NumericField::unsigned(u64::MAX - 2);
-    c.bench_function("numeric/exact_u64_step", |b| {
+    let mut exact = NumericField::unsigned(u64::MAX - 2);
+    c.bench_function("numeric/exact_u64_step_pair", |b| {
         b.iter(|| {
-            let _ = field.set_typed_value(black_box(NumericValue::Unsigned(u64::MAX - 1)));
-            black_box(field.typed_value())
+            black_box(exact.step_by(black_box(1)));
+            black_box(exact.step_by(black_box(-1)));
+            black_box(exact.typed_value())
+        })
+    });
+    let mut float = NumericField::float(1_000_000.0).expect("finite benchmark value");
+    c.bench_function("numeric/float_step_pair", |b| {
+        b.iter(|| {
+            black_box(float.step_by(black_box(1)));
+            black_box(float.step_by(black_box(-1)));
+            black_box(float.value)
         })
     });
 }
