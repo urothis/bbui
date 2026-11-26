@@ -126,6 +126,19 @@ pub enum NativeMenuError {
     WrongThread,
 }
 
+impl std::fmt::Display for NativeMenuError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let message = match self {
+            Self::EmptyId => "native menu IDs cannot be empty",
+            Self::DuplicateGroupId => "native menu group IDs must be unique",
+            Self::WrongThread => "native menus must be updated on the main thread",
+        };
+        formatter.write_str(message)
+    }
+}
+
+impl std::error::Error for NativeMenuError {}
+
 impl NativeMenuBar {
     pub fn validate(&self) -> Result<(), NativeMenuError> {
         let mut groups = std::collections::HashSet::new();
