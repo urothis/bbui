@@ -4,6 +4,7 @@ use bbui_core::{
     UiGesturePhase, UiInputEvent, UiInputQueue, UiPointerButton, UiTrackpadGesture, UiTrackpadKind,
 };
 use bbui_macos_input::{MacInputSample, TrackpadMonitor, TrackpadSample};
+use bevy::ecs::system::SystemParam;
 use bevy::input::ButtonState;
 use bevy::input::mouse::{MouseButton, MouseButtonInput};
 use bevy::prelude::*;
@@ -72,6 +73,15 @@ fn missing_releases(
 
 type NativePrimaryWindow<'w, 's> =
     Query<'w, 's, (Entity, &'static Window), (With<PrimaryWindow>, With<RawHandleWrapper>)>;
+
+#[derive(SystemParam)]
+pub(crate) struct NativePointerMessages<'w, 's> {
+    mouse_events: MessageReader<'w, 's, MouseButtonInput>,
+    cursor_events: MessageReader<'w, 's, CursorMoved>,
+    mouse_buttons: Option<ResMut<'w, ButtonInput<MouseButton>>>,
+    capture: Res<'w, CursorCaptureState>,
+    time: Option<Res<'w, Time>>,
+}
 
 fn logical_position(position: [f64; 2], window_height: f32) -> Option<[f32; 2]> {
     let [x, y] = position;
@@ -160,11 +170,7 @@ pub(crate) fn bridge_native_macos_input(
     mut monitor: NonSendMut<TrackpadMonitor>,
     mut frame: ResMut<MacInputFrame>,
     mut pointer: ResMut<MacPointerState>,
-    mut mouse_events: MessageReader<MouseButtonInput>,
-    mut cursor_events: MessageReader<CursorMoved>,
-    mut mouse_buttons: Option<ResMut<ButtonInput<MouseButton>>>,
-    capture: Res<CursorCaptureState>,
-    time: Option<Res<Time>>,
+    mut messages: NativePointerMessages,
     mut queue: ResMut<UiInputQueue>,
 ) {
     frame.recovered_drag_window = None;
@@ -173,9 +179,13 @@ pub(crate) fn bridge_native_macos_input(
         return;
     };
     let now = Instant::now();
-    let time_seconds = time.as_deref().map_or(0.0, Time::elapsed_secs_f64);
+    let time_seconds = messages.time.as_deref().map_or(0.0, Time::elapsed_secs_f64);
     let mut pressed_this_frame = [false; 3];
-    for event in mouse_events.read().filter(|event| event.window == window) {
+    for event in messages
+        .mouse_events
+        .read()
+        .filter(|event| event.window == window)
+    {
         let Some(index) = button_index(event.button) else {
             continue;
         };
@@ -193,7 +203,11 @@ pub(crate) fn bridge_native_macos_input(
         }
     }
     let mut pointer_moved = false;
-    for event in cursor_events.read().filter(|event| event.window == window) {
+    for event in messages
+        .cursor_events
+        .read()
+        .filter(|event| event.window == window)
+    {
         pointer_moved |= event
             .delta
             .is_some_and(|delta| delta.length_squared() > 0.25)
@@ -203,8 +217,8 @@ pub(crate) fn bridge_native_macos_input(
         pointer.last_cursor_position = Some(event.position);
     }
     if pointer_moved {
-        for index in 0..3 {
-            if pointer.down[index] && !pressed_this_frame[index] {
+        for (index, pressed) in pressed_this_frame.iter().enumerate() {
+            if pointer.down[index] && !pressed {
                 pointer.dragged[index] = true;
             }
         }
@@ -236,7 +250,7 @@ pub(crate) fn bridge_native_macos_input(
         if moved {
             pointer.last_cursor_position = Some(position);
             pointer_moved = true;
-            if capture.active.is_none() {
+            if messages.capture.active.is_none() {
                 frame.recovered_drag_window = Some(window);
                 queue.push(UiInputEvent::PointerMove {
                     window,
@@ -248,8 +262,8 @@ pub(crate) fn bridge_native_macos_input(
     }
     let native_buttons = (!monitor.available()).then(TrackpadMonitor::pressed_mouse_buttons);
     let mut fallback = [false; 3];
-    for index in 0..3 {
-        fallback[index] = !data.focused
+    for (index, allowed) in fallback.iter_mut().enumerate() {
+        *allowed = !data.focused
             || (native_buttons.is_some()
                 && !pointer.dragged[index]
                 && !pressed_this_frame[index]
@@ -270,7 +284,7 @@ pub(crate) fn bridge_native_macos_input(
     pointer.down = down;
     pointer.pending_up = pending;
     for index in recovered {
-        if let Some(buttons) = mouse_buttons.as_deref_mut() {
+        if let Some(buttons) = messages.mouse_buttons.as_deref_mut() {
             buttons.release(bevy_button(index));
         }
         queue.push(UiInputEvent::PointerButton {
