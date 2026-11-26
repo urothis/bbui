@@ -365,10 +365,10 @@ pub(super) fn sync(model: &NativeMenuBar) -> Result<bool, NativeMenuError> {
         if state.as_ref().is_some_and(|installed| {
             ptr::eq(&*installed.root, &*root) && installed.same_shape(model)
         }) {
-            if let Some(installed) = state.as_mut() {
-                if installed.model != *model {
-                    installed.update(model);
-                }
+            if let Some(installed) = state.as_mut()
+                && installed.model != *model
+            {
+                installed.update(model);
             }
             return Ok(true);
         }
