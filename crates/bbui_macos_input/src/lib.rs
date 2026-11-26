@@ -23,6 +23,8 @@ pub enum TrackpadSample {
         delta: [f64; 2],
         began: bool,
         ended: bool,
+        cancelled: bool,
+        momentum: bool,
         momentum_ended: bool,
         phased: bool,
         command: bool,
@@ -99,9 +101,10 @@ mod macos {
                 if event.r#type() == NSEventType::ScrollWheel && event.hasPreciseScrollingDeltas() {
                     let phase = event.phase();
                     let momentum = event.momentumPhase();
-                    let ended = phase.intersects(NSEventPhase::Ended | NSEventPhase::Cancelled);
-                    let momentum_ended =
-                        momentum.intersects(NSEventPhase::Ended | NSEventPhase::Cancelled);
+                    let ended = phase.intersects(NSEventPhase::Ended);
+                    let cancelled = phase.intersects(NSEventPhase::Cancelled)
+                        || momentum.intersects(NSEventPhase::Cancelled);
+                    let momentum_ended = momentum.intersects(NSEventPhase::Ended);
                     let _ = sender.send(MacInputSample {
                         window_number,
                         kind: MacInputKind::Trackpad(TrackpadSample::Scroll {
@@ -109,6 +112,8 @@ mod macos {
                             delta: [event.scrollingDeltaX(), event.scrollingDeltaY()],
                             began: phase.intersects(NSEventPhase::Began | NSEventPhase::MayBegin),
                             ended,
+                            cancelled,
+                            momentum: momentum != NSEventPhase::None,
                             momentum_ended,
                             phased: phase != NSEventPhase::None || momentum != NSEventPhase::None,
                             command: event.modifierFlags().intersects(

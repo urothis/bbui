@@ -20,6 +20,14 @@ pub(crate) struct MacInputFrame {
     pub(crate) recovered_drag_window: Option<Entity>,
     recovered_release_window: Option<Entity>,
     recovered_releases: [bool; 3],
+    pending_scroll_end: Option<PendingScrollEnd>,
+}
+
+const SCROLL_MOMENTUM_GRACE: Duration = Duration::from_millis(50);
+
+struct PendingScrollEnd {
+    gesture: UiTrackpadGesture,
+    deadline: Instant,
 }
 
 impl MacInputFrame {
@@ -30,6 +38,84 @@ impl MacInputFrame {
     pub(crate) fn recovered_release(&self, window: Entity, button: MouseButton) -> bool {
         self.recovered_release_window == Some(window)
             && button_index(button).is_some_and(|index| self.recovered_releases[index])
+    }
+
+    fn flush_scroll_end(&mut self, queue: &mut UiInputQueue) {
+        if let Some(pending) = self.pending_scroll_end.take() {
+            queue.push(UiInputEvent::TrackpadGesture(pending.gesture));
+        }
+    }
+
+    fn expire_scroll_end(&mut self, now: Instant, queue: &mut UiInputQueue) {
+        if self
+            .pending_scroll_end
+            .as_ref()
+            .is_some_and(|pending| now >= pending.deadline)
+        {
+            self.flush_scroll_end(queue);
+        }
+    }
+
+    fn push_scroll(
+        &mut self,
+        sample: TrackpadSample,
+        window: Entity,
+        height: f32,
+        now: Instant,
+        queue: &mut UiInputQueue,
+    ) {
+        self.expire_scroll_end(now, queue);
+        let TrackpadSample::Scroll {
+            position,
+            began,
+            ended,
+            cancelled,
+            momentum,
+            momentum_ended,
+            ..
+        } = sample
+        else {
+            return;
+        };
+        if began || (!momentum && !ended && !cancelled && !momentum_ended) {
+            self.flush_scroll_end(queue);
+        }
+        if cancelled {
+            self.pending_scroll_end = None;
+            if let Some(event) = convert(sample, window, height) {
+                queue.push(event);
+            }
+        } else if momentum_ended {
+            self.pending_scroll_end = None;
+            if let Some(event) = convert(sample, window, height) {
+                queue.push(event);
+            }
+        } else if ended {
+            if let Some(position) = logical_position(position, height) {
+                if let Some(event) = convert(sample, window, height) {
+                    queue.push(event);
+                }
+                self.pending_scroll_end = Some(PendingScrollEnd {
+                    gesture: UiTrackpadGesture {
+                        window,
+                        position,
+                        delta: [0.0, 0.0],
+                        scale: 1.0,
+                        kind: UiTrackpadKind::Scroll,
+                        phase: UiGesturePhase::Ended,
+                        phased: true,
+                    },
+                    deadline: now + SCROLL_MOMENTUM_GRACE,
+                });
+            }
+        } else {
+            if momentum {
+                self.pending_scroll_end = None;
+            }
+            if let Some(event) = convert(sample, window, height) {
+                queue.push(event);
+            }
+        }
     }
 }
 
@@ -111,6 +197,7 @@ fn convert(sample: TrackpadSample, window: Entity, height: f32) -> Option<UiInpu
             position,
             delta,
             began,
+            cancelled,
             momentum_ended,
             phased,
             command,
@@ -120,7 +207,9 @@ fn convert(sample: TrackpadSample, window: Entity, height: f32) -> Option<UiInpu
             if !delta.iter().all(|value| value.is_finite()) {
                 return None;
             }
-            let phase = if momentum_ended {
+            let phase = if cancelled {
+                UiGesturePhase::Cancelled
+            } else if momentum_ended {
                 UiGesturePhase::Ended
             } else if began {
                 UiGesturePhase::Started
@@ -194,8 +283,17 @@ pub(crate) fn bridge_native_macos_input(
     frame.recovered_releases = [false; 3];
     let Ok((window, data, raw_handle)) = primary.single() else {
         frame.native_scroll_window = None;
+        frame.pending_scroll_end = None;
         return;
     };
+    if !data.focused
+        || frame
+            .pending_scroll_end
+            .as_ref()
+            .is_some_and(|pending| pending.gesture.window != window)
+    {
+        frame.pending_scroll_end = None;
+    }
     let primary_window_number = TrackpadMonitor::window_number(raw_handle.get_window_handle());
     let now = Instant::now();
     let time_seconds = messages.time.as_deref().map_or(0.0, Time::elapsed_secs_f64);
@@ -257,6 +355,9 @@ pub(crate) fn bridge_native_macos_input(
             continue;
         }
         match kind {
+            MacInputKind::Trackpad(sample @ TrackpadSample::Scroll { .. }) if data.focused => {
+                frame.push_scroll(sample, window, height, now, &mut queue);
+            }
             MacInputKind::Trackpad(sample) if data.focused => {
                 if let Some(event) = convert(sample, window, height) {
                     queue.push(event);
@@ -270,6 +371,7 @@ pub(crate) fn bridge_native_macos_input(
             MacInputKind::MouseDrag { .. } => {}
         }
     }
+    frame.expire_scroll_end(now, &mut queue);
     // A Bevy cursor update from this frame is authoritative. Replaying an
     // older AppKit drag sample after it would move the pointer backwards.
     if let Some(position) = raw_drag_position.filter(|_| !pointer_moved) {
@@ -366,6 +468,188 @@ pub(crate) fn publish_recovered_mouse_releases(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn scroll_sample(
+        began: bool,
+        ended: bool,
+        cancelled: bool,
+        momentum: bool,
+        momentum_ended: bool,
+    ) -> TrackpadSample {
+        TrackpadSample::Scroll {
+            position: [20.0, 30.0],
+            delta: [0.0, 1.0],
+            began,
+            ended,
+            cancelled,
+            momentum,
+            momentum_ended,
+            phased: true,
+            command: false,
+        }
+    }
+
+    fn scroll_phases(queue: &UiInputQueue) -> Vec<UiGesturePhase> {
+        queue
+            .iter()
+            .filter_map(|event| match event {
+                UiInputEvent::TrackpadGesture(gesture) => Some(gesture.phase),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn scroll_without_momentum_ends_after_grace_period() {
+        let mut frame = MacInputFrame::default();
+        let mut queue = UiInputQueue::default();
+        let now = Instant::now();
+        frame.push_scroll(
+            scroll_sample(true, false, false, false, false),
+            Entity::PLACEHOLDER,
+            100.0,
+            now,
+            &mut queue,
+        );
+        frame.push_scroll(
+            scroll_sample(false, true, false, false, false),
+            Entity::PLACEHOLDER,
+            100.0,
+            now,
+            &mut queue,
+        );
+        frame.expire_scroll_end(now + SCROLL_MOMENTUM_GRACE, &mut queue);
+        assert_eq!(
+            scroll_phases(&queue),
+            [
+                UiGesturePhase::Started,
+                UiGesturePhase::Updated,
+                UiGesturePhase::Ended
+            ]
+        );
+    }
+
+    #[test]
+    fn momentum_keeps_one_scroll_gesture_alive() {
+        let mut frame = MacInputFrame::default();
+        let mut queue = UiInputQueue::default();
+        let now = Instant::now();
+        let window = Entity::PLACEHOLDER;
+        frame.push_scroll(
+            scroll_sample(true, false, false, false, false),
+            window,
+            100.0,
+            now,
+            &mut queue,
+        );
+        frame.push_scroll(
+            scroll_sample(false, true, false, false, false),
+            window,
+            100.0,
+            now,
+            &mut queue,
+        );
+        frame.push_scroll(
+            scroll_sample(false, false, false, true, false),
+            window,
+            100.0,
+            now + Duration::from_millis(10),
+            &mut queue,
+        );
+        frame.expire_scroll_end(now + SCROLL_MOMENTUM_GRACE, &mut queue);
+        frame.push_scroll(
+            scroll_sample(false, false, false, true, true),
+            window,
+            100.0,
+            now + Duration::from_millis(60),
+            &mut queue,
+        );
+        assert_eq!(
+            scroll_phases(&queue),
+            [
+                UiGesturePhase::Started,
+                UiGesturePhase::Updated,
+                UiGesturePhase::Updated,
+                UiGesturePhase::Ended
+            ]
+        );
+    }
+
+    #[test]
+    fn cancelled_scroll_ends_immediately() {
+        let mut frame = MacInputFrame::default();
+        let mut queue = UiInputQueue::default();
+        let now = Instant::now();
+        let window = Entity::PLACEHOLDER;
+        frame.push_scroll(
+            scroll_sample(true, false, false, false, false),
+            window,
+            100.0,
+            now,
+            &mut queue,
+        );
+        frame.push_scroll(
+            scroll_sample(false, true, false, false, false),
+            window,
+            100.0,
+            now,
+            &mut queue,
+        );
+        frame.push_scroll(
+            scroll_sample(false, false, true, false, false),
+            window,
+            100.0,
+            now,
+            &mut queue,
+        );
+        frame.expire_scroll_end(now + SCROLL_MOMENTUM_GRACE, &mut queue);
+        assert_eq!(
+            scroll_phases(&queue),
+            [
+                UiGesturePhase::Started,
+                UiGesturePhase::Updated,
+                UiGesturePhase::Cancelled
+            ]
+        );
+    }
+
+    #[test]
+    fn new_scroll_flushes_pending_end_first() {
+        let mut frame = MacInputFrame::default();
+        let mut queue = UiInputQueue::default();
+        let now = Instant::now();
+        let window = Entity::PLACEHOLDER;
+        frame.push_scroll(
+            scroll_sample(true, false, false, false, false),
+            window,
+            100.0,
+            now,
+            &mut queue,
+        );
+        frame.push_scroll(
+            scroll_sample(false, true, false, false, false),
+            window,
+            100.0,
+            now,
+            &mut queue,
+        );
+        frame.push_scroll(
+            scroll_sample(true, false, false, false, false),
+            window,
+            100.0,
+            now + Duration::from_millis(10),
+            &mut queue,
+        );
+        assert_eq!(
+            scroll_phases(&queue),
+            [
+                UiGesturePhase::Started,
+                UiGesturePhase::Updated,
+                UiGesturePhase::Ended,
+                UiGesturePhase::Started
+            ]
+        );
+    }
 
     #[test]
     fn native_scroll_deduplicates_only_its_source_window() {
