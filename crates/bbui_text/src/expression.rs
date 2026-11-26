@@ -199,7 +199,7 @@ pub fn evaluate_exact_integer_with_vars(
     match evaluate_exact_basic(source, x) {
         Ok(value) => Ok(value),
         Err(Error::InvalidCharacter(_) | Error::UnexpectedToken | Error::UnknownName(_)) => {
-            parse(source, true)?.evaluate_exact(x, vars)
+            parse::<true>(source)?.evaluate_exact(x, vars)
         }
         Err(error) => Err(error),
     }
@@ -289,7 +289,8 @@ mod exact_integer_tests {
 
 #[derive(Debug, Clone, PartialEq)]
 enum Token {
-    Number(NumberLiteral),
+    Number(f64),
+    ExactNumber(i128),
     Name(String),
     Plus,
     Minus,
@@ -311,13 +312,7 @@ enum Token {
     End,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-struct NumberLiteral {
-    float: f64,
-    exact: Option<i128>,
-}
-
-fn lex(source: &str, exact_literals: bool) -> Result<Vec<Token>, Error> {
+fn lex<const EXACT: bool>(source: &str) -> Result<Vec<Token>, Error> {
     let bytes = source.as_bytes();
     let mut i = 0;
     let mut out = Vec::new();
@@ -353,17 +348,17 @@ fn lex(source: &str, exact_literals: bool) -> Result<Vec<Token>, Error> {
                 }
                 let raw = &source[start..i];
                 let float: f64 = raw.parse().map_err(|_| Error::InvalidNumber(start))?;
-                let exact = exact_literals
-                    .then(|| {
-                        raw.parse::<i128>().ok().or_else(|| {
-                            (float.is_finite()
-                                && float.fract() == 0.0
-                                && float.abs() <= 9_007_199_254_740_992.0)
-                                .then_some(float as i128)
-                        })
-                    })
-                    .flatten();
-                out.push(Token::Number(NumberLiteral { float, exact }));
+                if EXACT {
+                    let exact = raw.parse::<i128>().ok().or_else(|| {
+                        (float.is_finite()
+                            && float.fract() == 0.0
+                            && float.abs() <= 9_007_199_254_740_992.0)
+                            .then_some(float as i128)
+                    });
+                    out.push(exact.map_or(Token::Number(float), Token::ExactNumber));
+                } else {
+                    out.push(Token::Number(float));
+                }
                 continue;
             }
             b'a'..=b'z' | b'A'..=b'Z' | b'_' => {
@@ -421,15 +416,27 @@ fn lex(source: &str, exact_literals: bool) -> Result<Vec<Token>, Error> {
     Ok(out)
 }
 
-pub fn evaluate(source: &str, vars: &HashMap<String, f64>) -> Result<f64, Error> {
-    parse(source, false)?.evaluate(vars)
+/// Whether an expression contains a numeric literal that cannot be safely
+/// passed through the legacy floating-point evaluator.
+pub fn has_wide_numeric_literal(source: &str) -> bool {
+    lex::<true>(source).is_ok_and(|tokens| {
+        tokens.into_iter().any(|token| match token {
+            Token::ExactNumber(value) => value.unsigned_abs() > 9_007_199_254_740_992,
+            Token::Number(value) => value.abs() > 9_007_199_254_740_992.0,
+            _ => false,
+        })
+    })
 }
 
-fn parse(source: &str, exact_literals: bool) -> Result<Expression, Error> {
+pub fn evaluate(source: &str, vars: &HashMap<String, f64>) -> Result<f64, Error> {
+    parse::<false>(source)?.evaluate(vars)
+}
+
+fn parse<const EXACT: bool>(source: &str) -> Result<Expression, Error> {
     if source.len() > 4_096 {
         return Err(Error::TooComplex);
     }
-    let tokens = lex(source, exact_literals)?;
+    let tokens = lex::<EXACT>(source)?;
     if tokens.len() > 512 {
         return Err(Error::TooComplex);
     }
@@ -456,7 +463,8 @@ fn finite(value: f64) -> Result<f64, Error> {
 
 #[derive(Debug, Clone)]
 enum Expression {
-    Number(NumberLiteral),
+    Number(f64),
+    ExactNumber(i128),
     Name(String),
     Unary {
         negative: bool,
@@ -506,7 +514,8 @@ enum CompareOperation {
 impl Expression {
     fn evaluate(&self, vars: &HashMap<String, f64>) -> Result<f64, Error> {
         match self {
-            Self::Number(value) => finite(value.float),
+            Self::Number(value) => finite(*value),
+            Self::ExactNumber(value) => finite(*value as f64),
             Self::Name(name) => match name.as_str() {
                 "pi" => Ok(std::f64::consts::PI),
                 "e" => Ok(std::f64::consts::E),
@@ -578,7 +587,8 @@ impl Expression {
 
     fn evaluate_exact(&self, x: i128, vars: &HashMap<String, f64>) -> Result<i128, Error> {
         match self {
-            Self::Number(value) => value.exact.ok_or(Error::Domain),
+            Self::ExactNumber(value) => Ok(*value),
+            Self::Number(_) => Err(Error::Domain),
             Self::Name(name) if name == "x" => Ok(x),
             Self::Name(name) if name == "pi" || name == "e" => Err(Error::Domain),
             Self::Name(name) => {
@@ -827,6 +837,7 @@ impl Parser<'_> {
     fn primary(&mut self) -> Result<Expression, Error> {
         match self.take() {
             Token::Number(value) => Ok(Expression::Number(value)),
+            Token::ExactNumber(value) => Ok(Expression::ExactNumber(value)),
             Token::LParen => {
                 let value = self.conditional()?;
                 if self.take() != Token::RParen {

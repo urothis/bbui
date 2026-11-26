@@ -421,10 +421,23 @@ impl NumericField {
                 NumericValue::Unsigned(value) => value <= 9_007_199_254_740_992,
                 NumericValue::Float(_) => false,
             };
+            let has_division = input.contains('/');
+            let needs_legacy = matches!(&result, Err(Error::Domain)) || has_division;
+            let legacy_safe = needs_legacy
+                && exact_is_safe
+                && vars
+                    .values()
+                    .all(|value| value.is_finite() && value.abs() <= 9_007_199_254_740_992.0)
+                && !expression::has_wide_numeric_literal(input);
+            let result = if legacy_safe && has_division {
+                Err(Error::Domain)
+            } else {
+                result
+            };
             let result = match result {
-                Err(Error::Domain) if exact_is_safe => {
+                Err(Error::Domain) if legacy_safe => {
                     let mut context = vars.clone();
-                    context.insert("x".into(), self.value);
+                    context.insert("x".into(), self.typed_value().as_f64());
                     expression::evaluate(input, &context).and_then(|value| {
                         let rounded = value.round();
                         if rounded.abs() > 9_007_199_254_740_992.0 {
@@ -685,6 +698,19 @@ mod tests {
                 .unwrap()
         );
         assert_eq!(safe.typed_value(), NumericValue::Integer(9));
+        assert!(safe.evaluate_input("3/2*2", &HashMap::new()).unwrap());
+        assert_eq!(safe.typed_value(), NumericValue::Integer(3));
+
+        let mut wide_literal = NumericField::unsigned(0);
+        assert!(
+            wide_literal
+                .evaluate_input("18446744073709551615/2", &HashMap::new())
+                .unwrap()
+        );
+        assert_eq!(
+            wide_literal.typed_value(),
+            NumericValue::Unsigned(9_223_372_036_854_775_808)
+        );
     }
 
     #[test]
