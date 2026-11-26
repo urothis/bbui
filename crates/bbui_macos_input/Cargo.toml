@@ -7,7 +7,8 @@ rust-version.workspace = true
 [target.'cfg(target_os = "macos")'.dependencies]
 block2 = "=0.6.2"
 objc2 = "=0.6.5"
-objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["NSEvent", "block2", "objc2-core-foundation"] }
+objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["NSEvent", "NSView", "NSWindow", "block2", "objc2-core-foundation"] }
+raw-window-handle = "=0.6.2"
 
 # The AppKit monitor is the only BBUI crate with a native unsafe boundary.
 # Existing framework crates continue to inherit the workspace's unsafe_code forbid.

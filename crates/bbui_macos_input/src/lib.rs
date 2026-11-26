@@ -1,7 +1,15 @@
 //! AppKit pointer and trackpad events behind a safe sampling API.
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum MacInputSample {
+pub struct MacInputSample {
+    /// AppKit's source window number. Samples from another window must not be
+    /// interpreted in the primary window's local coordinate space.
+    pub window_number: isize,
+    pub kind: MacInputKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum MacInputKind {
     Trackpad(TrackpadSample),
     MouseUp(u8),
     MouseDrag { button: u8, position: [f64; 2] },
@@ -31,10 +39,13 @@ pub enum TrackpadSample {
 
 #[cfg(target_os = "macos")]
 mod macos {
-    use super::{MacInputSample, TrackpadSample};
+    use super::{MacInputKind, MacInputSample, TrackpadSample};
     use objc2::rc::Retained;
     use objc2::runtime::AnyObject;
-    use objc2_app_kit::{NSEvent, NSEventMask, NSEventModifierFlags, NSEventPhase, NSEventType};
+    use objc2_app_kit::{
+        NSEvent, NSEventMask, NSEventModifierFlags, NSEventPhase, NSEventType, NSView,
+    };
+    use raw_window_handle::RawWindowHandle;
     use std::sync::mpsc::{Receiver, channel};
 
     #[derive(Default)]
@@ -45,6 +56,18 @@ mod macos {
     }
 
     impl TrackpadMonitor {
+        /// Resolve the AppKit source window for a Bevy raw window handle.
+        /// Call on the main thread while the window handle is live.
+        pub fn window_number(handle: RawWindowHandle) -> Option<isize> {
+            let RawWindowHandle::AppKit(handle) = handle else {
+                return None;
+            };
+            // SAFETY: Bevy's live AppKit window handle stores an NSView pointer,
+            // and this bridge runs on the AppKit main thread.
+            let view = unsafe { handle.ns_view.cast::<NSView>().as_ref() };
+            view.window().map(|window| window.windowNumber())
+        }
+
         pub fn available(&self) -> bool {
             self.receiver.is_some()
         }
@@ -72,33 +95,40 @@ mod macos {
                 let event = unsafe { event.as_ref() };
                 let location = event.locationInWindow();
                 let position = [location.x, location.y];
+                let window_number = event.windowNumber();
                 if event.r#type() == NSEventType::ScrollWheel && event.hasPreciseScrollingDeltas() {
                     let phase = event.phase();
                     let momentum = event.momentumPhase();
                     let ended = phase.intersects(NSEventPhase::Ended | NSEventPhase::Cancelled);
                     let momentum_ended =
                         momentum.intersects(NSEventPhase::Ended | NSEventPhase::Cancelled);
-                    let _ = sender.send(MacInputSample::Trackpad(TrackpadSample::Scroll {
-                        position,
-                        delta: [event.scrollingDeltaX(), event.scrollingDeltaY()],
-                        began: phase.intersects(NSEventPhase::Began | NSEventPhase::MayBegin),
-                        ended,
-                        momentum_ended,
-                        phased: phase != NSEventPhase::None || momentum != NSEventPhase::None,
-                        command: event.modifierFlags().intersects(
-                            NSEventModifierFlags::Command | NSEventModifierFlags::Control,
-                        ),
-                    }));
+                    let _ = sender.send(MacInputSample {
+                        window_number,
+                        kind: MacInputKind::Trackpad(TrackpadSample::Scroll {
+                            position,
+                            delta: [event.scrollingDeltaX(), event.scrollingDeltaY()],
+                            began: phase.intersects(NSEventPhase::Began | NSEventPhase::MayBegin),
+                            ended,
+                            momentum_ended,
+                            phased: phase != NSEventPhase::None || momentum != NSEventPhase::None,
+                            command: event.modifierFlags().intersects(
+                                NSEventModifierFlags::Command | NSEventModifierFlags::Control,
+                            ),
+                        }),
+                    });
                 } else if event.r#type() == NSEventType::Magnify {
                     let phase = event.phase();
-                    let _ = sender.send(MacInputSample::Trackpad(TrackpadSample::Magnify {
-                        position,
-                        delta: event.magnification(),
-                        began: phase.intersects(NSEventPhase::Began),
-                        ended: phase.intersects(NSEventPhase::Ended),
-                        cancelled: phase.intersects(NSEventPhase::Cancelled),
-                        phased: phase != NSEventPhase::None,
-                    }));
+                    let _ = sender.send(MacInputSample {
+                        window_number,
+                        kind: MacInputKind::Trackpad(TrackpadSample::Magnify {
+                            position,
+                            delta: event.magnification(),
+                            began: phase.intersects(NSEventPhase::Began),
+                            ended: phase.intersects(NSEventPhase::Ended),
+                            cancelled: phase.intersects(NSEventPhase::Cancelled),
+                            phased: phase != NSEventPhase::None,
+                        }),
+                    });
                 } else if matches!(
                     event.r#type(),
                     NSEventType::LeftMouseDragged
@@ -107,9 +137,12 @@ mod macos {
                 ) {
                     let button = event.buttonNumber();
                     if (0..=2).contains(&button) {
-                        let _ = sender.send(MacInputSample::MouseDrag {
-                            button: button as u8,
-                            position,
+                        let _ = sender.send(MacInputSample {
+                            window_number,
+                            kind: MacInputKind::MouseDrag {
+                                button: button as u8,
+                                position,
+                            },
                         });
                     }
                 } else if matches!(
@@ -120,7 +153,10 @@ mod macos {
                 ) {
                     let button = event.buttonNumber();
                     if (0..=2).contains(&button) {
-                        let _ = sender.send(MacInputSample::MouseUp(button as u8));
+                        let _ = sender.send(MacInputSample {
+                            window_number,
+                            kind: MacInputKind::MouseUp(button as u8),
+                        });
                     }
                 }
                 event as *const NSEvent as *mut NSEvent

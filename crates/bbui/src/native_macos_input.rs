@@ -3,7 +3,7 @@
 use bbui_core::{
     UiGesturePhase, UiInputEvent, UiInputQueue, UiPointerButton, UiTrackpadGesture, UiTrackpadKind,
 };
-use bbui_macos_input::{MacInputSample, TrackpadMonitor, TrackpadSample};
+use bbui_macos_input::{MacInputKind, MacInputSample, TrackpadMonitor, TrackpadSample};
 use bevy::ecs::system::SystemParam;
 use bevy::input::ButtonState;
 use bevy::input::mouse::{MouseButton, MouseButtonInput};
@@ -82,7 +82,7 @@ fn missing_releases(
 }
 
 type NativePrimaryWindow<'w, 's> =
-    Query<'w, 's, (Entity, &'static Window), (With<PrimaryWindow>, With<RawHandleWrapper>)>;
+    Query<'w, 's, (Entity, &'static Window, &'static RawHandleWrapper), With<PrimaryWindow>>;
 
 #[derive(SystemParam)]
 pub(crate) struct NativePointerMessages<'w, 's> {
@@ -188,10 +188,11 @@ pub(crate) fn bridge_native_macos_input(
     frame.recovered_drag_window = None;
     frame.recovered_release_window = None;
     frame.recovered_releases = [false; 3];
-    let Ok((window, data)) = primary.single() else {
+    let Ok((window, data, raw_handle)) = primary.single() else {
         frame.available = false;
         return;
     };
+    let primary_window_number = TrackpadMonitor::window_number(raw_handle.get_window_handle());
     let now = Instant::now();
     let time_seconds = messages.time.as_deref().map_or(0.0, Time::elapsed_secs_f64);
     let mut pressed_this_frame = [false; 3];
@@ -238,23 +239,30 @@ pub(crate) fn bridge_native_macos_input(
         }
     }
     let samples = monitor.drain();
-    frame.available = monitor.available();
+    frame.available = monitor.available() && primary_window_number.is_some();
     let height = data.resolution.height();
     let mut observed_up = [false; 3];
     let mut raw_drag_position = None;
-    for sample in samples {
-        match sample {
-            MacInputSample::Trackpad(sample) if data.focused => {
+    for MacInputSample {
+        window_number,
+        kind,
+    } in samples
+    {
+        if Some(window_number) != primary_window_number {
+            continue;
+        }
+        match kind {
+            MacInputKind::Trackpad(sample) if data.focused => {
                 if let Some(event) = convert(sample, window, height) {
                     queue.push(event);
                 }
             }
-            MacInputSample::Trackpad(_) => {}
-            MacInputSample::MouseUp(index) => observed_up[usize::from(index)] = true,
-            MacInputSample::MouseDrag { button, position } if pointer.down[usize::from(button)] => {
+            MacInputKind::Trackpad(_) => {}
+            MacInputKind::MouseUp(index) => observed_up[usize::from(index)] = true,
+            MacInputKind::MouseDrag { button, position } if pointer.down[usize::from(button)] => {
                 raw_drag_position = logical_position(position, height).map(Vec2::from_array);
             }
-            MacInputSample::MouseDrag { .. } => {}
+            MacInputKind::MouseDrag { .. } => {}
         }
     }
     // A Bevy cursor update from this frame is authoritative. Replaying an
