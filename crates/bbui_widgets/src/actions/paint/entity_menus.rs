@@ -13,40 +13,6 @@ fn palette_style_color(
     }
 }
 
-fn fit_palette_text(
-    world: &mut World,
-    entity: Entity,
-    text: &str,
-    theme: &Theme,
-    available: f32,
-) -> String {
-    if measured_text_width(world, entity, text, theme) <= available {
-        return text.to_owned();
-    }
-    let boundaries: Vec<_> = text
-        .char_indices()
-        .map(|(index, _)| index)
-        .chain(std::iter::once(text.len()))
-        .collect();
-    let mut low = 0;
-    let mut high = boundaries.len() - 1;
-    while low < high {
-        let mid = (low + high).div_ceil(2);
-        if measured_text_width(
-            world,
-            entity,
-            &format!("{}…", &text[..boundaries[mid]]),
-            theme,
-        ) <= available
-        {
-            low = mid;
-        } else {
-            high = mid - 1;
-        }
-    }
-    format!("{}…", &text[..boundaries[low]])
-}
-
 pub(super) fn paint_buttons_and_menus(paint: &mut PaintEntityContext<'_>) -> bool {
     let world = &mut *paint.world;
     let entity = paint.entity;
@@ -117,6 +83,18 @@ pub(super) fn paint_buttons_and_menus(paint: &mut PaintEntityContext<'_>) -> boo
             }
             return true;
         }
+        if role.as_deref() == Some("chrome-mobile-sheet-backdrop") {
+            camera_items.push(item(
+                clip,
+                z,
+                Primitive::RoundedRect {
+                    rect: ClipRect::from(rect),
+                    radius: 0.0,
+                    color: theme.surface,
+                },
+            ));
+            return true;
+        }
         let background = if !enabled || !button.enabled {
             theme.color(ThemeColorToken::ButtonDisabledSurface)
         } else if button.status == crate::WidgetStatus::Hovered {
@@ -133,6 +111,187 @@ pub(super) fn paint_buttons_and_menus(paint: &mut PaintEntityContext<'_>) -> boo
                 color: background,
             },
         ));
+        if role.as_deref() == Some("titlebar-drag") {
+            let visible = fit_text_to_width(
+                world,
+                entity,
+                &button.label,
+                theme,
+                (rect.width - 16.0).max(0.0),
+            );
+            camera_items.push(item(
+                clip,
+                z.saturating_add(1),
+                styled_text_primitive_for_entity(
+                    world,
+                    entity,
+                    clip,
+                    TextPlacement {
+                        origin: [
+                            rect.x + 8.0,
+                            rect.y + (rect.height - theme.font_size * theme.line_height) * 0.5,
+                        ],
+                        text: visible,
+                    },
+                    theme.text,
+                    theme,
+                    false,
+                ),
+            ));
+            return true;
+        }
+        if matches!(
+            role.as_deref(),
+            Some("chrome-mobile-nav-item" | "chrome-mobile-action")
+        ) {
+            if role.as_deref() == Some("chrome-mobile-nav-item")
+                && world
+                    .get::<bbui_core::UiTab>(entity)
+                    .is_some_and(|tab| tab.selected)
+            {
+                camera_items.push(item(
+                    clip,
+                    z.saturating_add(1),
+                    Primitive::RoundedRect {
+                        rect: ClipRect {
+                            x: rect.x + rect.width * 0.35,
+                            y: rect.y + 2.0,
+                            width: rect.width * 0.3,
+                            height: 2.0,
+                        },
+                        radius: 1.0,
+                        color: theme.color(ThemeColorToken::Accent),
+                    },
+                ));
+            }
+            let visible = fit_text_to_width(
+                world,
+                entity,
+                &button.label,
+                theme,
+                (rect.width - 16.0).max(0.0),
+            );
+            let width = measured_text_width(world, entity, &visible, theme);
+            camera_items.push(item(
+                clip,
+                z.saturating_add(2),
+                styled_text_primitive_for_entity(
+                    world,
+                    entity,
+                    clip,
+                    TextPlacement {
+                        origin: [
+                            rect.x + (rect.width - width) * 0.5,
+                            rect.y + (rect.height - theme.font_size * theme.line_height) * 0.5,
+                        ],
+                        text: visible,
+                    },
+                    if !enabled || !button.enabled {
+                        theme.color(ThemeColorToken::DisabledText)
+                    } else {
+                        theme.text
+                    },
+                    theme,
+                    false,
+                ),
+            ));
+            return true;
+        }
+        if let Some(control) = role
+            .as_deref()
+            .and_then(|role| role.strip_prefix("chrome-window-"))
+            .filter(|control| matches!(*control, "minimize" | "maximize" | "close"))
+        {
+            let color = if !enabled || !button.enabled {
+                theme.color(ThemeColorToken::DisabledText)
+            } else {
+                theme.text
+            };
+            let center_x = rect.x + rect.width * 0.5;
+            let center_y = rect.y + rect.height * 0.5;
+            let size = (theme.font_size * 0.68)
+                .clamp(8.0, 14.0)
+                .min((rect.width.min(rect.height) - 10.0).max(4.0));
+            let standard_label = matches!(
+                (control, button.label.as_str()),
+                ("minimize", "−") | ("maximize", "□") | ("close", "×")
+            );
+            if standard_label {
+                match control {
+                    "minimize" => camera_items.push(item(
+                        clip,
+                        z.saturating_add(1),
+                        Primitive::Line {
+                            from: [center_x - size * 0.5, center_y + size * 0.28],
+                            to: [center_x + size * 0.5, center_y + size * 0.28],
+                            width: 1.6,
+                            color,
+                        },
+                    )),
+                    "maximize" => camera_items.push(item(
+                        clip,
+                        z.saturating_add(1),
+                        Primitive::RoundedBorder {
+                            rect: ClipRect::from(Rect::new(
+                                center_x - size * 0.5,
+                                center_y - size * 0.5,
+                                size,
+                                size,
+                            )),
+                            radius: 1.0,
+                            width: 1.5,
+                            color,
+                        },
+                    )),
+                    "close" => {
+                        for (from, to) in [
+                            (
+                                [center_x - size * 0.42, center_y - size * 0.42],
+                                [center_x + size * 0.42, center_y + size * 0.42],
+                            ),
+                            (
+                                [center_x + size * 0.42, center_y - size * 0.42],
+                                [center_x - size * 0.42, center_y + size * 0.42],
+                            ),
+                        ] {
+                            camera_items.push(item(
+                                clip,
+                                z.saturating_add(1),
+                                Primitive::Line {
+                                    from,
+                                    to,
+                                    width: 1.6,
+                                    color,
+                                },
+                            ));
+                        }
+                    }
+                    _ => {}
+                }
+            } else {
+                let text_width = measured_text_width(world, entity, &button.label, theme);
+                camera_items.push(item(
+                    clip,
+                    z.saturating_add(1),
+                    styled_text_primitive_for_entity(
+                        world,
+                        entity,
+                        clip,
+                        TextPlacement {
+                            origin: [
+                                center_x - text_width * 0.5,
+                                center_y - theme.font_size * theme.line_height * 0.5,
+                            ],
+                            text: button.label.clone(),
+                        },
+                        color,
+                        theme,
+                        false,
+                    ),
+                ));
+            }
+            return true;
+        }
         if palette_action
             && world
                 .get_resource::<UiFocus>()
@@ -297,7 +456,7 @@ pub(super) fn paint_buttons_and_menus(paint: &mut PaintEntityContext<'_>) -> boo
                         },
                     ));
                 }
-                let visible_hint = fit_palette_text(
+                let visible_hint = fit_text_to_width(
                     world,
                     entity,
                     hint,
@@ -337,7 +496,7 @@ pub(super) fn paint_buttons_and_menus(paint: &mut PaintEntityContext<'_>) -> boo
                 right_edge
             };
             let available = (badge_left - x).max(0.0);
-            let visible = fit_palette_text(world, entity, &button.label, theme, available);
+            let visible = fit_text_to_width(world, entity, &button.label, theme, available);
             let query = presentation.query.to_ascii_lowercase();
             let label_lower = visible.to_ascii_lowercase();
             let match_range = (!query.is_empty())
@@ -412,7 +571,7 @@ pub(super) fn paint_buttons_and_menus(paint: &mut PaintEntityContext<'_>) -> boo
                     category_theme.font_size = *size;
                 }
                 if !presentation.category.is_empty() {
-                    let category = fit_palette_text(
+                    let category = fit_text_to_width(
                         world,
                         entity,
                         &presentation.category,
@@ -449,7 +608,7 @@ pub(super) fn paint_buttons_and_menus(paint: &mut PaintEntityContext<'_>) -> boo
                     {
                         detail_theme.font_size = *size;
                     }
-                    let detail = fit_palette_text(
+                    let detail = fit_text_to_width(
                         world,
                         entity,
                         &presentation.description,
@@ -626,6 +785,9 @@ pub(super) fn paint_buttons_and_menus(paint: &mut PaintEntityContext<'_>) -> boo
         return true;
     }
     if let Some(menu) = world.get::<MenuControl>(entity) {
+        let centered_menu = world
+            .get::<UiRole>(entity)
+            .is_some_and(|role| role.0 == "chrome-mobile-menu");
         let properties_menu = world
             .get::<UiRole>(entity)
             .is_some_and(|role| matches!(role.0.as_str(), "flat-menu" | EditorRole::FLAT_MENU));
@@ -825,7 +987,17 @@ pub(super) fn paint_buttons_and_menus(paint: &mut PaintEntityContext<'_>) -> boo
                 if menu.session.open { "▴" } else { "▾" }
             )
         });
+        let normal_label = normal_label.map(|label| {
+            if centered_menu {
+                fit_text_to_width(world, entity, &label, theme, (rect.width - 12.0).max(0.0))
+            } else {
+                label
+            }
+        });
         let flat_text_width = flat_label
+            .as_ref()
+            .map(|label| measured_text_width(world, entity, label, theme));
+        let normal_text_width = normal_label
             .as_ref()
             .map(|label| measured_text_width(world, entity, label, theme));
         // Center the line box, then compensate for glyphs sitting high within it.
@@ -858,8 +1030,17 @@ pub(super) fn paint_buttons_and_menus(paint: &mut PaintEntityContext<'_>) -> boo
                     clip,
                     TextPlacement {
                         origin: [
-                            rect.x + theme.spacing.menu.padding_x,
-                            rect.y + theme.spacing.menu.padding_y,
+                            if centered_menu {
+                                rect.x
+                                    + (rect.width - normal_text_width.unwrap_or(0.0)).max(0.0) * 0.5
+                            } else {
+                                rect.x + theme.spacing.menu.padding_x
+                            },
+                            if centered_menu {
+                                flat_text_y
+                            } else {
+                                rect.y + theme.spacing.menu.padding_y
+                            },
                         ],
                         text: normal_label.unwrap_or_default(),
                     },

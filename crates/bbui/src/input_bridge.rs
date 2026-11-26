@@ -7,8 +7,10 @@ use bevy::ecs::system::SystemParam;
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{KeyCode, KeyboardInput};
 use bevy::input::mouse::{MouseButton, MouseButtonInput, MouseMotion, MouseScrollUnit, MouseWheel};
+use bevy::input::touch::{TouchInput, TouchPhase};
 use bevy::prelude::*;
 use bevy::window::{CursorLeft, CursorMoved, Ime, WindowFocused};
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
 
@@ -23,6 +25,11 @@ pub struct ImeBridgeState {
     active: HashSet<Entity>,
 }
 
+#[derive(Resource, Default)]
+pub struct TouchBridgeState {
+    active: HashMap<Entity, u64>,
+}
+
 #[derive(SystemParam)]
 pub struct InputMessages<'w, 's> {
     world_pointers: Res<'w, WorldPointerState>,
@@ -34,6 +41,8 @@ pub struct InputMessages<'w, 's> {
     keys: MessageReader<'w, 's, KeyboardInput>,
     ime: MessageReader<'w, 's, Ime>,
     focus: MessageReader<'w, 's, WindowFocused>,
+    touches: MessageReader<'w, 's, TouchInput>,
+    touch_state: ResMut<'w, TouchBridgeState>,
 }
 
 pub fn bridge_bevy_input(
@@ -95,7 +104,62 @@ pub fn bridge_bevy_input(
         alt: key_state.pressed(KeyCode::AltLeft) || key_state.pressed(KeyCode::AltRight),
         super_key: key_state.pressed(KeyCode::SuperLeft) || key_state.pressed(KeyCode::SuperRight),
     };
+    for event in messages.touches.read() {
+        let position = event.position.to_array();
+        match event.phase {
+            TouchPhase::Started if !messages.touch_state.active.contains_key(&event.window) => {
+                messages.touch_state.active.insert(event.window, event.id);
+                queue.push(UiInputEvent::PointerMove {
+                    window: event.window,
+                    position,
+                    time_seconds: now,
+                });
+                queue.push(UiInputEvent::PointerButtonWithModifiers {
+                    window: event.window,
+                    button: UiPointerButton::Primary,
+                    pressed: true,
+                    position,
+                    time_seconds: now,
+                    modifiers: UiModifiers::default(),
+                });
+            }
+            TouchPhase::Moved
+                if messages.touch_state.active.get(&event.window) == Some(&event.id) =>
+            {
+                queue.push(UiInputEvent::PointerMove {
+                    window: event.window,
+                    position,
+                    time_seconds: now,
+                });
+            }
+            TouchPhase::Ended
+                if messages.touch_state.active.get(&event.window) == Some(&event.id) =>
+            {
+                queue.push(UiInputEvent::PointerButtonWithModifiers {
+                    window: event.window,
+                    button: UiPointerButton::Primary,
+                    pressed: false,
+                    position,
+                    time_seconds: now,
+                    modifiers: UiModifiers::default(),
+                });
+                messages.touch_state.active.remove(&event.window);
+            }
+            TouchPhase::Canceled
+                if messages.touch_state.active.get(&event.window) == Some(&event.id) =>
+            {
+                queue.push(UiInputEvent::PointerCancel {
+                    window: event.window,
+                });
+                messages.touch_state.active.remove(&event.window);
+            }
+            _ => {}
+        }
+    }
     for event in messages.buttons.read() {
+        if messages.touch_state.active.contains_key(&event.window) {
+            continue;
+        }
         if messages.world_pointers.hover_target(event.window).is_some()
             || capture.active.as_ref().is_some_and(|active| {
                 active.physical_window == event.window && active.window != event.window
@@ -251,6 +315,7 @@ pub fn bridge_bevy_input(
     for event in messages.focus.read() {
         if !event.focused {
             ime_state.active.remove(&event.window);
+            messages.touch_state.active.remove(&event.window);
             queue.push(UiInputEvent::WindowBlur {
                 window: event.window,
             });
@@ -279,10 +344,12 @@ mod tests {
             .add_message::<KeyboardInput>()
             .add_message::<Ime>()
             .add_message::<WindowFocused>()
+            .add_message::<TouchInput>()
             .init_resource::<Time>()
             .init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<WorldPointerState>()
             .init_resource::<ImeBridgeState>()
+            .init_resource::<TouchBridgeState>()
             .init_resource::<CursorCaptureState>()
             .add_systems(
                 Update,
@@ -376,5 +443,74 @@ mod tests {
                 .original_position,
             Some(Vec2::new(10.0, 10.0))
         );
+    }
+
+    #[test]
+    fn primary_touch_routes_click_and_ignores_second_finger() {
+        let mut app = App::new();
+        app.add_plugins(CorePlugin)
+            .add_message::<CursorMoved>()
+            .add_message::<MouseMotion>()
+            .add_message::<CursorLeft>()
+            .add_message::<MouseButtonInput>()
+            .add_message::<MouseWheel>()
+            .add_message::<KeyboardInput>()
+            .add_message::<Ime>()
+            .add_message::<WindowFocused>()
+            .add_message::<TouchInput>()
+            .init_resource::<Time>()
+            .init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<WorldPointerState>()
+            .init_resource::<ImeBridgeState>()
+            .init_resource::<TouchBridgeState>()
+            .init_resource::<CursorCaptureState>()
+            .add_systems(
+                Update,
+                bridge_bevy_input
+                    .in_set(UiSystems::Input)
+                    .before(bbui_core::process_ui_input),
+            );
+        let window = app.world_mut().spawn(Window::default()).id();
+        let target = app
+            .world_mut()
+            .spawn((
+                UiNode,
+                UiHitBox {
+                    window: Some(window),
+                    rect: UiRect::new(0.0, 0.0, 100.0, 100.0),
+                    clip: None,
+                    z_index: 0,
+                },
+            ))
+            .id();
+        for id in [1, 2] {
+            app.world_mut().write_message(TouchInput {
+                phase: TouchPhase::Started,
+                position: Vec2::new(20.0, 20.0),
+                window,
+                force: None,
+                id,
+            });
+        }
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<TouchBridgeState>()
+                .active
+                .get(&window),
+            Some(&1)
+        );
+        app.world_mut().write_message(TouchInput {
+            phase: TouchPhase::Ended,
+            position: Vec2::new(20.0, 20.0),
+            window,
+            force: None,
+            id: 1,
+        });
+        app.update();
+        assert!(app.world().resource::<TouchBridgeState>().active.is_empty());
+        assert!(app.world().resource::<UiRoutedEvents>().events.iter().any(|event| {
+            matches!(event, UiRoutedEvent::Click { target: clicked, .. } if *clicked == target)
+        }));
     }
 }

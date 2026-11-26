@@ -103,6 +103,43 @@ pub(in crate::actions) fn measured_text_width(
     width
 }
 
+pub(in crate::actions) fn fit_text_to_width(
+    world: &mut World,
+    entity: Entity,
+    text: &str,
+    theme: &Theme,
+    available: f32,
+) -> String {
+    if measured_text_width(world, entity, text, theme) <= available {
+        return text.to_owned();
+    }
+    if measured_text_width(world, entity, "…", theme) > available {
+        return String::new();
+    }
+    let boundaries: Vec<_> = text
+        .char_indices()
+        .map(|(index, _)| index)
+        .chain(std::iter::once(text.len()))
+        .collect();
+    let mut low = 0;
+    let mut high = boundaries.len() - 1;
+    while low < high {
+        let mid = (low + high).div_ceil(2);
+        if measured_text_width(
+            world,
+            entity,
+            &format!("{}…", &text[..boundaries[mid]]),
+            theme,
+        ) <= available
+        {
+            low = mid;
+        } else {
+            high = mid - 1;
+        }
+    }
+    format!("{}…", &text[..boundaries[low]])
+}
+
 pub(in crate::actions) fn is_visible(world: &World, entity: Entity) -> bool {
     let mut current = Some(entity);
     let mut remaining_entities = world.entities().len();

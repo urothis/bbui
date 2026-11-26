@@ -101,7 +101,7 @@ fn graph_pane() -> WidgetNode {
     .with_padding(UiEdges::all(5.0))
 }
 
-fn scene_pane() -> WidgetNode {
+pub fn scene_pane() -> WidgetNode {
     WidgetNode::column([
         WidgetNode::text_field("Search", "")
             .with_width(UiLength::Fill(1.0))
@@ -180,7 +180,7 @@ fn properties_pane() -> WidgetNode {
     .with_padding(UiEdges::all(8.0))
 }
 
-fn console_pane() -> WidgetNode {
+pub fn console_pane() -> WidgetNode {
     WidgetNode::column([
         WidgetNode::label("[10:42:18]  Loaded scene").with_height(UiLength::Px(19.0)),
         WidgetNode::label("[10:42:19]  Material.001 compiled").with_height(UiLength::Px(19.0)),

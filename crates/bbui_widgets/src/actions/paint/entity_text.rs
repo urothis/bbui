@@ -95,13 +95,27 @@ pub(super) fn paint_text_controls(paint: &mut PaintEntityContext<'_>) -> bool {
             || world.get::<TextArea>(entity).is_some()
             || world.get::<Dropdown>(entity).is_some();
         if !composite {
-            let label_text = label.text.clone();
+            let full_text = label.text.clone();
+            let ellipsis = world.get::<UiRole>(entity).is_some_and(|role| {
+                matches!(
+                    role.0.as_str(),
+                    "ellipsis-label" | "centered-ellipsis-label"
+                )
+            });
+            let label_text = if ellipsis {
+                fit_text_to_width(world, entity, &full_text, theme, rect.width.max(0.0))
+            } else {
+                full_text
+            };
             let property_label = world
                 .get::<UiRole>(entity)
                 .is_some_and(|role| role.0 == "property-label");
-            let centered_label = world
-                .get::<UiRole>(entity)
-                .is_some_and(|role| role.0 == "centered-label");
+            let centered_label = world.get::<UiRole>(entity).is_some_and(|role| {
+                matches!(
+                    role.0.as_str(),
+                    "centered-label" | "centered-ellipsis-label"
+                )
+            });
             let label_x = if property_label {
                 rect.x + rect.width - measured_text_width(world, entity, &label_text, theme) - 2.0
             } else if centered_label {

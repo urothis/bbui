@@ -20,7 +20,7 @@ unimplemented = "deny"
 exit = "deny"
 
 [workspace.dependencies]
-bevy = { version = "=0.20.1", default-features = false, features = ["ui_bevy_render", "bevy_winit", "bevy_pbr", "x11", "wayland", "system_clipboard", "png", "jpeg", "webp"] }
+bevy = { version = "=0.20.1", default-features = false, features = ["ui_bevy_render", "bevy_winit", "bevy_pbr", "x11", "wayland", "png", "jpeg", "webp"] }
 bevy_app = "=0.20.1"
 bevy_ecs = "=0.20.1"
 bevy_time = "=0.20.1"
