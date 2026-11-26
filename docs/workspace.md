@@ -12,6 +12,8 @@ Run `cargo run -p bbui --example workspace` to use the control in a native Bevy 
 
 For a composed editor, run `cargo run -p bbui --example editor_workspace`. It places a real node graph beside Scene and Properties panes, with a Console below the graph. F1–F4 reopen panes, F5 saves the layout, and F9 restores it. The [dark](visuals/examples/editor-workspace-dark.png) and [light](visuals/examples/editor-workspace-light.png) captures show the running example.
 
+For a real 3D viewport inside a dock pane, run `cargo run -p bbui --example docked_scene`. The camera follows the scene pane's clipped layout rectangle in physical pixels, including DPI and splitter changes. Its viewport turns off when another tab is active. Right drag orbits, middle drag pans, and the wheel zooms while the pointer is inside the pane. The [dark](visuals/examples/docked-scene-dark.png) and [light](visuals/examples/docked-scene-light.png) captures show the example.
+
 ## Create panes
 
 Build a `WorkspaceLayout`, register each pane's title and UI builder, then insert `Workspace` as a resource. The builder receives a parent BBUI entity and mounts the pane UI under it. The [workspace example](../crates/bbui/examples/workspace.rs) shows a complete setup with tabs, a split, and a grid.
