@@ -32,6 +32,8 @@ define_class!(
 
     unsafe impl NSObjectProtocol for MenuTarget {}
     unsafe impl NSMenuItemValidation for MenuTarget {
+        // The Objective-C protocol requires this selector's spelling.
+        #[allow(non_snake_case)]
         #[unsafe(method(validateMenuItem:))]
         fn validateMenuItem(&self, sender: &NSMenuItem) -> bool {
             COMMAND_IDS.with_borrow(|ids| ids.get(&sender.tag()).is_some_and(|command| command.enabled))
