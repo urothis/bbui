@@ -41,7 +41,7 @@ pub struct InputMessages<'w, 's> {
     buttons: MessageReader<'w, 's, MouseButtonInput>,
     wheels: MessageReader<'w, 's, MouseWheel>,
     #[cfg(target_os = "macos")]
-    trackpad: Res<'w, crate::native_trackpad::MacTrackpadFrame>,
+    trackpad: Option<Res<'w, crate::native_trackpad::MacTrackpadFrame>>,
     keys: MessageReader<'w, 's, KeyboardInput>,
     ime: MessageReader<'w, 's, Ime>,
     focus: MessageReader<'w, 's, WindowFocused>,
@@ -207,7 +207,12 @@ pub fn bridge_bevy_input(
     }
     for event in messages.wheels.read() {
         #[cfg(target_os = "macos")]
-        if event.unit == MouseScrollUnit::Pixel && messages.trackpad.available {
+        if event.unit == MouseScrollUnit::Pixel
+            && messages
+                .trackpad
+                .as_ref()
+                .is_some_and(|trackpad| trackpad.available)
+        {
             // AppKit supplied the positioned, phased form of this wheel sample.
             continue;
         }
