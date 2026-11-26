@@ -104,11 +104,13 @@ fn surface_rect(layout: &UiLayoutResult) -> Option<Rect> {
 }
 
 fn sync_scene_viewport(
-    window: Single<&Window, With<PrimaryWindow>>,
+    window: Single<(Entity, &Window), With<PrimaryWindow>>,
     workspace: Res<Workspace>,
+    modals: Res<ModalDialogs>,
     surfaces: Query<(&UiKey, &UiLayoutResult)>,
     mut camera: Single<&mut Camera, With<DockedSceneCamera>>,
 ) {
+    let (window_entity, window) = *window;
     let active = workspace
         .layout()
         .group("scene-tabs")
@@ -131,7 +133,9 @@ fn sync_scene_viewport(
             ),
         )
     });
-    camera.is_active = camera.viewport.is_some();
+    // This example renders the scene directly to the window after the 2D UI.
+    // A native modal must remain visible instead of being covered by that pass.
+    camera.is_active = camera.viewport.is_some() && !modals.is_open(window_entity);
 }
 
 // Bevy injects these independent event, layout, and camera resources as system parameters.
@@ -171,8 +175,9 @@ fn scene_input(
         || focus
             .state(window_entity)
             .is_some_and(|state| state.captured.is_some());
-    if !active || modals.is_open(window_entity) {
+    if !active || ui_busy {
         orbit.drag = None;
+        orbit.previous_pointer = None;
     }
     for event in buttons.read() {
         if event.window != window_entity {
