@@ -1,3 +1,4 @@
+pub mod chrome;
 pub mod commands;
 pub mod input;
 pub mod integration;

@@ -3,6 +3,8 @@
 use bevy::prelude::*;
 
 mod accessibility;
+pub mod chrome;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod clipboard_bridge;
 mod cursor_bridge;
 mod input_bridge;
@@ -74,6 +76,7 @@ impl Plugin for BbuiPlugin {
                 .in_set(bbui_core::UiSystems::Style)
                 .before(bbui_text::measure_text_intrinsics),
         );
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         app.add_systems(
             Update,
             clipboard_bridge::process_clipboard_requests
@@ -81,6 +84,7 @@ impl Plugin for BbuiPlugin {
                 .after(bbui_widgets::actions::process_routed_widget_events),
         );
         app.init_resource::<input_bridge::ImeBridgeState>();
+        app.init_resource::<input_bridge::TouchBridgeState>();
         app.init_resource::<cursor_bridge::CursorCaptureState>();
         app.init_resource::<world_input::WorldPointerState>();
         app.init_resource::<Assets<Mesh>>();
@@ -109,6 +113,12 @@ impl Plugin for BbuiPlugin {
 pub mod prelude {
     pub use crate::BbuiPlugin;
     pub use crate::bbui;
+    pub use crate::chrome::{
+        ChromeAction, DesktopChrome, DesktopChromeAppearance, DesktopChromeSlots, MobileChrome,
+        MobileChromeAppearance, MobileChromeSlots, MobileSheetPresentation,
+        apply_native_chrome_action, chrome_action, compact_chrome, compact_chrome_at,
+        handle_chrome_press,
+    };
     pub use crate::modal::{
         ModalAction, ModalDialog, ModalDialogs, ModalDismissal, ModalError, ModalEvent,
     };
