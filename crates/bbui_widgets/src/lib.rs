@@ -9,6 +9,7 @@ use std::collections::HashMap;
 pub mod actions;
 pub mod canvas;
 pub mod collections;
+pub mod commands;
 pub mod controls;
 pub mod declarative;
 pub mod editor_chrome;
@@ -36,6 +37,11 @@ pub use canvas::{Canvas, CanvasObject, CanvasShape};
 pub use collections::{
     DataTable, ListItem, ListModel, ListSelection, PreviewGrid, PreviewGridItem, TableColumn,
     TableRow, TreeModel, TreeNode,
+};
+pub use commands::{
+    Command, CommandError, CommandPalette, CommandPaletteAppearance, CommandPaletteFooterHint,
+    CommandPaletteSession, CommandPaletteSlots, CommandRegistry, CommandShortcut,
+    PaletteActionText,
 };
 pub use controls::{
     Button, Checkbox, CheckboxValue, Dropdown, IconButton, IconButtonAsset, IconButtonAssetState,

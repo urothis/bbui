@@ -1,5 +1,52 @@
 use super::*;
 
+fn palette_style_color(
+    style: &UiInlineStyle,
+    property: UiStyleProperty,
+    theme: &Theme,
+    fallback: Rgba,
+) -> Rgba {
+    match style.0.get(&property) {
+        Some(UiStyleValue::Color(color)) => *color,
+        Some(UiStyleValue::ColorToken(token)) => theme.color(*token),
+        _ => fallback,
+    }
+}
+
+fn fit_palette_text(
+    world: &mut World,
+    entity: Entity,
+    text: &str,
+    theme: &Theme,
+    available: f32,
+) -> String {
+    if measured_text_width(world, entity, text, theme) <= available {
+        return text.to_owned();
+    }
+    let boundaries: Vec<_> = text
+        .char_indices()
+        .map(|(index, _)| index)
+        .chain(std::iter::once(text.len()))
+        .collect();
+    let mut low = 0;
+    let mut high = boundaries.len() - 1;
+    while low < high {
+        let mid = (low + high).div_ceil(2);
+        if measured_text_width(
+            world,
+            entity,
+            &format!("{}…", &text[..boundaries[mid]]),
+            theme,
+        ) <= available
+        {
+            low = mid;
+        } else {
+            high = mid - 1;
+        }
+    }
+    format!("{}…", &text[..boundaries[low]])
+}
+
 pub(super) fn paint_buttons_and_menus(paint: &mut PaintEntityContext<'_>) -> bool {
     let world = &mut *paint.world;
     let entity = paint.entity;
@@ -14,6 +61,7 @@ pub(super) fn paint_buttons_and_menus(paint: &mut PaintEntityContext<'_>) -> boo
 
     if let Some(button) = world.get::<Button>(entity).cloned() {
         let role = world.get::<UiRole>(entity).map(|role| role.0.clone());
+        let palette_action = role.as_deref() == Some("command-palette-action");
         if matches!(
             role.as_deref(),
             Some("workspace-tab" | "workspace-tab-close" | "workspace-splitter")
@@ -85,29 +133,370 @@ pub(super) fn paint_buttons_and_menus(paint: &mut PaintEntityContext<'_>) -> boo
                 color: background,
             },
         ));
-        camera_items.push(item(
-            clip,
-            z.saturating_add(1),
-            styled_text_primitive_for_entity(
-                world,
-                entity,
+        if palette_action
+            && world
+                .get_resource::<UiFocus>()
+                .and_then(|focus| focus.state(layout.window))
+                .is_some_and(|state| state.focused == Some(entity))
+        {
+            camera_items.push(item(
                 clip,
-                TextPlacement {
-                    origin: [
-                        rect.x + theme.spacing.control.padding_x,
-                        rect.y + theme.spacing.control.padding_y,
-                    ],
-                    text: button.label.clone(),
+                z.saturating_add(2),
+                Primitive::RoundedBorder {
+                    rect: ClipRect::from(rect),
+                    radius: theme.corner_radius,
+                    width: 2.0,
+                    color: theme.color(ThemeColorToken::Accent),
                 },
-                if !enabled || !button.enabled {
-                    theme.color(ThemeColorToken::DisabledText)
+            ));
+        }
+        let origin = [
+            rect.x
+                + if palette_action {
+                    world
+                        .get::<UiLayoutNode>(entity)
+                        .map_or(12.0, |node| node.padding.left)
                 } else {
-                    theme.text
+                    theme.spacing.control.padding_x
                 },
-                theme,
-                false,
-            ),
-        ));
+            rect.y
+                + if palette_action {
+                    if rect.height >= 52.0
+                        && world
+                            .get::<crate::commands::PaletteActionText>(entity)
+                            .is_some_and(|text| {
+                                !text.category.is_empty() || !text.description.is_empty()
+                            })
+                    {
+                        10.0
+                    } else {
+                        ((rect.height - theme.font_size * theme.line_height) * 0.5).max(0.0)
+                    }
+                } else {
+                    theme.spacing.control.padding_y
+                },
+        ];
+        let text_color = if !enabled || !button.enabled {
+            theme.color(ThemeColorToken::DisabledText)
+        } else {
+            theme.text
+        };
+        if palette_action
+            && let Some(presentation) = world
+                .get::<crate::commands::PaletteActionText>(entity)
+                .cloned()
+        {
+            let mut x = origin[0];
+            if let Some(icon) = presentation.icon.as_deref().filter(|icon| !icon.is_empty()) {
+                camera_items.push(item(
+                    clip,
+                    z.saturating_add(1),
+                    styled_text_primitive_for_entity(
+                        world,
+                        entity,
+                        clip,
+                        TextPlacement {
+                            origin: [x, origin[1]],
+                            text: icon.to_owned(),
+                        },
+                        theme.color(presentation.icon_color),
+                        theme,
+                        false,
+                    ),
+                ));
+                x += presentation.icon_width;
+            }
+            let right_edge = rect.x + rect.width - presentation.reserved_trailing_width;
+            let badge_left = if let Some(hint) = presentation.shortcut_hint.as_deref() {
+                let mut hint_theme = theme.clone();
+                if let Some(UiStyleValue::Scalar(size)) = presentation
+                    .shortcut_style
+                    .0
+                    .get(&UiStyleProperty::FontSize)
+                    && size.is_finite()
+                    && *size > 0.0
+                {
+                    hint_theme.font_size = *size;
+                }
+                if let Some(UiStyleValue::Scalar(height)) = presentation
+                    .shortcut_style
+                    .0
+                    .get(&UiStyleProperty::LineHeight)
+                    && height.is_finite()
+                    && *height > 0.0
+                {
+                    hint_theme.line_height = *height;
+                }
+                let badge_padding = match presentation
+                    .shortcut_surface_style
+                    .0
+                    .get(&UiStyleProperty::Padding)
+                {
+                    Some(UiStyleValue::Edges(edges)) => *edges,
+                    _ => bbui_layout::UiEdges::horizontal_vertical(8.0, 5.0),
+                };
+                let max_width = presentation
+                    .shortcut_max_width
+                    .max(34.0)
+                    .min((rect.width * 0.42).max(34.0));
+                let text_width = measured_text_width(world, entity, hint, &hint_theme);
+                let badge_width = (text_width + badge_padding.left + badge_padding.right + 2.0)
+                    .clamp(34.0, max_width);
+                let badge_y = if rect.height >= 52.0
+                    && (!presentation.category.is_empty() || !presentation.description.is_empty())
+                {
+                    rect.y + 8.0
+                } else {
+                    rect.y + (rect.height - 25.0) * 0.5
+                };
+                let badge_rect = Rect::new(right_edge - badge_width, badge_y, badge_width, 25.0);
+                let radius = match presentation
+                    .shortcut_surface_style
+                    .0
+                    .get(&UiStyleProperty::CornerRadius)
+                {
+                    Some(UiStyleValue::Scalar(radius)) => *radius,
+                    _ => 4.0,
+                };
+                camera_items.push(item(
+                    clip,
+                    z.saturating_add(1),
+                    Primitive::RoundedRect {
+                        rect: ClipRect::from(badge_rect),
+                        radius,
+                        color: palette_style_color(
+                            &presentation.shortcut_surface_style,
+                            UiStyleProperty::Background,
+                            base_theme,
+                            base_theme.background,
+                        ),
+                    },
+                ));
+                let border_width = match presentation
+                    .shortcut_surface_style
+                    .0
+                    .get(&UiStyleProperty::BorderWidth)
+                {
+                    Some(UiStyleValue::Scalar(width)) => *width,
+                    _ => 0.0,
+                };
+                if border_width > 0.0 {
+                    camera_items.push(item(
+                        clip,
+                        z.saturating_add(2),
+                        Primitive::RoundedBorder {
+                            rect: ClipRect::from(badge_rect),
+                            radius,
+                            width: border_width,
+                            color: palette_style_color(
+                                &presentation.shortcut_surface_style,
+                                UiStyleProperty::BorderColor,
+                                base_theme,
+                                base_theme.border,
+                            ),
+                        },
+                    ));
+                }
+                let visible_hint = fit_palette_text(
+                    world,
+                    entity,
+                    hint,
+                    &hint_theme,
+                    (badge_width - badge_padding.left - badge_padding.right).max(1.0),
+                );
+                let hint_width = measured_text_width(world, entity, &visible_hint, &hint_theme);
+                camera_items.push(item(
+                    clip,
+                    z.saturating_add(3),
+                    styled_text_primitive_for_entity(
+                        world,
+                        entity,
+                        clip,
+                        TextPlacement {
+                            origin: [
+                                badge_rect.x + (badge_width - hint_width) * 0.5,
+                                badge_rect.y
+                                    + (badge_rect.height
+                                        - hint_theme.font_size * hint_theme.line_height)
+                                        * 0.5,
+                            ],
+                            text: visible_hint,
+                        },
+                        palette_style_color(
+                            &presentation.shortcut_style,
+                            UiStyleProperty::Foreground,
+                            base_theme,
+                            base_theme.text_muted,
+                        ),
+                        &hint_theme,
+                        false,
+                    ),
+                ));
+                badge_rect.x - 10.0
+            } else {
+                right_edge
+            };
+            let available = (badge_left - x).max(0.0);
+            let visible = fit_palette_text(world, entity, &button.label, theme, available);
+            let query = presentation.query.to_ascii_lowercase();
+            let label_lower = visible.to_ascii_lowercase();
+            let match_range = (!query.is_empty())
+                .then(|| label_lower.find(&query))
+                .flatten()
+                .map(|start| (start, start + query.len()));
+            if let Some((start, end)) = match_range {
+                for (part, highlight) in [
+                    (&visible[..start], false),
+                    (&visible[start..end], true),
+                    (&visible[end..], false),
+                ] {
+                    if part.is_empty() {
+                        continue;
+                    }
+                    camera_items.push(item(
+                        clip,
+                        z.saturating_add(1),
+                        styled_text_primitive_for_entity(
+                            world,
+                            entity,
+                            clip,
+                            TextPlacement {
+                                origin: [x, origin[1]],
+                                text: part.to_owned(),
+                            },
+                            if highlight {
+                                theme.color(presentation.highlight_color)
+                            } else {
+                                text_color
+                            },
+                            theme,
+                            false,
+                        ),
+                    ));
+                    x += measured_text_width(world, entity, part, theme);
+                }
+            } else {
+                camera_items.push(item(
+                    clip,
+                    z.saturating_add(1),
+                    styled_text_primitive_for_entity(
+                        world,
+                        entity,
+                        clip,
+                        TextPlacement {
+                            origin: [x, origin[1]],
+                            text: visible,
+                        },
+                        text_color,
+                        theme,
+                        false,
+                    ),
+                ));
+            }
+            if rect.height >= 52.0
+                && (!presentation.category.is_empty() || !presentation.description.is_empty())
+            {
+                let mut meta_x = origin[0]
+                    + if presentation.icon.is_some() {
+                        presentation.icon_width
+                    } else {
+                        0.0
+                    };
+                let meta_y = rect.y + 35.0;
+                let mut category_theme = theme.clone();
+                if let Some(UiStyleValue::Scalar(size)) = presentation
+                    .category_style
+                    .0
+                    .get(&UiStyleProperty::FontSize)
+                {
+                    category_theme.font_size = *size;
+                }
+                if !presentation.category.is_empty() {
+                    let category = fit_palette_text(
+                        world,
+                        entity,
+                        &presentation.category,
+                        &category_theme,
+                        (right_edge - meta_x).max(0.0),
+                    );
+                    camera_items.push(item(
+                        clip,
+                        z.saturating_add(1),
+                        styled_text_primitive_for_entity(
+                            world,
+                            entity,
+                            clip,
+                            TextPlacement {
+                                origin: [meta_x, meta_y],
+                                text: category.clone(),
+                            },
+                            palette_style_color(
+                                &presentation.category_style,
+                                UiStyleProperty::Foreground,
+                                base_theme,
+                                base_theme.text_muted,
+                            ),
+                            &category_theme,
+                            false,
+                        ),
+                    ));
+                    meta_x += measured_text_width(world, entity, &category, &category_theme) + 9.0;
+                }
+                if !presentation.description.is_empty() && meta_x < right_edge {
+                    let mut detail_theme = theme.clone();
+                    if let Some(UiStyleValue::Scalar(size)) =
+                        presentation.detail_style.0.get(&UiStyleProperty::FontSize)
+                    {
+                        detail_theme.font_size = *size;
+                    }
+                    let detail = fit_palette_text(
+                        world,
+                        entity,
+                        &presentation.description,
+                        &detail_theme,
+                        (right_edge - meta_x).max(0.0),
+                    );
+                    camera_items.push(item(
+                        clip,
+                        z.saturating_add(1),
+                        styled_text_primitive_for_entity(
+                            world,
+                            entity,
+                            clip,
+                            TextPlacement {
+                                origin: [meta_x, meta_y],
+                                text: detail,
+                            },
+                            palette_style_color(
+                                &presentation.detail_style,
+                                UiStyleProperty::Foreground,
+                                base_theme,
+                                base_theme.text_muted,
+                            ),
+                            &detail_theme,
+                            false,
+                        ),
+                    ));
+                }
+            }
+        } else {
+            camera_items.push(item(
+                clip,
+                z.saturating_add(1),
+                styled_text_primitive_for_entity(
+                    world,
+                    entity,
+                    clip,
+                    TextPlacement {
+                        origin,
+                        text: button.label.clone(),
+                    },
+                    text_color,
+                    theme,
+                    false,
+                ),
+            ));
+        }
         return true;
     }
     if let Some(button) = world.get::<IconButton>(entity).cloned() {
