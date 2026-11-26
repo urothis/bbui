@@ -403,7 +403,7 @@ impl NumericField {
                 NumericValue::Unsigned(value) => {
                     expression::evaluate_exact_u64(input, value).map(NumericValue::Unsigned)
                 }
-                NumericValue::Float(_) => unreachable!(),
+                NumericValue::Float(_) => Err(Error::Domain),
             };
             let value = match result {
                 Ok(value) => value,
@@ -536,7 +536,7 @@ impl NumericField {
             return match value {
                 NumericValue::Integer(value) => value.to_string(),
                 NumericValue::Unsigned(value) => value.to_string(),
-                NumericValue::Float(_) => unreachable!(),
+                NumericValue::Float(value) => format_float(value, self.precision),
             };
         }
         match self.kind {

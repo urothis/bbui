@@ -11,11 +11,14 @@ use bevy::window::{PrimaryWindow, WindowResolution};
 mod capture;
 
 fn install_ui(world: &mut World) {
-    let window = world
+    let Ok(window) = world
         .query_filtered::<Entity, With<PrimaryWindow>>()
         .single(world)
-        .expect("primary window");
-    let root = WidgetTree::new(
+    else {
+        eprintln!("exact numeric example requires a primary window");
+        return;
+    };
+    let Ok(root) = WidgetTree::new(
         WidgetNode::column([
             WidgetNode::label("EXACT NUMERIC FIELDS").with_height(UiLength::Px(36.0)),
             WidgetNode::label("Full-width signed integers and unsigned seeds retain every digit."),
@@ -57,9 +60,14 @@ fn install_ui(world: &mut World) {
         .with_gap(10.0)
         .with_padding(UiEdges::all(24.0)),
     )
-    .spawn(world, None)
-    .expect("numeric showcase widgets");
-    let size = world.get::<Window>(window).unwrap().resolution.size();
+    .spawn(world, None) else {
+        eprintln!("failed to mount exact numeric widgets");
+        return;
+    };
+    let Some(window_data) = world.get::<Window>(window) else {
+        return;
+    };
+    let size = window_data.resolution.size();
     world.entity_mut(root).insert(UiLayoutRoot::new(
         window,
         Rect::new(0.0, 0.0, size.x, size.y),

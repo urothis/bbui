@@ -5,10 +5,15 @@ use std::hint::black_box;
 
 pub fn bench(c: &mut Criterion) {
     c.bench_function("numeric/exact_i64_expression", |b| {
-        b.iter(|| evaluate_exact_i64(black_box("(x - 1) * 2"), black_box(i64::MAX - 2)).unwrap())
+        b.iter(|| {
+            black_box(evaluate_exact_i64(
+                black_box("(x - 1) * 2"),
+                black_box(i64::MAX / 2 - 2),
+            ))
+        })
     });
     c.bench_function("numeric/exact_u64_expression", |b| {
-        b.iter(|| evaluate_exact_u64(black_box("x - 1"), black_box(u64::MAX)).unwrap())
+        b.iter(|| black_box(evaluate_exact_u64(black_box("x - 1"), black_box(u64::MAX))))
     });
     let mut field = NumericField::unsigned(u64::MAX - 2);
     c.bench_function("numeric/exact_u64_step", |b| {
