@@ -35,7 +35,13 @@ pub(super) fn numeric_scrub_commits_and_requests_cursor_capture_once() {
         },
     ];
     app.update();
-    assert_eq!(app.world().get::<NumericField>(target).unwrap().value, 1.5);
+    assert_eq!(
+        app.world()
+            .get::<NumericField>(target)
+            .unwrap()
+            .value_projection(),
+        1.5
+    );
     let requests: Vec<_> = app
         .world_mut()
         .resource_mut::<CursorCaptureRequestQueue>()
@@ -127,7 +133,11 @@ pub(super) fn slider_routes_drag_keyboard_wheel_cancellation_and_numeric_actions
     ];
     app.update();
     app.world_mut().resource_mut::<UiRoutedEvents>().clear();
-    let dragged_value = app.world().get::<Slider>(target).unwrap().value;
+    let dragged_value = app
+        .world()
+        .get::<Slider>(target)
+        .unwrap()
+        .value_projection();
     assert!(dragged_value > 0.8 && dragged_value <= 1.0);
     assert!(app.world().resource::<WidgetEventQueue>().0.iter().any(
             |event| matches!(event, WidgetEvent::NumericCommitted { target: event_target, before, after }
@@ -152,7 +162,13 @@ pub(super) fn slider_routes_drag_keyboard_wheel_cancellation_and_numeric_actions
         },
     )];
     app.update();
-    assert_eq!(app.world().get::<Slider>(target).unwrap().value, 0.2);
+    assert_eq!(
+        app.world()
+            .get::<Slider>(target)
+            .unwrap()
+            .value_projection(),
+        0.2
+    );
     app.world_mut().resource_mut::<UiRoutedEvents>().events = vec![key(
         UiKeyCode::Z,
         UiModifiers {
@@ -163,41 +179,82 @@ pub(super) fn slider_routes_drag_keyboard_wheel_cancellation_and_numeric_actions
     )];
     app.update();
     assert_eq!(
-        app.world().get::<Slider>(target).unwrap().value,
+        app.world()
+            .get::<Slider>(target)
+            .unwrap()
+            .value_projection(),
         dragged_value
     );
 
     app.world_mut().resource_mut::<UiRoutedEvents>().events =
         vec![key(UiKeyCode::Home, UiModifiers::default())];
     app.update();
-    assert_eq!(app.world().get::<Slider>(target).unwrap().value, 0.0);
+    assert_eq!(
+        app.world()
+            .get::<Slider>(target)
+            .unwrap()
+            .value_projection(),
+        0.0
+    );
     app.world_mut().resource_mut::<UiRoutedEvents>().events =
         vec![key(UiKeyCode::ArrowRight, UiModifiers::default())];
     app.update();
-    assert_eq!(app.world().get::<Slider>(target).unwrap().value, 0.1);
+    assert_eq!(
+        app.world()
+            .get::<Slider>(target)
+            .unwrap()
+            .value_projection(),
+        0.1
+    );
     app.world_mut().resource_mut::<UiRoutedEvents>().events =
         vec![key(UiKeyCode::End, UiModifiers::default())];
     app.update();
-    assert_eq!(app.world().get::<Slider>(target).unwrap().value, 1.0);
+    assert_eq!(
+        app.world()
+            .get::<Slider>(target)
+            .unwrap()
+            .value_projection(),
+        1.0
+    );
 
     app.world_mut().resource_mut::<UiRoutedEvents>().clear();
     app.world_mut()
         .resource_mut::<WidgetActionQueue>()
         .push(WidgetAction::new(target, WidgetActionKind::SetNumber(0.5)));
     app.update();
-    assert_eq!(app.world().get::<Slider>(target).unwrap().value, 0.5);
+    assert_eq!(
+        app.world()
+            .get::<Slider>(target)
+            .unwrap()
+            .value_projection(),
+        0.5
+    );
     app.world_mut().resource_mut::<UiRoutedEvents>().clear();
     app.world_mut()
         .resource_mut::<WidgetActionQueue>()
         .push(WidgetAction::new(target, WidgetActionKind::StepNumber(2)));
     app.update();
-    assert!((app.world().get::<Slider>(target).unwrap().value - 0.7).abs() < 1e-9);
+    assert!(
+        (app.world()
+            .get::<Slider>(target)
+            .unwrap()
+            .value_projection()
+            - 0.7)
+            .abs()
+            < 1e-9
+    );
     app.world_mut().resource_mut::<UiRoutedEvents>().clear();
     app.world_mut()
         .resource_mut::<WidgetActionQueue>()
         .push(WidgetAction::new(target, WidgetActionKind::ResetNumber));
     app.update();
-    assert_eq!(app.world().get::<Slider>(target).unwrap().value, 0.2);
+    assert_eq!(
+        app.world()
+            .get::<Slider>(target)
+            .unwrap()
+            .value_projection(),
+        0.2
+    );
     app.world_mut().resource_mut::<UiRoutedEvents>().clear();
     app.world_mut()
         .resource_mut::<WidgetActionQueue>()
@@ -216,10 +273,22 @@ pub(super) fn slider_routes_drag_keyboard_wheel_cancellation_and_numeric_actions
         },
     }];
     app.update();
-    assert!((app.world().get::<Slider>(target).unwrap().value - 0.6).abs() < 1e-9);
+    assert!(
+        (app.world()
+            .get::<Slider>(target)
+            .unwrap()
+            .value_projection()
+            - 0.6)
+            .abs()
+            < 1e-9
+    );
     app.world_mut().resource_mut::<UiRoutedEvents>().clear();
 
-    let before_cancel = app.world().get::<Slider>(target).unwrap().value;
+    let before_cancel = app
+        .world()
+        .get::<Slider>(target)
+        .unwrap()
+        .value_projection();
     app.world_mut().resource_mut::<UiRoutedEvents>().events = vec![
         UiRoutedEvent::PointerDown {
             window,
@@ -238,7 +307,10 @@ pub(super) fn slider_routes_drag_keyboard_wheel_cancellation_and_numeric_actions
     ];
     app.update();
     assert_eq!(
-        app.world().get::<Slider>(target).unwrap().value,
+        app.world()
+            .get::<Slider>(target)
+            .unwrap()
+            .value_projection(),
         before_cancel
     );
     assert!(app.world().resource::<WidgetEventQueue>().0.iter().any(
@@ -251,7 +323,10 @@ pub(super) fn slider_routes_drag_keyboard_wheel_cancellation_and_numeric_actions
         vec![key(UiKeyCode::End, UiModifiers::default())];
     app.update();
     assert_eq!(
-        app.world().get::<Slider>(target).unwrap().value,
+        app.world()
+            .get::<Slider>(target)
+            .unwrap()
+            .value_projection(),
         before_cancel
     );
     app.world_mut()
@@ -259,7 +334,10 @@ pub(super) fn slider_routes_drag_keyboard_wheel_cancellation_and_numeric_actions
         .push(WidgetAction::new(target, WidgetActionKind::SetNumber(0.1)));
     app.update();
     assert_eq!(
-        app.world().get::<Slider>(target).unwrap().value,
+        app.world()
+            .get::<Slider>(target)
+            .unwrap()
+            .value_projection(),
         before_cancel
     );
 
@@ -270,7 +348,10 @@ pub(super) fn slider_routes_drag_keyboard_wheel_cancellation_and_numeric_actions
         .push(WidgetAction::new(target, WidgetActionKind::StepNumber(1)));
     app.update();
     assert_eq!(
-        app.world().get::<Slider>(target).unwrap().value,
+        app.world()
+            .get::<Slider>(target)
+            .unwrap()
+            .value_projection(),
         before_cancel
     );
 }
@@ -475,11 +556,32 @@ pub(super) fn numeric_group_scrub_selects_compatible_rows_and_undoes_as_one_tran
     ];
     app.update();
 
-    assert_eq!(app.world().get::<NumericField>(first).unwrap().value, 0.8);
-    assert_eq!(app.world().get::<NumericField>(second).unwrap().value, 10.6);
-    assert_eq!(app.world().get::<NumericField>(integer).unwrap().value, 4.0);
     assert_eq!(
-        app.world().get::<NumericField>(unit_field).unwrap().value,
+        app.world()
+            .get::<NumericField>(first)
+            .unwrap()
+            .value_projection(),
+        0.8
+    );
+    assert_eq!(
+        app.world()
+            .get::<NumericField>(second)
+            .unwrap()
+            .value_projection(),
+        10.6
+    );
+    assert_eq!(
+        app.world()
+            .get::<NumericField>(integer)
+            .unwrap()
+            .value_projection(),
+        4.0
+    );
+    assert_eq!(
+        app.world()
+            .get::<NumericField>(unit_field)
+            .unwrap()
+            .value_projection(),
         2.0
     );
     let changes = app
@@ -517,8 +619,20 @@ pub(super) fn numeric_group_scrub_selects_compatible_rows_and_undoes_as_one_tran
         },
     }];
     app.update();
-    assert_eq!(app.world().get::<NumericField>(first).unwrap().value, 0.3);
-    assert_eq!(app.world().get::<NumericField>(second).unwrap().value, 10.2);
+    assert_eq!(
+        app.world()
+            .get::<NumericField>(first)
+            .unwrap()
+            .value_projection(),
+        0.3
+    );
+    assert_eq!(
+        app.world()
+            .get::<NumericField>(second)
+            .unwrap()
+            .value_projection(),
+        10.2
+    );
     app.world_mut().resource_mut::<UiRoutedEvents>().events = vec![UiRoutedEvent::Key {
         window,
         target: first,
@@ -531,8 +645,20 @@ pub(super) fn numeric_group_scrub_selects_compatible_rows_and_undoes_as_one_tran
         },
     }];
     app.update();
-    assert_eq!(app.world().get::<NumericField>(first).unwrap().value, 0.8);
-    assert_eq!(app.world().get::<NumericField>(second).unwrap().value, 10.6);
+    assert_eq!(
+        app.world()
+            .get::<NumericField>(first)
+            .unwrap()
+            .value_projection(),
+        0.8
+    );
+    assert_eq!(
+        app.world()
+            .get::<NumericField>(second)
+            .unwrap()
+            .value_projection(),
+        10.6
+    );
 }
 
 #[test]
@@ -594,8 +720,20 @@ pub(super) fn numeric_group_escape_restores_every_selected_value_and_ends_captur
         },
     ];
     app.update();
-    assert_eq!(app.world().get::<NumericField>(first).unwrap().value, 2.0);
-    assert_eq!(app.world().get::<NumericField>(second).unwrap().value, 8.0);
+    assert_eq!(
+        app.world()
+            .get::<NumericField>(first)
+            .unwrap()
+            .value_projection(),
+        2.0
+    );
+    assert_eq!(
+        app.world()
+            .get::<NumericField>(second)
+            .unwrap()
+            .value_projection(),
+        8.0
+    );
     assert!(app.world().resource::<WidgetEventQueue>().0.iter().any(
         |event| matches!(event, WidgetEvent::NumericCancelled { target, restored }
                 if *target == first && restored == &[2.0, 8.0])

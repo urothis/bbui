@@ -1,3 +1,4 @@
+use bbui_core::NumericValue;
 use bbui_text::expression::{evaluate_exact_i64, evaluate_exact_u64, evaluate_exact_u64_with_vars};
 use bbui_widgets::numeric::NumericField;
 use criterion::Criterion;
@@ -20,7 +21,7 @@ pub fn bench(c: &mut Criterion) {
     c.bench_function("numeric/exact_u64_expression", |b| {
         b.iter(|| black_box(evaluate_exact_u64(black_box("x - 1"), black_box(u64::MAX))))
     });
-    let variables = HashMap::from([("enabled".to_owned(), 1.0)]);
+    let variables = HashMap::from([("enabled".to_owned(), NumericValue::Integer(1))]);
     c.bench_function("numeric/exact_u64_conditional", |b| {
         b.iter(|| {
             black_box(evaluate_exact_u64_with_vars(
@@ -43,7 +44,7 @@ pub fn bench(c: &mut Criterion) {
         b.iter(|| {
             black_box(float.step_by(black_box(1)));
             black_box(float.step_by(black_box(-1)));
-            black_box(float.value)
+            black_box(float.value_projection())
         })
     });
 }

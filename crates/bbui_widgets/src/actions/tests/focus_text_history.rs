@@ -67,7 +67,13 @@ pub(super) fn focus_departure_commits_composite_edits_and_text_ime_keeps_local_u
         .focused = Some(number);
 
     send_tab(&mut app, window, false);
-    assert_eq!(app.world().get::<NumericField>(number).unwrap().value, 5.0);
+    assert_eq!(
+        app.world()
+            .get::<NumericField>(number)
+            .unwrap()
+            .value_projection(),
+        5.0
+    );
     assert_eq!(
         app.world()
             .resource::<UiFocus>()

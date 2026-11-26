@@ -117,7 +117,10 @@ fn numeric_expression_errors_show_error_text_and_outline_for_theme_and_dpi_varia
         .unwrap_err();
     assert_eq!(error.to_string(), "division by zero");
     assert_eq!(
-        app.world().get::<NumericField>(field).unwrap().value,
+        app.world()
+            .get::<NumericField>(field)
+            .unwrap()
+            .value_projection(),
         0.5,
         "failed expressions must preserve the current numeric value"
     );

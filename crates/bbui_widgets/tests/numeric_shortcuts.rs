@@ -36,7 +36,13 @@ fn numeric_keyboard_wheel_clipboard_and_reset_keep_values_valid() {
         &mut app,
         key(window, target, UiKeyCode::ArrowUp, UiModifiers::default()),
     );
-    assert_eq!(app.world().get::<NumericField>(target).unwrap().value, 6.5);
+    assert_eq!(
+        app.world()
+            .get::<NumericField>(target)
+            .unwrap()
+            .value_projection(),
+        6.5
+    );
     drive(
         &mut app,
         key(
@@ -49,7 +55,15 @@ fn numeric_keyboard_wheel_clipboard_and_reset_keep_values_valid() {
             },
         ),
     );
-    assert!((app.world().get::<NumericField>(target).unwrap().value - 6.45).abs() < 1e-12);
+    assert!(
+        (app.world()
+            .get::<NumericField>(target)
+            .unwrap()
+            .value_projection()
+            - 6.45)
+            .abs()
+            < 1e-12
+    );
     drive(
         &mut app,
         UiRoutedEvent::Wheel {
@@ -64,7 +78,15 @@ fn numeric_keyboard_wheel_clipboard_and_reset_keep_values_valid() {
             },
         },
     );
-    assert!((app.world().get::<NumericField>(target).unwrap().value - 6.95).abs() < 1e-12);
+    assert!(
+        (app.world()
+            .get::<NumericField>(target)
+            .unwrap()
+            .value_projection()
+            - 6.95)
+            .abs()
+            < 1e-12
+    );
 
     let control = UiModifiers {
         control: true,
@@ -98,13 +120,27 @@ fn numeric_keyboard_wheel_clipboard_and_reset_keep_values_valid() {
         &mut app,
         key(window, target, UiKeyCode::Enter, UiModifiers::default()),
     );
-    assert!((app.world().get::<NumericField>(target).unwrap().value - 6.95).abs() < 1e-12);
+    assert!(
+        (app.world()
+            .get::<NumericField>(target)
+            .unwrap()
+            .value_projection()
+            - 6.95)
+            .abs()
+            < 1e-12
+    );
 
     drive(
         &mut app,
         key(window, target, UiKeyCode::Backspace, UiModifiers::default()),
     );
-    assert_eq!(app.world().get::<NumericField>(target).unwrap().value, 5.0);
+    assert_eq!(
+        app.world()
+            .get::<NumericField>(target)
+            .unwrap()
+            .value_projection(),
+        5.0
+    );
 
     drive(
         &mut app,
@@ -119,13 +155,13 @@ fn numeric_keyboard_wheel_clipboard_and_reset_keep_values_valid() {
         key(window, target, UiKeyCode::Enter, UiModifiers::default()),
     );
     let current = app.world().get::<NumericField>(target).unwrap();
-    assert_eq!(current.value, 5.0);
+    assert_eq!(current.value_projection(), 5.0);
     assert!(current.expression_error.is_some());
     drive(
         &mut app,
         key(window, target, UiKeyCode::Escape, UiModifiers::default()),
     );
     let current = app.world().get::<NumericField>(target).unwrap();
-    assert_eq!(current.value, 5.0);
+    assert_eq!(current.value_projection(), 5.0);
     assert_eq!(current.expression_error, None);
 }

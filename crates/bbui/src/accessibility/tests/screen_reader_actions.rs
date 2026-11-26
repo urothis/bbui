@@ -63,7 +63,13 @@ pub(super) fn slider_screen_reader_step_and_set_value_use_widget_actions() {
                 data,
             }));
         app.update();
-        assert_eq!(app.world().get::<Slider>(target).unwrap().value, expected);
+        assert_eq!(
+            app.world()
+                .get::<Slider>(target)
+                .unwrap()
+                .value_projection(),
+            expected
+        );
     }
 }
 
@@ -153,7 +159,13 @@ pub(super) fn screen_reader_text_replacement_and_number_set_use_widget_actions()
         app.world().get::<TextArea>(area).unwrap().field.text,
         "memo"
     );
-    assert_eq!(app.world().get::<NumericField>(number).unwrap().value, 5.0);
+    assert_eq!(
+        app.world()
+            .get::<NumericField>(number)
+            .unwrap()
+            .value_projection(),
+        5.0
+    );
 }
 
 #[test]

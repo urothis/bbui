@@ -166,8 +166,8 @@ pub(super) fn paint_text_controls(paint: &mut PaintEntityContext<'_>) -> bool {
             .get::<UiRole>(entity)
             .is_some_and(|role| role.0 == "filled-slider");
         let value_width = filled.then(|| {
-            let value = if slider.kind == NumericFieldKind::Float {
-                format!("{:.3}", slider.value)
+            let value = if slider.kind() == NumericFieldKind::Float {
+                format!("{:.3}", slider.value_projection())
             } else {
                 slider.value_text()
             };

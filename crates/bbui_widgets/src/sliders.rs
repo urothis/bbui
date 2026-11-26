@@ -40,8 +40,8 @@ impl Slider {
     /// Converts an existing bounded numeric field into a slider without
     /// changing its value, default, unit, precision, or edit settings.
     pub fn from_field(field: NumericField) -> Result<Self, &'static str> {
-        if field.kind != NumericFieldKind::Float {
-            return match (field.exact_min, field.exact_max) {
+        if field.kind() != NumericFieldKind::Float {
+            return match (field.typed_min(), field.typed_max()) {
                 (Some(NumericValue::Integer(min)), Some(NumericValue::Integer(max)))
                     if min <= max =>
                 {
@@ -55,17 +55,11 @@ impl Slider {
                 _ => Err("exact slider requires typed minimum and maximum bounds"),
             };
         }
-        match (field.min, field.max) {
+        match (field.min_projection(), field.max_projection()) {
             (Some(min), Some(max)) if min.is_finite() && max.is_finite() => {
                 if !(max - min).is_finite() {
                     return Err("slider range span must be finite");
                 }
-                let mut normalized =
-                    NumericField::new(field.value, Some(min), Some(max), field.step, field.kind)?;
-                normalized.set_default(field.default)?;
-                let mut field = field;
-                field.value = normalized.value;
-                field.default = normalized.default;
                 Ok(Self { field })
             }
             _ => Err("slider requires finite minimum and maximum bounds"),
@@ -83,8 +77,11 @@ impl Slider {
     }
 
     pub fn range(&self) -> [f64; 2] {
-        let min = self.field.min.unwrap_or(self.field.value);
-        let max = self.field.max.unwrap_or(min);
+        let min = self
+            .field
+            .min_projection()
+            .unwrap_or(self.field.value_projection());
+        let max = self.field.max_projection().unwrap_or(min);
         [min, max]
     }
 
@@ -93,8 +90,8 @@ impl Slider {
     pub fn normalized_value(&self) -> f64 {
         match (
             self.field.typed_value(),
-            self.field.exact_min,
-            self.field.exact_max,
+            self.field.typed_min(),
+            self.field.typed_max(),
         ) {
             (
                 NumericValue::Integer(value),
@@ -126,7 +123,7 @@ impl Slider {
         if min == max {
             0.5
         } else {
-            ((self.field.value - min) / (max - min)).clamp(0.0, 1.0)
+            ((self.field.value_projection() - min) / (max - min)).clamp(0.0, 1.0)
         }
     }
 
@@ -137,7 +134,7 @@ impl Slider {
             return Err("slider position must be finite");
         }
         let position = position.clamp(0.0, 1.0);
-        match (self.field.exact_min, self.field.exact_max) {
+        match (self.field.typed_min(), self.field.typed_max()) {
             (Some(NumericValue::Integer(min)), Some(NumericValue::Integer(max))) => {
                 let span = i128::from(max) - i128::from(min);
                 let offset = if position == 1.0 {
@@ -226,7 +223,7 @@ mod tests {
         let mut slider = Slider::new(0.25, 0.0, 1.0, 0.1).unwrap().with_unit("m");
         assert_eq!(slider.normalized_value(), 0.25);
         assert!(slider.set_normalized_value(2.0).unwrap());
-        assert_eq!(slider.value, 1.0);
+        assert_eq!(slider.value_projection(), 1.0);
         assert_eq!(slider.display(), "1 m");
         assert!(!slider.set_normalized_value(1.0).unwrap());
     }
@@ -237,9 +234,9 @@ mod tests {
             .unwrap()
             .with_unit("px");
         assert!(slider.set_normalized_value(0.51).unwrap());
-        assert_eq!(slider.value, 5.0);
+        assert_eq!(slider.value_projection(), 5.0);
         assert!(slider.step_by(1));
-        assert_eq!(slider.value, 7.0);
+        assert_eq!(slider.value_projection(), 7.0);
         assert_eq!(slider.display(), "7 px");
     }
 
@@ -249,7 +246,7 @@ mod tests {
             .unwrap()
             .with_default(2.0)
             .unwrap();
-        assert_eq!(slider.default, 2.0);
+        assert_eq!(slider.default_projection(), 2.0);
         assert_eq!(slider.range(), [0.0, 10.0]);
         assert!(Slider::new(0.0, f64::NEG_INFINITY, 1.0, 0.1).is_err());
         assert!(Slider::new(0.0, 1.0, 0.0, 0.1).is_err());
@@ -259,7 +256,7 @@ mod tests {
         let mut readonly = slider;
         readonly.read_only = true;
         assert!(!readonly.set_normalized_value(0.9).unwrap());
-        assert_eq!(readonly.value, 4.0);
+        assert_eq!(readonly.value_projection(), 4.0);
     }
 
     #[test]
@@ -273,20 +270,20 @@ mod tests {
     }
 
     #[test]
-    fn slider_revalidates_public_field_state_and_rejects_overflowing_ranges() {
+    fn slider_setters_keep_field_state_valid_and_reject_overflowing_ranges() {
         let mut field =
             NumericField::new(2.0, Some(0.0), Some(10.0), 1.0, NumericFieldKind::Float).unwrap();
-        field.value = 20.0;
-        field.default = -2.0;
+        assert!(field.set_value(20.0).unwrap());
+        field.set_default(-2.0).unwrap();
         let slider = Slider::from_field(field).unwrap();
-        assert_eq!(slider.value, 10.0);
-        assert_eq!(slider.default, 0.0);
+        assert_eq!(slider.value_projection(), 10.0);
+        assert_eq!(slider.default_projection(), 0.0);
 
         assert!(Slider::new(0.0, -1.0e308, 1.0e308, 1.0).is_err());
         assert!(Slider::new(0.0, -8.0e307, 8.0e307, 1.0).is_ok());
         let mut slider = Slider::new(0.0, -8.0e307, 8.0e307, 1.0).unwrap();
         assert!(slider.set_normalized_value(1.0).unwrap());
-        assert_eq!(slider.value, 8.0e307);
+        assert_eq!(slider.value_projection(), 8.0e307);
         assert!(slider.set_range(-1.0e308, 1.0e308).is_err());
     }
 }

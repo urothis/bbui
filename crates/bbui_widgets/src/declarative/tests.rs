@@ -465,8 +465,8 @@ fn slider_range_declarations_validate_atomically_and_support_integer_values() {
     .spawn(&mut world, None)
     .unwrap();
     let slider = world.get::<Slider>(entity).unwrap();
-    assert_eq!(slider.kind, NumericFieldKind::Integer);
-    assert_eq!(slider.value, 4.0);
+    assert_eq!(slider.kind(), NumericFieldKind::Integer);
+    assert_eq!(slider.value_projection(), 4.0);
     assert_eq!(slider.range(), [0.0, 12.0]);
 
     let mut empty_world = World::new();

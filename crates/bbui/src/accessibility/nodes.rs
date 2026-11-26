@@ -424,12 +424,12 @@ pub(super) fn node_for(world: &World, entity: Entity) -> Option<Node> {
         let mut node = Node::new(Role::Slider);
         node.set_label(label.unwrap_or_else(|| "Slider".to_owned()));
         node.set_value(slider.display());
-        if slider.kind == bbui_widgets::NumericFieldKind::Float {
-            node.set_numeric_value(slider.value);
+        if slider.kind() == bbui_widgets::NumericFieldKind::Float {
+            node.set_numeric_value(slider.value_projection());
             let [min, max] = slider.range();
             node.set_min_numeric_value(min);
             node.set_max_numeric_value(max);
-            node.set_numeric_value_step(slider.step);
+            node.set_numeric_value_step(slider.step_projection());
         }
         if let Some(error) = &slider.expression_error {
             node.set_description(error.to_string());
@@ -454,17 +454,17 @@ pub(super) fn node_for(world: &World, entity: Entity) -> Option<Node> {
         if let Some(label) = label {
             node.set_label(label);
         }
-        if number.kind == bbui_widgets::NumericFieldKind::Float {
-            node.set_numeric_value(number.value);
+        if number.kind() == bbui_widgets::NumericFieldKind::Float {
+            node.set_numeric_value(number.value_projection());
         }
         node.set_value(number.display());
-        if let Some(min) = number.min {
+        if let Some(min) = number.min_projection() {
             node.set_min_numeric_value(min);
         }
-        if let Some(max) = number.max {
+        if let Some(max) = number.max_projection() {
             node.set_max_numeric_value(max);
         }
-        node.set_numeric_value_step(number.step);
+        node.set_numeric_value_step(number.step_projection());
         if let Some(error) = &number.expression_error {
             node.set_description(error.to_string());
             node.set_live(Live::Assertive);

@@ -1,4 +1,4 @@
-use bbui_core::history::History;
+use bbui_core::{NumericValue, history::History};
 use bbui_media::{
     decode_gif_thumbnail, decode_image, decode_image_thumbnail, decode_mp4_h264_thumbnail,
     decode_svg, decode_webm_vp8_thumbnail,
@@ -101,11 +101,12 @@ pub fn bench(c: &mut Criterion) {
         eprintln!("numeric benchmark field is invalid");
         return;
     };
+    let typed_vars = HashMap::from([("x".to_owned(), NumericValue::Float(1.25))]);
     group.bench_function("numeric_field_commit", |b| {
         b.iter(|| {
             black_box(
                 field
-                    .evaluate_input(black_box("2*pi + min(4, 3)"), &vars)
+                    .evaluate_input(black_box("2*pi + min(4, 3)"), &typed_vars)
                     .is_ok(),
             );
         });

@@ -1,5 +1,6 @@
 //! Numeric expressions for editable values. Evaluation never mutates a control.
 
+use bbui_core::NumericValue;
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -189,12 +190,12 @@ pub fn evaluate_exact_integer(source: &str, x: i128) -> Result<i128, Error> {
 }
 
 /// Evaluate the shared expression language while retaining exact integer
-/// values. Named variables supplied as `f64` must be exactly representable
-/// integers; fractional expressions remain available for safe-width fields.
+/// values. Named integer variables retain their full width; fractional
+/// expressions remain available for safe-width fields.
 pub fn evaluate_exact_integer_with_vars(
     source: &str,
     x: i128,
-    vars: &HashMap<String, f64>,
+    vars: &HashMap<String, NumericValue>,
 ) -> Result<i128, Error> {
     match evaluate_exact_basic(source, x) {
         Ok(value) => Ok(value),
@@ -216,7 +217,7 @@ pub fn evaluate_exact_u64(source: &str, x: u64) -> Result<u64, Error> {
 pub fn evaluate_exact_i64_with_vars(
     source: &str,
     x: i64,
-    vars: &HashMap<String, f64>,
+    vars: &HashMap<String, NumericValue>,
 ) -> Result<i64, Error> {
     i64::try_from(evaluate_exact_integer_with_vars(
         source,
@@ -229,7 +230,7 @@ pub fn evaluate_exact_i64_with_vars(
 pub fn evaluate_exact_u64_with_vars(
     source: &str,
     x: u64,
-    vars: &HashMap<String, f64>,
+    vars: &HashMap<String, NumericValue>,
 ) -> Result<u64, Error> {
     u64::try_from(evaluate_exact_integer_with_vars(
         source,
@@ -261,7 +262,10 @@ mod exact_integer_tests {
 
     #[test]
     fn exact_values_support_named_variables_and_shared_expression_forms() {
-        let vars = HashMap::from([("c".into(), 1.0), ("y".into(), 7.0)]);
+        let vars = HashMap::from([
+            ("c".into(), NumericValue::Integer(1)),
+            ("y".into(), NumericValue::Unsigned(7)),
+        ]);
         assert_eq!(
             evaluate_exact_u64_with_vars("x if c else y", u64::MAX, &vars),
             Ok(u64::MAX)
@@ -284,6 +288,19 @@ mod exact_integer_tests {
             Ok(1)
         );
         assert_eq!(evaluate_exact_i64("3/2", 0), Ok(2));
+        let wide = HashMap::from([("limit".into(), NumericValue::Unsigned(u64::MAX - 1))]);
+        assert_eq!(
+            evaluate_exact_u64_with_vars("x == limit", u64::MAX - 1, &wide),
+            Ok(1)
+        );
+        assert_eq!(
+            evaluate_exact_u64_with_vars("x - limit", u64::MAX, &wide),
+            Ok(1)
+        );
+        assert_eq!(
+            evaluate_exact_i64_with_vars("sqrt(2)*2", 0, &wide),
+            Err(Error::Domain)
+        );
     }
 }
 
@@ -585,7 +602,7 @@ impl Expression {
         }
     }
 
-    fn evaluate_exact(&self, x: i128, vars: &HashMap<String, f64>) -> Result<i128, Error> {
+    fn evaluate_exact(&self, x: i128, vars: &HashMap<String, NumericValue>) -> Result<i128, Error> {
         match self {
             Self::ExactNumber(value) => Ok(*value),
             Self::Number(_) => Err(Error::Domain),
@@ -596,13 +613,18 @@ impl Expression {
                     .get(name)
                     .copied()
                     .ok_or_else(|| Error::UnknownName(name.clone()))?;
-                if !value.is_finite()
-                    || value.fract() != 0.0
-                    || value.abs() > 9_007_199_254_740_992.0
-                {
-                    return Err(Error::Domain);
+                match value {
+                    NumericValue::Integer(value) => Ok(i128::from(value)),
+                    NumericValue::Unsigned(value) => Ok(i128::from(value)),
+                    NumericValue::Float(value)
+                        if value.is_finite()
+                            && value.fract() == 0.0
+                            && value.abs() <= 9_007_199_254_740_992.0 =>
+                    {
+                        Ok(value as i128)
+                    }
+                    NumericValue::Float(_) => Err(Error::Domain),
                 }
-                Ok(value as i128)
             }
             Self::Unary { negative, value } => {
                 let value = value.evaluate_exact(x, vars)?;
@@ -682,17 +704,7 @@ fn exact_function(name: &str, args: &[i128]) -> Result<i128, Error> {
             let exponent = u32::try_from(*exponent).map_err(|_| Error::Domain)?;
             base.checked_pow(exponent).ok_or(Error::Overflow)
         }
-        _ if args
-            .iter()
-            .all(|value| value.unsigned_abs() <= 9_007_199_254_740_992) =>
-        {
-            let floats: Vec<_> = args.iter().map(|value| *value as f64).collect();
-            let result = function(name, &floats)?.round();
-            if result.abs() > 9_007_199_254_740_992.0 {
-                return Err(Error::Domain);
-            }
-            Ok(result as i128)
-        }
+        ("sqrt" | "sin" | "cos" | "tan", [_]) => Err(Error::Domain),
         _ => Err(invalid()),
     }
 }

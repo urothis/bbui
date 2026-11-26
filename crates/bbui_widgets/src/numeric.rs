@@ -1,5 +1,6 @@
 //! Bounded and unbounded numeric controls, parsing, stepping, and formatting.
 
+pub use bbui_core::NumericValue;
 use bbui_text::expression::{self, Error};
 pub use bbui_text::format_float;
 use bevy_ecs::prelude::Component;
@@ -9,7 +10,7 @@ use std::collections::HashMap;
 /// component to the field entity and update it when application data changes.
 /// The field's current value is always exposed as `x` and takes precedence.
 #[derive(Component, Debug, Clone, Default, PartialEq)]
-pub struct NumericExpressionVariables(pub HashMap<String, f64>);
+pub struct NumericExpressionVariables(pub HashMap<String, NumericValue>);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum NumericFieldKind {
@@ -19,39 +20,22 @@ pub enum NumericFieldKind {
     Float,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum NumericValue {
-    Integer(i64),
-    Unsigned(u64),
-    Float(f64),
-}
-
-impl NumericValue {
-    pub fn as_f64(self) -> f64 {
-        match self {
-            Self::Integer(value) => value as f64,
-            Self::Unsigned(value) => value as f64,
-            Self::Float(value) => value,
-        }
-    }
-}
-
 #[derive(Component, Debug, Clone, PartialEq)]
 #[component(summary_tick)]
 pub struct NumericField {
-    pub value: f64,
+    value: f64,
     /// Authoritative value for full-width integer fields. `value` is a legacy
     /// float projection used by bounded sliders and paint geometry.
-    pub exact_value: Option<NumericValue>,
-    pub default: f64,
-    pub exact_default: Option<NumericValue>,
-    pub min: Option<f64>,
-    pub max: Option<f64>,
-    pub exact_min: Option<NumericValue>,
-    pub exact_max: Option<NumericValue>,
-    pub step: f64,
-    pub exact_step: Option<u64>,
-    pub kind: NumericFieldKind,
+    exact_value: Option<NumericValue>,
+    default: f64,
+    exact_default: Option<NumericValue>,
+    min: Option<f64>,
+    max: Option<f64>,
+    exact_min: Option<NumericValue>,
+    exact_max: Option<NumericValue>,
+    step: f64,
+    exact_step: Option<u64>,
+    kind: NumericFieldKind,
     pub unit: Option<String>,
     pub enabled: bool,
     pub read_only: bool,
@@ -64,6 +48,66 @@ pub struct NumericField {
 }
 
 impl NumericField {
+    pub fn value_projection(&self) -> f64 {
+        self.value
+    }
+    pub fn default_projection(&self) -> f64 {
+        self.default
+    }
+    pub fn bounds_projection(&self) -> (Option<f64>, Option<f64>) {
+        (self.min, self.max)
+    }
+    pub fn min_projection(&self) -> Option<f64> {
+        self.min
+    }
+    pub fn max_projection(&self) -> Option<f64> {
+        self.max
+    }
+    pub fn step_projection(&self) -> f64 {
+        self.step
+    }
+    pub fn kind(&self) -> NumericFieldKind {
+        self.kind
+    }
+    pub fn typed_bounds(&self) -> (Option<NumericValue>, Option<NumericValue>) {
+        (self.exact_min, self.exact_max)
+    }
+    pub fn typed_min(&self) -> Option<NumericValue> {
+        self.exact_min
+    }
+    pub fn typed_max(&self) -> Option<NumericValue> {
+        self.exact_max
+    }
+    pub fn typed_default(&self) -> Option<NumericValue> {
+        self.exact_default
+    }
+    pub fn typed_step(&self) -> Option<u64> {
+        self.exact_step
+    }
+
+    pub fn set_step(&mut self, step: f64) -> Result<(), &'static str> {
+        if !step.is_finite() || step <= 0.0 {
+            return Err("numeric step must be finite and positive");
+        }
+        if self.kind != NumericFieldKind::Float {
+            if step.fract() != 0.0 || step > 9_007_199_254_740_992.0 {
+                return Err("integer numeric step must be exactly representable");
+            }
+            self.exact_step = Some(step as u64);
+        }
+        self.step = step;
+        Ok(())
+    }
+
+    pub fn set_typed_step(&mut self, step: u64) -> Result<(), &'static str> {
+        if self.kind == NumericFieldKind::Float || step == 0 {
+            return Err("typed step requires a positive integer field step");
+        }
+        self.exact_step = Some(step);
+        self.step = step as f64;
+        Ok(())
+    }
+
     pub fn new(
         value: f64,
         min: Option<f64>,
@@ -399,7 +443,7 @@ impl NumericField {
     pub fn evaluate_input(
         &mut self,
         input: &str,
-        vars: &HashMap<String, f64>,
+        vars: &HashMap<String, NumericValue>,
     ) -> Result<bool, Error> {
         if !self.enabled || self.read_only {
             return Ok(false);
@@ -425,9 +469,13 @@ impl NumericField {
             let needs_legacy = matches!(&result, Err(Error::Domain)) || has_division;
             let legacy_safe = needs_legacy
                 && exact_is_safe
-                && vars
-                    .values()
-                    .all(|value| value.is_finite() && value.abs() <= 9_007_199_254_740_992.0)
+                && vars.values().all(|value| match value {
+                    NumericValue::Integer(value) => value.unsigned_abs() <= 9_007_199_254_740_992,
+                    NumericValue::Unsigned(value) => *value <= 9_007_199_254_740_992,
+                    NumericValue::Float(value) => {
+                        value.is_finite() && value.abs() <= 9_007_199_254_740_992.0
+                    }
+                })
                 && !expression::has_wide_numeric_literal(input);
             let result = if legacy_safe && has_division {
                 Err(Error::Domain)
@@ -436,7 +484,10 @@ impl NumericField {
             };
             let result = match result {
                 Err(Error::Domain) if legacy_safe => {
-                    let mut context = vars.clone();
+                    let mut context: HashMap<_, _> = vars
+                        .iter()
+                        .map(|(name, value)| (name.clone(), value.as_f64()))
+                        .collect();
                     context.insert("x".into(), self.typed_value().as_f64());
                     expression::evaluate(input, &context).and_then(|value| {
                         let rounded = value.round();
@@ -467,7 +518,10 @@ impl NumericField {
             self.expression_error = None;
             return Ok(changed);
         }
-        let mut context = vars.clone();
+        let mut context: HashMap<_, _> = vars
+            .iter()
+            .map(|(name, value)| (name.clone(), value.as_f64()))
+            .collect();
         context.insert("x".into(), self.value);
         let result = match expression::evaluate(input, &context) {
             Ok(value) => value,
@@ -536,7 +590,7 @@ impl NumericField {
     }
 
     /// Commit the edit buffer. Parse failures leave both value and buffer intact.
-    pub fn commit_edit(&mut self, vars: &HashMap<String, f64>) -> Result<bool, Error> {
+    pub fn commit_edit(&mut self, vars: &HashMap<String, NumericValue>) -> Result<bool, Error> {
         let Some(text) = self.editing.clone() else {
             return Ok(false);
         };
@@ -682,7 +736,10 @@ mod tests {
     #[test]
     fn integer_fields_keep_named_expression_features_without_rounding_full_width_values() {
         let mut field = NumericField::unsigned(u64::MAX - 1);
-        let vars = HashMap::from([("c".into(), 1.0), ("y".into(), 3.0)]);
+        let vars = HashMap::from([
+            ("c".into(), NumericValue::Integer(1)),
+            ("y".into(), NumericValue::Unsigned(3)),
+        ]);
         assert!(field.evaluate_input("x + y if c else 0", &vars).is_err());
         assert_eq!(field.typed_value(), NumericValue::Unsigned(u64::MAX - 1));
         assert!(field.evaluate_input("max(x, 7)", &vars).is_ok());
@@ -700,6 +757,13 @@ mod tests {
         assert_eq!(safe.typed_value(), NumericValue::Integer(9));
         assert!(safe.evaluate_input("3/2*2", &HashMap::new()).unwrap());
         assert_eq!(safe.typed_value(), NumericValue::Integer(3));
+        assert!(safe.evaluate_input("sqrt(2)*2", &HashMap::new()).is_ok());
+        assert_eq!(safe.typed_value(), NumericValue::Integer(3));
+        assert!(
+            field
+                .evaluate_input("x + sqrt(2)", &HashMap::new())
+                .is_err()
+        );
 
         let mut wide_literal = NumericField::unsigned(0);
         assert!(
@@ -711,6 +775,26 @@ mod tests {
             wide_literal.typed_value(),
             NumericValue::Unsigned(9_223_372_036_854_775_808)
         );
+    }
+
+    #[test]
+    fn typed_variables_and_setters_keep_full_width_state_consistent() {
+        let mut field = NumericField::unsigned(u64::MAX);
+        let vars = HashMap::from([("limit".to_owned(), NumericValue::Unsigned(u64::MAX - 1))]);
+        assert!(field.evaluate_input("x - limit", &vars).unwrap());
+        assert_eq!(field.typed_value(), NumericValue::Unsigned(1));
+        assert!(
+            field
+                .set_typed_value(NumericValue::Unsigned(u64::MAX))
+                .unwrap()
+        );
+        assert_eq!(field.value_text(), u64::MAX.to_string());
+        assert_eq!(field.value_projection(), u64::MAX as f64);
+        assert!(field.set_value(u64::MAX as f64).is_err());
+        assert!(field.set_typed_step(u64::MAX).is_ok());
+        assert_eq!(field.typed_step(), Some(u64::MAX));
+        assert!(field.set_step(0.5).is_err());
+        assert_eq!(field.typed_step(), Some(u64::MAX));
     }
 
     #[test]
@@ -740,13 +824,13 @@ mod tests {
     fn expression_variables_keep_current_x_authoritative() {
         let mut field = NumericField::float(3.0).unwrap();
         let mut variables = HashMap::from([
-            ("x".to_owned(), 999.0),
-            ("c".to_owned(), 1.0),
-            ("y".to_owned(), 7.0),
+            ("x".to_owned(), NumericValue::Float(999.0)),
+            ("c".to_owned(), NumericValue::Float(1.0)),
+            ("y".to_owned(), NumericValue::Float(7.0)),
         ]);
         assert!(!field.evaluate_input("x if c else y", &variables).unwrap());
         assert_eq!(field.value, 3.0);
-        variables.insert("c".to_owned(), 0.0);
+        variables.insert("c".to_owned(), NumericValue::Float(0.0));
         assert!(field.evaluate_input("x if c else y", &variables).unwrap());
         assert_eq!(field.value, 7.0);
     }

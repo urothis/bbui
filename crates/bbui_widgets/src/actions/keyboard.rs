@@ -102,7 +102,7 @@ pub(super) fn handle_slider_key(
         return;
     }
     let before = slider.typed_value();
-    let before_float = slider.value;
+    let before_float = slider.value_projection();
     let changed = match key {
         UiKeyCode::ArrowLeft
         | UiKeyCode::ArrowDown
@@ -117,13 +117,13 @@ pub(super) fn handle_slider_key(
             let multiplier =
                 if matches!(key, UiKeyCode::PageUp | UiKeyCode::PageDown) || modifiers.control {
                     10.0
-                } else if modifiers.shift && slider.kind == NumericFieldKind::Float {
+                } else if modifiers.shift && slider.kind() == NumericFieldKind::Float {
                     0.1
                 } else {
                     1.0
                 };
-            if slider.kind == NumericFieldKind::Float {
-                let step = slider.step;
+            if slider.kind() == NumericFieldKind::Float {
+                let step = slider.step_projection();
                 slider
                     .set_value(before_float + direction * step * multiplier)
                     .unwrap_or(false)
@@ -132,20 +132,20 @@ pub(super) fn handle_slider_key(
             }
         }
         UiKeyCode::Home => {
-            if let Some(min) = slider.exact_min {
+            if let Some(min) = slider.typed_min() {
                 slider.set_typed_value(min).unwrap_or(false)
             } else {
                 slider
-                    .min
+                    .min_projection()
                     .is_some_and(|min| slider.set_value(min).unwrap_or(false))
             }
         }
         UiKeyCode::End => {
-            if let Some(max) = slider.exact_max {
+            if let Some(max) = slider.typed_max() {
                 slider.set_typed_value(max).unwrap_or(false)
             } else {
                 slider
-                    .max
+                    .max_projection()
                     .is_some_and(|max| slider.set_value(max).unwrap_or(false))
             }
         }
@@ -284,15 +284,15 @@ pub(super) fn handle_key(
                 let sign = if key == UiKeyCode::ArrowUp { 1.0 } else { -1.0 };
                 let factor = if modifiers.control {
                     10.0
-                } else if modifiers.shift && field.kind == NumericFieldKind::Float {
+                } else if modifiers.shift && field.kind() == NumericFieldKind::Float {
                     0.1
                 } else {
                     1.0
                 };
                 let before = field.typed_value();
-                if field.kind == NumericFieldKind::Float {
-                    let step = field.step;
-                    let value = field.value + step * sign * factor;
+                if field.kind() == NumericFieldKind::Float {
+                    let step = field.step_projection();
+                    let value = field.value_projection() + step * sign * factor;
                     let _ = field.set_value(value);
                 } else {
                     let _ = field.step_by((sign * factor) as i32);

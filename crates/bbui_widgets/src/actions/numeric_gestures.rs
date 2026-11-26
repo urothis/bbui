@@ -4,10 +4,10 @@ const NUMERIC_SCRUB_LOCK_DISTANCE: f64 = 3.0;
 
 pub(super) fn numeric_target(field: &NumericField) -> NumericTarget {
     NumericTarget {
-        start: field.value,
-        min: field.min.unwrap_or(-f64::MAX),
-        max: field.max.unwrap_or(f64::MAX),
-        step: field.step,
+        start: field.value_projection(),
+        min: field.min_projection().unwrap_or(-f64::MAX),
+        max: field.max_projection().unwrap_or(f64::MAX),
+        step: field.step_projection(),
     }
 }
 
@@ -67,7 +67,7 @@ pub(super) fn begin_slider_drag(
     if !slider.enabled || slider.read_only {
         return;
     }
-    let (Some(min), Some(max)) = (slider.min, slider.max) else {
+    let (Some(min), Some(max)) = (slider.min_projection(), slider.max_projection()) else {
         return;
     };
     if !min.is_finite() || !max.is_finite() || !(max - min).is_finite() {
@@ -87,7 +87,7 @@ pub(super) fn begin_slider_drag(
     let base_theme = world.get_resource::<Theme>().cloned().unwrap_or_default();
     let theme = styled_theme(world, target, &base_theme);
     let (track_left, track_right) = slider_track_x(rect, &theme);
-    let before = slider.value;
+    let before = slider.value_projection();
     let before_exact = slider.typed_value();
     if let Some(mut slider) = world.get_mut::<Slider>(target) {
         let _ =
@@ -122,8 +122,8 @@ pub(super) fn update_slider_drag(world: &mut World, window: Entity, x: f32) {
     if let Some(mut slider) = world.get_mut::<Slider>(drag.target)
         && slider.enabled
         && !slider.read_only
-        && slider.min == Some(drag.min)
-        && slider.max == Some(drag.max)
+        && slider.min_projection() == Some(drag.min)
+        && slider.max_projection() == Some(drag.max)
     {
         let _ =
             slider.set_normalized_value(slider_value_at_x(x, drag.track_left, drag.track_right));
@@ -147,10 +147,10 @@ pub(super) fn finish_slider_drag(
         });
         return;
     }
-    let after = slider.value;
+    let after = slider.value_projection();
     let after_exact = slider.typed_value();
     if drag.before_exact != after_exact {
-        if slider.kind == NumericFieldKind::Float {
+        if slider.kind() == NumericFieldKind::Float {
             emitted.push(WidgetEvent::NumericCommitted {
                 target: drag.target,
                 before: vec![drag.before],
@@ -208,16 +208,16 @@ pub(super) fn begin_numeric_scrub(
                 entity: target,
                 targets: vec![target],
                 target_specs: vec![target_data],
-                starts: vec![field.value],
+                starts: vec![field.value_projection()],
                 exact_starts: vec![field.typed_value()],
                 exact_motion: 0.0,
-                last_values: vec![field.value],
+                last_values: vec![field.value_projection()],
                 gesture,
                 phase: NumericScrubPhase::Selecting,
                 last_position: position,
                 pending_x: 0.0,
                 pending_moves: Vec::new(),
-                kind: field.kind,
+                kind: field.kind(),
                 unit: field.unit,
             },
         );
@@ -250,7 +250,7 @@ pub(super) fn numeric_targets_crossed(
     let mut crossed: Vec<_> = query
         .iter(world)
         .filter_map(|(entity, field, hit)| {
-            if field.kind != kind
+            if field.kind() != kind
                 || field.unit.as_deref() != unit
                 || !field.enabled
                 || field.read_only
@@ -410,17 +410,17 @@ pub(super) fn update_numeric_scrub(
         .map(|(index, (entity, value))| {
             let actual = if let Some(mut field) = world.get_mut::<NumericField>(entity) {
                 if field.enabled && !field.read_only {
-                    if field.kind == NumericFieldKind::Float {
+                    if field.kind() == NumericFieldKind::Float {
                         let _ = field.set_value(value);
                     } else if let Some((starts, motion)) = &exact
                         && let Some(start) = starts.get(index)
                     {
                         let next =
-                            exact_scrub_value(*start, field.exact_step.unwrap_or(1), *motion);
+                            exact_scrub_value(*start, field.typed_step().unwrap_or(1), *motion);
                         let _ = field.set_typed_value(next);
                     }
                 }
-                field.value
+                field.value_projection()
             } else {
                 value
             };
@@ -461,7 +461,7 @@ pub(super) fn finish_numeric_scrub(
             .zip(scrub.exact_starts.iter().copied())
         {
             if let Some(mut field) = world.get_mut::<NumericField>(entity) {
-                if field.kind == NumericFieldKind::Float {
+                if field.kind() == NumericFieldKind::Float {
                     let _ = field.restore_value(start);
                 } else {
                     let _ = field.restore_typed_value(exact_start);
@@ -502,7 +502,7 @@ pub(super) fn finish_numeric_scrub(
         .copied()
         .zip(scrub.starts.iter().copied())
         .filter_map(|(entity, before)| {
-            let after = world.get::<NumericField>(entity)?.value;
+            let after = world.get::<NumericField>(entity)?.value_projection();
             (before != after).then_some((entity, before, after))
         })
         .collect();

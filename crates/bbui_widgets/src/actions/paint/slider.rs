@@ -54,8 +54,8 @@ pub(in crate::actions) fn paint_slider(paint: SliderPaint<'_>, output: &mut Vec<
                 },
             ));
         }
-        let value = if slider.kind == NumericFieldKind::Float {
-            format!("{:.3}", slider.value)
+        let value = if slider.kind() == NumericFieldKind::Float {
+            format!("{:.3}", slider.value_projection())
         } else {
             slider.value_text()
         };
