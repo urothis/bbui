@@ -142,6 +142,38 @@ impl NativeMenuBar {
         }
         Ok(())
     }
+
+    /// Whether two bars can update their existing native items in place.
+    pub fn same_structure(&self, other: &Self) -> bool {
+        entries_same_structure(&self.application, &other.application)
+            && self.menus.len() == other.menus.len()
+            && self
+                .menus
+                .iter()
+                .zip(&other.menus)
+                .all(|(left, right)| groups_same_structure(left, right))
+    }
+}
+
+fn groups_same_structure(left: &NativeMenuGroup, right: &NativeMenuGroup) -> bool {
+    left.id == right.id && entries_same_structure(&left.items, &right.items)
+}
+
+fn entries_same_structure(left: &[NativeMenuEntry], right: &[NativeMenuEntry]) -> bool {
+    left.len() == right.len()
+        && left
+            .iter()
+            .zip(right)
+            .all(|(left, right)| match (left, right) {
+                (NativeMenuEntry::Command(left), NativeMenuEntry::Command(right)) => {
+                    left.id == right.id
+                }
+                (NativeMenuEntry::Submenu(left), NativeMenuEntry::Submenu(right)) => {
+                    groups_same_structure(left, right)
+                }
+                (NativeMenuEntry::Separator, NativeMenuEntry::Separator) => true,
+                _ => false,
+            })
 }
 
 fn validate_group<'a>(
@@ -224,5 +256,36 @@ mod tests {
         bar.menus
             .push(NativeMenuGroup::new("recent", "Other", vec![]));
         assert_eq!(bar.validate(), Err(NativeMenuError::DuplicateGroupId));
+    }
+
+    #[test]
+    fn presentation_changes_keep_structure_but_new_items_change_it() {
+        let original = NativeMenuBar {
+            menus: vec![NativeMenuGroup::new(
+                "file",
+                "File",
+                vec![NativeMenuEntry::Command(NativeMenuCommand::new(
+                    "save", "Save",
+                ))],
+            )],
+            ..Default::default()
+        };
+        let mut changed = original.clone();
+        changed.menus[0].title = "Fichier".into();
+        if let NativeMenuEntry::Command(command) = &mut changed.menus[0].items[0] {
+            command.title = "Enregistrer".into();
+            command.enabled = false;
+            command.state = NativeMenuState::On;
+            command.shortcut = Some(NativeMenuShortcut::new(
+                's',
+                NativeMenuModifiers {
+                    command: true,
+                    ..Default::default()
+                },
+            ));
+        }
+        assert!(original.same_structure(&changed));
+        changed.menus[0].items.push(NativeMenuEntry::Separator);
+        assert!(!original.same_structure(&changed));
     }
 }

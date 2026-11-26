@@ -190,37 +190,6 @@ fn build_entry(
     }
 }
 
-fn same_shape(entry: &NativeMenuEntry, installed: &InstalledEntry, old: &NativeMenuEntry) -> bool {
-    match (entry, installed, old) {
-        (
-            NativeMenuEntry::Command(new),
-            InstalledEntry::Command { .. },
-            NativeMenuEntry::Command(old),
-        ) => new.id == old.id,
-        (
-            NativeMenuEntry::Submenu(new),
-            InstalledEntry::Submenu { children, .. },
-            NativeMenuEntry::Submenu(old),
-        ) => {
-            new.id == old.id
-                && new.items.len() == children.len()
-                && new.items.len() == old.items.len()
-                && new
-                    .items
-                    .iter()
-                    .zip(children)
-                    .zip(&old.items)
-                    .all(|((new, installed), old)| same_shape(new, installed, old))
-        }
-        (
-            NativeMenuEntry::Separator,
-            InstalledEntry::Separator { .. },
-            NativeMenuEntry::Separator,
-        ) => true,
-        _ => false,
-    }
-}
-
 fn update_entry(entry: &NativeMenuEntry, installed: &InstalledEntry) {
     match (entry, installed) {
         (NativeMenuEntry::Command(command), InstalledEntry::Command { item, .. }) => {
@@ -310,28 +279,7 @@ impl InstalledMenu {
     }
 
     fn same_shape(&self, model: &NativeMenuBar) -> bool {
-        let old_app = &self.model.application;
-        let installed_app = &self.application[..old_app.len()];
-        old_app.len() == model.application.len()
-            && self.model.menus.len() == model.menus.len()
-            && model
-                .application
-                .iter()
-                .zip(installed_app)
-                .zip(old_app)
-                .all(|((new, installed), old)| same_shape(new, installed, old))
-            && model
-                .menus
-                .iter()
-                .zip(&self.menus)
-                .zip(&self.model.menus)
-                .all(|((new, installed), old)| {
-                    same_shape(
-                        &NativeMenuEntry::Submenu(new.clone()),
-                        installed,
-                        &NativeMenuEntry::Submenu(old.clone()),
-                    )
-                })
+        self.model.same_structure(model)
     }
 
     fn update(&mut self, model: &NativeMenuBar) {
