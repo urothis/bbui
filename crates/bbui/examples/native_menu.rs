@@ -1,60 +1,79 @@
-//! macOS application menus driven by host state. Run on macOS and inspect the menu bar.
+//! macOS application menus backed by the same commands as a BBUI command palette.
 
 #[cfg(target_os = "macos")]
 mod macos {
     use bbui::native_menu::{
         self, NativeMenuBar, NativeMenuCommand, NativeMenuEntry as Entry, NativeMenuGroup,
-        NativeMenuModifiers, NativeMenuShortcut, NativeMenuState,
+        NativeMenuState,
     };
+    use bbui::native_menu_commands::sync_native_menu_from_registry;
+    use bbui::widgets::{Command, CommandRegistry, CommandShortcut};
+    use bbui_core::{UiKeyCode, UiModifiers};
     use bevy::prelude::*;
 
-    #[derive(Resource, Default)]
+    #[derive(Resource)]
     struct Demo {
         edited: bool,
         show_grid: bool,
+        commands: CommandRegistry,
+    }
+
+    impl Default for Demo {
+        fn default() -> Self {
+            let mut commands = CommandRegistry::default();
+            for (id, label, key) in [
+                ("settings", "Settings…", Some(UiKeyCode::Comma)),
+                ("new", "New", Some(UiKeyCode::N)),
+                ("save", "Save", Some(UiKeyCode::S)),
+                ("recent.example", "Example Document", None),
+                ("grid", "Show Grid", None),
+                ("quit", "Quit", Some(UiKeyCode::Q)),
+            ] {
+                let mut command = Command::new(id, label);
+                if let Some(key) = key {
+                    command = command.with_shortcut(
+                        CommandShortcut::new(
+                            key,
+                            UiModifiers {
+                                super_key: true,
+                                ..Default::default()
+                            },
+                        ),
+                        format!("⌘{key:?}"),
+                    );
+                }
+                assert!(commands.register(command).is_ok(), "unique example command");
+            }
+            commands.set_enabled("save", false);
+            Self {
+                edited: false,
+                show_grid: false,
+                commands,
+            }
+        }
     }
 
     struct MainThreadToken;
 
-    fn command(id: &str, title: &str, key: Option<char>) -> Entry {
-        let mut command = NativeMenuCommand::new(id, title);
-        if let Some(key) = key {
-            command = command.with_shortcut(NativeMenuShortcut::new(
-                key,
-                NativeMenuModifiers {
-                    command: true,
-                    ..Default::default()
-                },
-            ));
-        }
-        Entry::Command(command)
+    fn command(id: &str) -> Entry {
+        Entry::Command(NativeMenuCommand::new(id, ""))
     }
 
     fn model(demo: &Demo) -> NativeMenuBar {
         NativeMenuBar {
-            application: vec![command("settings", "Settings…", Some(','))],
+            application: vec![command("settings")],
             menus: vec![
                 NativeMenuGroup::new(
                     "file",
                     "File",
                     vec![
-                        command("new", "New", Some('n')),
+                        command("new"),
                         Entry::Separator,
-                        Entry::Command(
-                            NativeMenuCommand::new("save", "Save")
-                                .with_shortcut(NativeMenuShortcut::new(
-                                    's',
-                                    NativeMenuModifiers {
-                                        command: true,
-                                        ..Default::default()
-                                    },
-                                ))
-                                .enabled_if(demo.edited),
-                        ),
+                        command("save"),
                         Entry::Submenu(NativeMenuGroup::new(
                             "recent",
                             "Open Recent",
-                            vec![command("recent.example", "Example Document", None)],
+                            vec![command("recent.example")],
                         )),
                     ],
                 ),
@@ -62,7 +81,7 @@ mod macos {
                     "view",
                     "View",
                     vec![Entry::Command(
-                        NativeMenuCommand::new("grid", "Show Grid").with_state(if demo.show_grid {
+                        NativeMenuCommand::new("grid", "").with_state(if demo.show_grid {
                             NativeMenuState::On
                         } else {
                             NativeMenuState::Off
@@ -80,6 +99,9 @@ mod macos {
         mut exits: MessageWriter<AppExit>,
     ) {
         for id in native_menu::take_commands() {
+            if !demo.commands.record_activation(&id) {
+                continue;
+            }
             match id.as_str() {
                 "new" => demo.edited = true,
                 "save" => demo.edited = false,
@@ -91,7 +113,9 @@ mod macos {
                 _ => info!("Selected {id}"),
             }
         }
-        if let Err(error) = native_menu::sync(&model(&demo)) {
+        let edited = demo.edited;
+        demo.commands.set_enabled("save", edited);
+        if let Err(error) = sync_native_menu_from_registry(&model(&demo), &demo.commands) {
             warn!("Native menu update failed: {error:?}");
         }
     }

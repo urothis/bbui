@@ -138,6 +138,10 @@ impl CommandRegistry {
         &self.commands
     }
 
+    pub fn get(&self, id: &str) -> Option<&Command> {
+        self.commands.iter().find(|command| command.id == id)
+    }
+
     pub fn unregister(&mut self, id: &str) -> bool {
         let Some(index) = self.commands.iter().position(|command| command.id == id) else {
             return false;
@@ -152,6 +156,36 @@ impl CommandRegistry {
         };
         command.enabled = enabled;
         true
+    }
+
+    pub fn set_label(&mut self, id: &str, label: impl Into<String>) -> bool {
+        let Some(command) = self.commands.iter_mut().find(|command| command.id == id) else {
+            return false;
+        };
+        command.label = label.into();
+        true
+    }
+
+    /// Update a shortcut without allowing two commands to claim the same chord.
+    pub fn set_shortcut(
+        &mut self,
+        id: &str,
+        shortcut: Option<CommandShortcut>,
+        hint: Option<String>,
+    ) -> Result<bool, CommandError> {
+        if shortcut.is_some_and(|shortcut| {
+            self.commands
+                .iter()
+                .any(|command| command.id != id && command.shortcut == Some(shortcut))
+        }) {
+            return Err(CommandError::ShortcutConflict);
+        }
+        let Some(command) = self.commands.iter_mut().find(|command| command.id == id) else {
+            return Ok(false);
+        };
+        command.shortcut = shortcut;
+        command.shortcut_hint = hint;
+        Ok(true)
     }
 
     pub fn resolve_shortcut(&self, key: UiKeyCode, modifiers: UiModifiers) -> Option<&str> {
