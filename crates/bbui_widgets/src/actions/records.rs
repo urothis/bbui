@@ -6,6 +6,7 @@ pub enum WidgetActionKind {
     Toggle,
     SetBool(bool),
     SetNumber(f64),
+    SetNumeric(crate::NumericValue),
     StepNumber(i32),
     ResetNumber,
     InsertText(String),
@@ -172,8 +173,20 @@ impl WidgetActionQueue {
 pub enum WidgetValue {
     Bool(bool),
     Number(f64),
+    Integer(i64),
+    Unsigned(u64),
     Text,
     Option(Option<usize>),
+}
+
+impl From<crate::NumericValue> for WidgetValue {
+    fn from(value: crate::NumericValue) -> Self {
+        match value {
+            crate::NumericValue::Integer(value) => Self::Integer(value),
+            crate::NumericValue::Unsigned(value) => Self::Unsigned(value),
+            crate::NumericValue::Float(value) => Self::Number(value),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -215,6 +228,14 @@ pub enum WidgetEvent {
         target: Entity,
         before: Vec<f64>,
         after: Vec<f64>,
+    },
+    ExactNumericCommitted {
+        target: Entity,
+        before: crate::NumericValue,
+        after: crate::NumericValue,
+    },
+    ExactNumericGroupCommitted {
+        changes: Vec<(Entity, crate::NumericValue, crate::NumericValue)>,
     },
     NumericGroupCommitted {
         changes: Vec<(Entity, f64, f64)>,

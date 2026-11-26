@@ -101,7 +101,8 @@ pub(super) fn handle_slider_key(
     if !slider.enabled || slider.read_only {
         return;
     }
-    let before = slider.value;
+    let before = slider.typed_value();
+    let before_float = slider.value;
     let changed = match key {
         UiKeyCode::ArrowLeft
         | UiKeyCode::ArrowDown
@@ -121,25 +122,41 @@ pub(super) fn handle_slider_key(
                 } else {
                     1.0
                 };
-            let step = slider.step;
-            slider
-                .set_value(before + direction * step * multiplier)
-                .unwrap_or(false)
+            if slider.kind == NumericFieldKind::Float {
+                let step = slider.step;
+                slider
+                    .set_value(before_float + direction * step * multiplier)
+                    .unwrap_or(false)
+            } else {
+                slider.step_by((direction * multiplier) as i32)
+            }
         }
-        UiKeyCode::Home => slider
-            .min
-            .is_some_and(|min| slider.set_value(min).unwrap_or(false)),
-        UiKeyCode::End => slider
-            .max
-            .is_some_and(|max| slider.set_value(max).unwrap_or(false)),
+        UiKeyCode::Home => {
+            if let Some(min) = slider.exact_min {
+                slider.set_typed_value(min).unwrap_or(false)
+            } else {
+                slider
+                    .min
+                    .is_some_and(|min| slider.set_value(min).unwrap_or(false))
+            }
+        }
+        UiKeyCode::End => {
+            if let Some(max) = slider.exact_max {
+                slider.set_typed_value(max).unwrap_or(false)
+            } else {
+                slider
+                    .max
+                    .is_some_and(|max| slider.set_value(max).unwrap_or(false))
+            }
+        }
         UiKeyCode::Backspace => slider.reset(),
         _ => return,
     };
     if changed {
         emitted.push(WidgetEvent::ValueChanged {
             target,
-            before: WidgetValue::Number(before),
-            after: WidgetValue::Number(slider.value),
+            before: WidgetValue::from(before),
+            after: WidgetValue::from(slider.typed_value()),
         });
     }
 }
@@ -272,37 +289,42 @@ pub(super) fn handle_key(
                 } else {
                     1.0
                 };
-                let before = field.value;
-                let step = field.step;
-                let _ = field.set_value(before + step * sign * factor);
-                if before != field.value {
+                let before = field.typed_value();
+                if field.kind == NumericFieldKind::Float {
+                    let step = field.step;
+                    let value = field.value + step * sign * factor;
+                    let _ = field.set_value(value);
+                } else {
+                    let _ = field.step_by((sign * factor) as i32);
+                }
+                if before != field.typed_value() {
                     emitted.push(WidgetEvent::ValueChanged {
                         target,
-                        before: WidgetValue::Number(before),
-                        after: WidgetValue::Number(field.value),
+                        before: WidgetValue::from(before),
+                        after: WidgetValue::from(field.typed_value()),
                     });
                 }
             }
             UiKeyCode::Backspace if field.editing.is_none() => {
-                let before = field.value;
+                let before = field.typed_value();
                 field.reset();
-                if before != field.value {
+                if before != field.typed_value() {
                     emitted.push(WidgetEvent::ValueChanged {
                         target,
-                        before: WidgetValue::Number(before),
-                        after: WidgetValue::Number(field.value),
+                        before: WidgetValue::from(before),
+                        after: WidgetValue::from(field.typed_value()),
                     });
                 }
             }
             UiKeyCode::Backspace if field.editing.is_some() => field.edit_backspace(),
             UiKeyCode::Escape => field.cancel_edit(),
             UiKeyCode::Enter if field.editing.is_some() => {
-                let before = field.value;
+                let before = field.typed_value();
                 match field.commit_edit(&expression_variables) {
                     Ok(true) => emitted.push(WidgetEvent::ValueChanged {
                         target,
-                        before: WidgetValue::Number(before),
-                        after: WidgetValue::Number(field.value),
+                        before: WidgetValue::from(before),
+                        after: WidgetValue::from(field.typed_value()),
                     }),
                     Ok(false) => {}
                     Err(error) => emitted.push(WidgetEvent::NumericExpressionError {

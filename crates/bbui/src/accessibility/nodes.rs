@@ -452,7 +452,9 @@ pub(super) fn node_for(world: &World, entity: Entity) -> Option<Node> {
         if let Some(label) = label {
             node.set_label(label);
         }
-        node.set_numeric_value(number.value);
+        if number.kind == bbui_widgets::NumericFieldKind::Float {
+            node.set_numeric_value(number.value);
+        }
         node.set_value(number.display());
         if let Some(min) = number.min {
             node.set_min_numeric_value(min);

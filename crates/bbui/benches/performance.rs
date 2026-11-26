@@ -17,6 +17,7 @@ fn workspace_benchmarks(c: &mut Criterion) {
     suite::render::bench(c);
     suite::widgets::bench(c);
     suite::widgets::bench_panel_sync(c);
+    suite::exact_numeric::bench(c);
     suite::text_media::bench(c);
     suite::workspace::bench(c);
     suite::modal::bench(c);

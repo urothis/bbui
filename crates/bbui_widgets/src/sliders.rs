@@ -1,6 +1,6 @@
 //! Bounded numeric sliders built on the shared numeric-field value semantics.
 
-use crate::{NumericField, NumericFieldKind};
+use crate::{NumericField, NumericFieldKind, NumericValue};
 use bevy_ecs::prelude::Component;
 use std::ops::{Deref, DerefMut};
 
@@ -40,6 +40,21 @@ impl Slider {
     /// Converts an existing bounded numeric field into a slider without
     /// changing its value, default, unit, precision, or edit settings.
     pub fn from_field(field: NumericField) -> Result<Self, &'static str> {
+        if field.kind != NumericFieldKind::Float {
+            return match (field.exact_min, field.exact_max) {
+                (Some(NumericValue::Integer(min)), Some(NumericValue::Integer(max)))
+                    if min <= max =>
+                {
+                    Ok(Self { field })
+                }
+                (Some(NumericValue::Unsigned(min)), Some(NumericValue::Unsigned(max)))
+                    if min <= max =>
+                {
+                    Ok(Self { field })
+                }
+                _ => Err("exact slider requires typed minimum and maximum bounds"),
+            };
+        }
         match (field.min, field.max) {
             (Some(min), Some(max)) if min.is_finite() && max.is_finite() => {
                 if !(max - min).is_finite() {
@@ -76,6 +91,37 @@ impl Slider {
     /// Returns the current position in the closed interval `[0, 1]`.
     /// A fixed-range slider is represented at its midpoint.
     pub fn normalized_value(&self) -> f64 {
+        match (
+            self.field.typed_value(),
+            self.field.exact_min,
+            self.field.exact_max,
+        ) {
+            (
+                NumericValue::Integer(value),
+                Some(NumericValue::Integer(min)),
+                Some(NumericValue::Integer(max)),
+            ) => {
+                if min == max {
+                    return 0.5;
+                }
+                return ((i128::from(value) - i128::from(min)) as f64
+                    / (i128::from(max) - i128::from(min)) as f64)
+                    .clamp(0.0, 1.0);
+            }
+            (
+                NumericValue::Unsigned(value),
+                Some(NumericValue::Unsigned(min)),
+                Some(NumericValue::Unsigned(max)),
+            ) => {
+                if min == max {
+                    return 0.5;
+                }
+                return ((u128::from(value) - u128::from(min)) as f64
+                    / (u128::from(max) - u128::from(min)) as f64)
+                    .clamp(0.0, 1.0);
+            }
+            _ => {}
+        }
         let [min, max] = self.range();
         if min == max {
             0.5
@@ -90,6 +136,32 @@ impl Slider {
         if !position.is_finite() {
             return Err("slider position must be finite");
         }
+        let position = position.clamp(0.0, 1.0);
+        match (self.field.exact_min, self.field.exact_max) {
+            (Some(NumericValue::Integer(min)), Some(NumericValue::Integer(max))) => {
+                let span = i128::from(max) - i128::from(min);
+                let offset = if position == 1.0 {
+                    span
+                } else {
+                    (span as f64 * position).round() as i128
+                };
+                let next =
+                    (i128::from(min) + offset).clamp(i128::from(min), i128::from(max)) as i64;
+                return self.field.set_typed_value(NumericValue::Integer(next));
+            }
+            (Some(NumericValue::Unsigned(min)), Some(NumericValue::Unsigned(max))) => {
+                let span = u128::from(max) - u128::from(min);
+                let offset = if position == 1.0 {
+                    span
+                } else {
+                    (span as f64 * position).round() as u128
+                };
+                let next =
+                    (u128::from(min) + offset).clamp(u128::from(min), u128::from(max)) as u64;
+                return self.field.set_typed_value(NumericValue::Unsigned(next));
+            }
+            _ => {}
+        }
         let [min, max] = self.range();
         self.field
             .set_value(min + (max - min) * position.clamp(0.0, 1.0))
@@ -97,6 +169,10 @@ impl Slider {
 
     pub fn set_value(&mut self, value: f64) -> Result<bool, &'static str> {
         self.field.set_value(value)
+    }
+
+    pub fn set_typed_value(&mut self, value: NumericValue) -> Result<bool, &'static str> {
+        self.field.set_typed_value(value)
     }
 
     pub fn set_range(&mut self, min: f64, max: f64) -> Result<bool, &'static str> {
@@ -127,6 +203,23 @@ impl DerefMut for Slider {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn full_width_unsigned_slider_keeps_exact_endpoints() {
+        let mut field = NumericField::unsigned(u64::MAX - 5);
+        field
+            .set_typed_bounds(
+                Some(NumericValue::Unsigned(u64::MAX - 10)),
+                Some(NumericValue::Unsigned(u64::MAX)),
+            )
+            .unwrap();
+        let mut slider = Slider::from_field(field).unwrap();
+        assert_eq!(slider.normalized_value(), 0.5);
+        assert!(slider.set_normalized_value(1.0).unwrap());
+        assert_eq!(slider.typed_value(), NumericValue::Unsigned(u64::MAX));
+        assert!(slider.set_normalized_value(0.0).unwrap());
+        assert_eq!(slider.typed_value(), NumericValue::Unsigned(u64::MAX - 10));
+    }
 
     #[test]
     fn slider_maps_track_positions_and_reuses_numeric_field_normalization() {

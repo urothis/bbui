@@ -229,6 +229,7 @@ pub(super) fn spawn_node(
             | WidgetSpec::Checkbox { .. }
             | WidgetSpec::RadioGroup { .. }
             | WidgetSpec::Number { .. }
+            | WidgetSpec::ExactNumber { .. }
             | WidgetSpec::Slider { .. }
             | WidgetSpec::SliderRange { .. }
             | WidgetSpec::Panel { .. }
@@ -456,6 +457,11 @@ pub(super) fn insert_control(
             world
                 .entity_mut(entity)
                 .insert((Label::new(label.clone()), field));
+        }
+        WidgetSpec::ExactNumber { label, field } => {
+            world
+                .entity_mut(entity)
+                .insert((Label::new(label.clone()), field.clone()));
         }
         WidgetSpec::Slider { label, slider } => {
             world.entity_mut(entity).insert((

@@ -70,6 +70,37 @@ pub fn record_widget_edits(world: &mut World) {
                     vec![(target, UiValue::Numbers(before), UiValue::Numbers(after))],
                 );
             }
+            WidgetEvent::ExactNumericCommitted {
+                target,
+                before,
+                after,
+            } => {
+                let value = |value| match value {
+                    NumericValue::Integer(value) => UiValue::Integer(value),
+                    NumericValue::Unsigned(value) => UiValue::Unsigned(value),
+                    NumericValue::Float(value) => UiValue::Float(value),
+                };
+                commit_transaction(
+                    world,
+                    "Edit exact integer",
+                    vec![(target, value(before), value(after))],
+                );
+            }
+            WidgetEvent::ExactNumericGroupCommitted { changes } => {
+                let value = |value| match value {
+                    NumericValue::Integer(value) => UiValue::Integer(value),
+                    NumericValue::Unsigned(value) => UiValue::Unsigned(value),
+                    NumericValue::Float(value) => UiValue::Float(value),
+                };
+                commit_transaction(
+                    world,
+                    "Scrub exact integers",
+                    changes
+                        .into_iter()
+                        .map(|(target, before, after)| (target, value(before), value(after)))
+                        .collect(),
+                );
+            }
             WidgetEvent::NumericGroupCommitted { changes } => {
                 commit_transaction(
                     world,

@@ -23,8 +23,9 @@ use bbui_widgets::{
     DataTableHeaderControl, Dropdown, DropdownOptionControl, FileBrowser, FileBrowserItem,
     HsvColorEditor, HsvColorField, IconButton, IconButtonAssetState, IconButtonAssetStatus, Label,
     ListModel, MenuControl, MenuItemControl, NodeGraph, NodeGraphLinkControl, NodeGraphNodeControl,
-    NodeGraphSocketControl, NumericField, Panel, PanelGroup, PreviewGrid, Progress, RadioGroup,
-    RadioOptionControl, Slider, SocketDirection, TextArea, TextField, Tooltip, TreeModel,
+    NodeGraphSocketControl, NumericField, NumericValue, Panel, PanelGroup, PreviewGrid, Progress,
+    RadioGroup, RadioOptionControl, Slider, SocketDirection, TextArea, TextField, Tooltip,
+    TreeModel,
 };
 use bevy::a11y::{AccessibilityNode, ActionRequest};
 use bevy::camera::RenderTarget;
@@ -428,6 +429,7 @@ pub struct AccessControlQueries<'w, 's> {
     dropdown_options: Query<'w, 's, &'static DropdownOptionControl>,
     ramps: Query<'w, 's, &'static ColorRamp>,
     colors: Query<'w, 's, &'static HsvColorEditor>,
+    numbers: Query<'w, 's, &'static NumericField>,
     curves: Query<'w, 's, &'static CurveEditor>,
     collection_items: Query<'w, 's, &'static CollectionItemControl>,
     table_headers: Query<'w, 's, &'static DataTableHeaderControl>,
@@ -727,6 +729,26 @@ pub fn route_accessibility_actions(
                         target,
                         WidgetActionKind::HsvColorSetHex(value.to_string()),
                     ));
+                } else if let Some(ActionData::Value(value)) = &request.data
+                    && let Ok(field) = controls.numbers.get(target)
+                {
+                    let parsed = match field.typed_value() {
+                        NumericValue::Integer(_) => {
+                            value.parse::<i64>().ok().map(NumericValue::Integer)
+                        }
+                        NumericValue::Unsigned(_) => {
+                            value.parse::<u64>().ok().map(NumericValue::Unsigned)
+                        }
+                        NumericValue::Float(_) => {
+                            value.parse::<f64>().ok().map(NumericValue::Float)
+                        }
+                    };
+                    if let Some(value) = parsed {
+                        actions.push(WidgetAction::new(
+                            target,
+                            WidgetActionKind::SetNumeric(value),
+                        ));
+                    }
                 } else if let Some(ActionData::NumericValue(value)) = &request.data {
                     if let Ok(header) = controls.table_headers.get(target) {
                         actions.push(WidgetAction::new(

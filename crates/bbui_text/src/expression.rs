@@ -33,6 +33,171 @@ impl std::fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
+/// Evaluate integer arithmetic without passing any value through floating
+/// point. The `x` variable is the control's exact current value.
+pub fn evaluate_exact_integer(source: &str, x: i128) -> Result<i128, Error> {
+    struct Parser<'a> {
+        bytes: &'a [u8],
+        at: usize,
+        x: i128,
+        depth: u8,
+    }
+    impl Parser<'_> {
+        fn skip_space(&mut self) {
+            while self.bytes.get(self.at).is_some_and(u8::is_ascii_whitespace) {
+                self.at += 1;
+            }
+        }
+        fn eat(&mut self, token: u8) -> bool {
+            self.skip_space();
+            if self.bytes.get(self.at) == Some(&token) {
+                self.at += 1;
+                true
+            } else {
+                false
+            }
+        }
+        fn sum(&mut self) -> Result<i128, Error> {
+            let mut value = self.product()?;
+            loop {
+                if self.eat(b'+') {
+                    value = value.checked_add(self.product()?).ok_or(Error::Overflow)?;
+                } else if self.eat(b'-') {
+                    value = value.checked_sub(self.product()?).ok_or(Error::Overflow)?;
+                } else {
+                    return Ok(value);
+                }
+            }
+        }
+        fn product(&mut self) -> Result<i128, Error> {
+            let mut value = self.atom()?;
+            loop {
+                if self.eat(b'*') {
+                    value = value.checked_mul(self.atom()?).ok_or(Error::Overflow)?;
+                } else if self.eat(b'/') {
+                    let divisor = self.atom()?;
+                    value = value.checked_div(divisor).ok_or(if divisor == 0 {
+                        Error::DivisionByZero
+                    } else {
+                        Error::Overflow
+                    })?;
+                } else {
+                    return Ok(value);
+                }
+            }
+        }
+        fn atom(&mut self) -> Result<i128, Error> {
+            if self.eat(b'+') {
+                self.depth = self
+                    .depth
+                    .checked_add(1)
+                    .filter(|depth| *depth <= 32)
+                    .ok_or(Error::TooComplex)?;
+                let value = self.atom();
+                self.depth -= 1;
+                return value;
+            }
+            if self.eat(b'-') {
+                self.depth = self
+                    .depth
+                    .checked_add(1)
+                    .filter(|depth| *depth <= 32)
+                    .ok_or(Error::TooComplex)?;
+                let value = self
+                    .atom()
+                    .and_then(|value| value.checked_neg().ok_or(Error::Overflow));
+                self.depth -= 1;
+                return value;
+            }
+            if self.eat(b'(') {
+                self.depth = self
+                    .depth
+                    .checked_add(1)
+                    .filter(|depth| *depth <= 32)
+                    .ok_or(Error::TooComplex)?;
+                let value = self.sum()?;
+                self.depth -= 1;
+                if !self.eat(b')') {
+                    return Err(Error::UnexpectedToken);
+                }
+                return Ok(value);
+            }
+            self.skip_space();
+            let start = self.at;
+            if self.bytes.get(self.at).is_some_and(u8::is_ascii_digit) {
+                while self.bytes.get(self.at).is_some_and(u8::is_ascii_digit) {
+                    self.at += 1;
+                }
+                return std::str::from_utf8(&self.bytes[start..self.at])
+                    .map_err(|_| Error::InvalidNumber(start))?
+                    .parse::<i128>()
+                    .map_err(|_| Error::Overflow);
+            }
+            if self.bytes.get(self.at).is_some_and(u8::is_ascii_alphabetic) {
+                while self
+                    .bytes
+                    .get(self.at)
+                    .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
+                {
+                    self.at += 1;
+                }
+                let name = std::str::from_utf8(&self.bytes[start..self.at])
+                    .map_err(|_| Error::InvalidCharacter(start))?;
+                return if name == "x" {
+                    Ok(self.x)
+                } else {
+                    Err(Error::UnknownName(name.into()))
+                };
+            }
+            Err(Error::UnexpectedToken)
+        }
+    }
+    if source.len() > 4_096 {
+        return Err(Error::TooComplex);
+    }
+    let mut parser = Parser {
+        bytes: source.as_bytes(),
+        at: 0,
+        x,
+        depth: 0,
+    };
+    let value = parser.sum()?;
+    parser.skip_space();
+    if parser.at != parser.bytes.len() {
+        return Err(Error::InvalidCharacter(parser.at));
+    }
+    Ok(value)
+}
+
+pub fn evaluate_exact_i64(source: &str, x: i64) -> Result<i64, Error> {
+    i64::try_from(evaluate_exact_integer(source, i128::from(x))?).map_err(|_| Error::Overflow)
+}
+
+pub fn evaluate_exact_u64(source: &str, x: u64) -> Result<u64, Error> {
+    u64::try_from(evaluate_exact_integer(source, i128::from(x))?).map_err(|_| Error::Overflow)
+}
+
+#[cfg(test)]
+mod exact_integer_tests {
+    use super::*;
+
+    #[test]
+    fn full_width_values_and_checked_arithmetic() {
+        assert_eq!(evaluate_exact_i64("-9223372036854775808", 0), Ok(i64::MIN));
+        assert_eq!(evaluate_exact_i64("x + 1", i64::MAX - 1), Ok(i64::MAX));
+        assert_eq!(evaluate_exact_u64("18446744073709551615", 0), Ok(u64::MAX));
+        assert_eq!(evaluate_exact_u64("x + 1", u64::MAX), Err(Error::Overflow));
+        assert_eq!(evaluate_exact_i64("(2 + 3) * 4", 0), Ok(20));
+        assert_eq!(evaluate_exact_i64("1 / 0", 0), Err(Error::DivisionByZero));
+        assert_eq!(
+            evaluate_exact_i64(&"-".repeat(64), 0),
+            Err(Error::TooComplex)
+        );
+        assert_eq!(evaluate_exact_u64("-1", 0), Err(Error::Overflow));
+        assert!(evaluate_exact_i64("1.5", 0).is_err());
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 enum Token {
     Number(f64),

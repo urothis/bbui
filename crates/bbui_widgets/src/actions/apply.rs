@@ -56,63 +56,84 @@ pub(super) fn apply_action(
         }
         WidgetActionKind::SetNumber(value) => {
             if let Some(mut field) = world.get_mut::<NumericField>(target) {
-                let before = field.value;
+                let before = field.typed_value();
                 if field.set_value(value).unwrap_or(false) {
                     emitted.push(WidgetEvent::ValueChanged {
                         target,
-                        before: WidgetValue::Number(before),
-                        after: WidgetValue::Number(field.value),
+                        before: WidgetValue::from(before),
+                        after: WidgetValue::from(field.typed_value()),
                     });
                 }
             } else if let Some(mut slider) = world.get_mut::<Slider>(target) {
-                let before = slider.value;
+                let before = slider.typed_value();
                 if slider.set_value(value).unwrap_or(false) {
                     emitted.push(WidgetEvent::ValueChanged {
                         target,
-                        before: WidgetValue::Number(before),
-                        after: WidgetValue::Number(slider.value),
+                        before: WidgetValue::from(before),
+                        after: WidgetValue::from(slider.typed_value()),
+                    });
+                }
+            }
+        }
+        WidgetActionKind::SetNumeric(value) => {
+            if let Some(mut field) = world.get_mut::<NumericField>(target) {
+                let before = field.typed_value();
+                if field.set_typed_value(value).unwrap_or(false) {
+                    emitted.push(WidgetEvent::ValueChanged {
+                        target,
+                        before: WidgetValue::from(before),
+                        after: WidgetValue::from(field.typed_value()),
+                    });
+                }
+            } else if let Some(mut slider) = world.get_mut::<Slider>(target) {
+                let before = slider.typed_value();
+                if slider.set_typed_value(value).unwrap_or(false) {
+                    emitted.push(WidgetEvent::ValueChanged {
+                        target,
+                        before: WidgetValue::from(before),
+                        after: WidgetValue::from(slider.typed_value()),
                     });
                 }
             }
         }
         WidgetActionKind::StepNumber(steps) => {
             if let Some(mut field) = world.get_mut::<NumericField>(target) {
-                let before = field.value;
+                let before = field.typed_value();
                 if field.step_by(steps) {
                     emitted.push(WidgetEvent::ValueChanged {
                         target,
-                        before: WidgetValue::Number(before),
-                        after: WidgetValue::Number(field.value),
+                        before: WidgetValue::from(before),
+                        after: WidgetValue::from(field.typed_value()),
                     });
                 }
             } else if let Some(mut slider) = world.get_mut::<Slider>(target) {
-                let before = slider.value;
+                let before = slider.typed_value();
                 if slider.step_by(steps) {
                     emitted.push(WidgetEvent::ValueChanged {
                         target,
-                        before: WidgetValue::Number(before),
-                        after: WidgetValue::Number(slider.value),
+                        before: WidgetValue::from(before),
+                        after: WidgetValue::from(slider.typed_value()),
                     });
                 }
             }
         }
         WidgetActionKind::ResetNumber => {
             if let Some(mut field) = world.get_mut::<NumericField>(target) {
-                let before = field.value;
+                let before = field.typed_value();
                 if field.reset() {
                     emitted.push(WidgetEvent::ValueChanged {
                         target,
-                        before: WidgetValue::Number(before),
-                        after: WidgetValue::Number(field.value),
+                        before: WidgetValue::from(before),
+                        after: WidgetValue::from(field.typed_value()),
                     });
                 }
             } else if let Some(mut slider) = world.get_mut::<Slider>(target) {
-                let before = slider.value;
+                let before = slider.typed_value();
                 if slider.reset() {
                     emitted.push(WidgetEvent::ValueChanged {
                         target,
-                        before: WidgetValue::Number(before),
-                        after: WidgetValue::Number(slider.value),
+                        before: WidgetValue::from(before),
+                        after: WidgetValue::from(slider.typed_value()),
                     });
                 }
             }

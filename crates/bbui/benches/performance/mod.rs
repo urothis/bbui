@@ -1,5 +1,6 @@
 pub mod chrome;
 pub mod commands;
+pub mod exact_numeric;
 pub mod input;
 pub mod integration;
 pub mod layout;

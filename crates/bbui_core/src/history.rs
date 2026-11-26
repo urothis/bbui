@@ -159,6 +159,7 @@ impl<T: Clone + PartialEq> History<T> {
 pub enum UiValue {
     Bool(bool),
     Integer(i64),
+    Unsigned(u64),
     Float(f64),
     Numbers(Vec<f64>),
     OptionalIndex(Option<usize>),

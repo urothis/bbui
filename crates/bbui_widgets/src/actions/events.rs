@@ -501,7 +501,7 @@ pub fn process_routed_widget_events(world: &mut World) {
                 ..
             } if modifiers.control => {
                 if let Some(mut slider) = world.get_mut::<Slider>(target) {
-                    let before = slider.value;
+                    let before = slider.typed_value();
                     let steps = if delta[1] > 0.0 {
                         1
                     } else if delta[1] < 0.0 {
@@ -510,15 +510,15 @@ pub fn process_routed_widget_events(world: &mut World) {
                         0
                     };
                     slider.step_by(steps);
-                    if before != slider.value {
+                    if before != slider.typed_value() {
                         emitted.push(WidgetEvent::ValueChanged {
                             target,
-                            before: WidgetValue::Number(before),
-                            after: WidgetValue::Number(slider.value),
+                            before: WidgetValue::from(before),
+                            after: WidgetValue::from(slider.typed_value()),
                         });
                     }
                 } else if let Some(mut field) = world.get_mut::<NumericField>(target) {
-                    let before = field.value;
+                    let before = field.typed_value();
                     let steps = if delta[1] > 0.0 {
                         1
                     } else if delta[1] < 0.0 {
@@ -527,12 +527,12 @@ pub fn process_routed_widget_events(world: &mut World) {
                         0
                     };
                     field.step_by(steps);
-                    let after = field.value;
+                    let after = field.typed_value();
                     if before != after {
                         emitted.push(WidgetEvent::ValueChanged {
                             target,
-                            before: WidgetValue::Number(before),
-                            after: WidgetValue::Number(after),
+                            before: WidgetValue::from(before),
+                            after: WidgetValue::from(after),
                         });
                     }
                 }
