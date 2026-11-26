@@ -91,7 +91,7 @@ impl Plugin for BbuiPlugin {
         app.init_resource::<input_bridge::TouchBridgeState>();
         #[cfg(target_os = "macos")]
         {
-            app.insert_non_send_resource(bbui_macos_trackpad::TrackpadMonitor::default());
+            app.insert_non_send(bbui_macos_trackpad::TrackpadMonitor::default());
             app.init_resource::<native_trackpad::MacTrackpadFrame>();
             app.add_systems(
                 Update,
