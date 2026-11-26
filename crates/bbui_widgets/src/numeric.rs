@@ -483,26 +483,24 @@ impl NumericField {
                 result
             };
             let result = match result {
-                Err(Error::Domain) if legacy_safe => {
-                    let mut context: HashMap<_, _> = vars
-                        .iter()
-                        .map(|(name, value)| (name.clone(), value.as_f64()))
-                        .collect();
-                    context.insert("x".into(), self.typed_value().as_f64());
-                    expression::evaluate(input, &context).and_then(|value| {
-                        let rounded = value.round();
-                        if rounded.abs() > 9_007_199_254_740_992.0 {
-                            return Err(Error::Overflow);
+                Err(Error::Domain) if legacy_safe => expression::evaluate_typed(
+                    input,
+                    self.typed_value().as_f64(),
+                    vars,
+                )
+                .and_then(|value| {
+                    let rounded = value.round();
+                    if rounded.abs() > 9_007_199_254_740_992.0 {
+                        return Err(Error::Overflow);
+                    }
+                    match self.kind {
+                        NumericFieldKind::Integer => Ok(NumericValue::Integer(rounded as i64)),
+                        NumericFieldKind::Unsigned if rounded >= 0.0 => {
+                            Ok(NumericValue::Unsigned(rounded as u64))
                         }
-                        match self.kind {
-                            NumericFieldKind::Integer => Ok(NumericValue::Integer(rounded as i64)),
-                            NumericFieldKind::Unsigned if rounded >= 0.0 => {
-                                Ok(NumericValue::Unsigned(rounded as u64))
-                            }
-                            _ => Err(Error::Domain),
-                        }
-                    })
-                }
+                        _ => Err(Error::Domain),
+                    }
+                }),
                 result => result,
             };
             let value = match result {
@@ -518,12 +516,7 @@ impl NumericField {
             self.expression_error = None;
             return Ok(changed);
         }
-        let mut context: HashMap<_, _> = vars
-            .iter()
-            .map(|(name, value)| (name.clone(), value.as_f64()))
-            .collect();
-        context.insert("x".into(), self.value);
-        let result = match expression::evaluate(input, &context) {
+        let result = match expression::evaluate_typed(input, self.value, vars) {
             Ok(value) => value,
             Err(error) => {
                 self.expression_error = Some(error.clone());

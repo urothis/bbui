@@ -446,7 +446,23 @@ pub fn has_wide_numeric_literal(source: &str) -> bool {
 }
 
 pub fn evaluate(source: &str, vars: &HashMap<String, f64>) -> Result<f64, Error> {
-    parse::<false>(source)?.evaluate(vars)
+    parse::<false>(source)?.evaluate(&|name| vars.get(name).copied())
+}
+
+/// Evaluate a float expression against typed field variables without copying
+/// the map. The field's current value always overrides a named `x` variable.
+pub fn evaluate_typed(
+    source: &str,
+    x: f64,
+    vars: &HashMap<String, NumericValue>,
+) -> Result<f64, Error> {
+    parse::<false>(source)?.evaluate(&|name| {
+        if name == "x" {
+            Some(x)
+        } else {
+            vars.get(name).map(|value| value.as_f64())
+        }
+    })
 }
 
 fn parse<const EXACT: bool>(source: &str) -> Result<Expression, Error> {
@@ -529,21 +545,19 @@ enum CompareOperation {
 }
 
 impl Expression {
-    fn evaluate(&self, vars: &HashMap<String, f64>) -> Result<f64, Error> {
+    fn evaluate<F: Fn(&str) -> Option<f64>>(&self, lookup: &F) -> Result<f64, Error> {
         match self {
             Self::Number(value) => finite(*value),
             Self::ExactNumber(value) => finite(*value as f64),
             Self::Name(name) => match name.as_str() {
                 "pi" => Ok(std::f64::consts::PI),
                 "e" => Ok(std::f64::consts::E),
-                _ => vars
-                    .get(name)
-                    .copied()
+                _ => lookup(name)
                     .ok_or_else(|| Error::UnknownName(name.clone()))
                     .and_then(finite),
             },
             Self::Unary { negative, value } => {
-                let value = value.evaluate(vars)?;
+                let value = value.evaluate(lookup)?;
                 finite(if *negative { -value } else { value })
             }
             Self::Binary {
@@ -551,8 +565,8 @@ impl Expression {
                 left,
                 right,
             } => {
-                let left = left.evaluate(vars)?;
-                let right = right.evaluate(vars)?;
+                let left = left.evaluate(lookup)?;
+                let right = right.evaluate(lookup)?;
                 match operation {
                     BinaryOperation::Add => finite(left + right),
                     BinaryOperation::Subtract => finite(left - right),
@@ -569,8 +583,8 @@ impl Expression {
                 left,
                 right,
             } => {
-                let left = left.evaluate(vars)?;
-                let right = right.evaluate(vars)?;
+                let left = left.evaluate(lookup)?;
+                let right = right.evaluate(lookup)?;
                 let value = match operation {
                     CompareOperation::Less => left < right,
                     CompareOperation::LessEq => left <= right,
@@ -586,16 +600,16 @@ impl Expression {
                 condition,
                 alternative,
             } => {
-                if condition.evaluate(vars)? != 0.0 {
-                    value.evaluate(vars)
+                if condition.evaluate(lookup)? != 0.0 {
+                    value.evaluate(lookup)
                 } else {
-                    alternative.evaluate(vars)
+                    alternative.evaluate(lookup)
                 }
             }
             Self::Call { name, arguments } => {
                 let values = arguments
                     .iter()
-                    .map(|argument| argument.evaluate(vars))
+                    .map(|argument| argument.evaluate(lookup))
                     .collect::<Result<Vec<_>, _>>()?;
                 function(name, &values)
             }
