@@ -351,6 +351,9 @@ pub(super) fn layout_for(spec: &WidgetSpec) -> UiLayoutNode {
             UiLength::Px(220.0),
             UiLength::Px(24.0 * (group.options.len().max(1) as f32 + 1.0)),
         ),
+        WidgetSpec::Slider { slider, .. } if slider.value_text().chars().count() > 14 => {
+            UiLayoutNode::leaf(UiLength::Px(260.0), UiLength::Px(48.0))
+        }
         WidgetSpec::Slider { .. } | WidgetSpec::SliderRange { .. } => {
             UiLayoutNode::leaf(UiLength::Px(260.0), UiLength::Px(32.0))
         }

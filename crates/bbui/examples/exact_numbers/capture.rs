@@ -94,7 +94,8 @@ fn capture_exact_numbers() {
             .disable::<bevy::pbr::PbrPlugin>(),
     )
     .add_plugins(BbuiPlugin)
-    .init_resource::<Frames>();
+    .init_resource::<Frames>()
+    .add_systems(Update, sync_clear_color);
     app.finish();
     app.cleanup();
     let mut image = Image::new_target_texture(WIDTH, HEIGHT, TextureFormat::Rgba8UnormSrgb, None);

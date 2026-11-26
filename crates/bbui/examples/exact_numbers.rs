@@ -2,6 +2,7 @@
 //! Run with `cargo run -p bbui --example exact_numbers`.
 
 use bbui::prelude::*;
+use bbui::widgets::NumericValue;
 use bbui_layout::{Rect, UiEdges};
 use bevy::prelude::*;
 use bevy::window::{PrimaryWindow, WindowResolution};
@@ -18,6 +19,14 @@ fn install_ui(world: &mut World) {
         eprintln!("exact numeric example requires a primary window");
         return;
     };
+    let mut slider_field = NumericField::unsigned(u64::MAX - 25);
+    slider_field
+        .set_typed_bounds(
+            Some(NumericValue::Unsigned(u64::MAX - 100)),
+            Some(NumericValue::Unsigned(u64::MAX)),
+        )
+        .expect("valid full-width slider bounds");
+    let slider = Slider::from_field(slider_field).expect("bounded exact slider");
     let Ok(root) = WidgetTree::new(
         WidgetNode::column([
             WidgetNode::label("EXACT NUMERIC FIELDS").with_height(UiLength::Px(36.0)),
@@ -52,6 +61,21 @@ fn install_ui(world: &mut World) {
                 ],
             )
             .with_width(UiLength::Fill(1.0)),
+            WidgetNode::panel(
+                "Bounded control at the precision limit",
+                true,
+                [
+                    WidgetNode::label("Near maximum"),
+                    WidgetNode::slider("", slider)
+                        .with_key("exact-slider")
+                        .with_width(UiLength::Fill(1.0))
+                        .with_height(UiLength::Px(48.0)),
+                    WidgetNode::label(
+                        "The handle uses exact bounds; dragging to either end keeps every digit.",
+                    ),
+                ],
+            )
+            .with_width(UiLength::Fill(1.0)),
             WidgetNode::label("Select a field to type an exact value or expression such as x - 1."),
             WidgetNode::label("Arrow keys step exactly; copy and paste preserve all 64 bits."),
         ])
@@ -80,6 +104,13 @@ fn setup(world: &mut World) {
     install_ui(world);
 }
 
+fn sync_clear_color(theme: Res<Theme>, mut clear: ResMut<ClearColor>) {
+    if theme.is_changed() {
+        let background = theme.background;
+        clear.0 = Color::srgba(background.0, background.1, background.2, background.3);
+    }
+}
+
 fn main() {
     App::new()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
@@ -92,5 +123,6 @@ fn main() {
         }))
         .add_plugins(BbuiPlugin)
         .add_systems(Startup, setup)
+        .add_systems(Update, sync_clear_color)
         .run();
 }
