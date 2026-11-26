@@ -163,6 +163,16 @@ fn appkit_key(key: UiKeyCode) -> Option<char> {
         UiKeyCode::Digit8 => '8',
         UiKeyCode::Digit9 => '9',
         UiKeyCode::Comma => ',',
+        UiKeyCode::Backquote => '`',
+        UiKeyCode::Backslash => '\\',
+        UiKeyCode::BracketLeft => '[',
+        UiKeyCode::BracketRight => ']',
+        UiKeyCode::Equal => '=',
+        UiKeyCode::Minus => '-',
+        UiKeyCode::Period => '.',
+        UiKeyCode::Quote => '\'',
+        UiKeyCode::Semicolon => ';',
+        UiKeyCode::Slash => '/',
         UiKeyCode::Tab => '\t',
         UiKeyCode::Escape => '\u{1b}',
         UiKeyCode::Enter => '\r',
@@ -174,7 +184,41 @@ fn appkit_key(key: UiKeyCode) -> Option<char> {
         UiKeyCode::ArrowDown => '\u{f701}',
         UiKeyCode::ArrowLeft => '\u{f702}',
         UiKeyCode::ArrowRight => '\u{f703}',
+        UiKeyCode::F1 => '\u{f704}',
         UiKeyCode::F2 => '\u{f705}',
+        UiKeyCode::F3 => '\u{f706}',
+        UiKeyCode::F4 => '\u{f707}',
+        UiKeyCode::F5 => '\u{f708}',
+        UiKeyCode::F6 => '\u{f709}',
+        UiKeyCode::F7 => '\u{f70a}',
+        UiKeyCode::F8 => '\u{f70b}',
+        UiKeyCode::F9 => '\u{f70c}',
+        UiKeyCode::F10 => '\u{f70d}',
+        UiKeyCode::F11 => '\u{f70e}',
+        UiKeyCode::F12 => '\u{f70f}',
+        UiKeyCode::F13 => '\u{f710}',
+        UiKeyCode::F14 => '\u{f711}',
+        UiKeyCode::F15 => '\u{f712}',
+        UiKeyCode::F16 => '\u{f713}',
+        UiKeyCode::F17 => '\u{f714}',
+        UiKeyCode::F18 => '\u{f715}',
+        UiKeyCode::F19 => '\u{f716}',
+        UiKeyCode::F20 => '\u{f717}',
+        UiKeyCode::F21 => '\u{f718}',
+        UiKeyCode::F22 => '\u{f719}',
+        UiKeyCode::F23 => '\u{f71a}',
+        UiKeyCode::F24 => '\u{f71b}',
+        UiKeyCode::F25 => '\u{f71c}',
+        UiKeyCode::F26 => '\u{f71d}',
+        UiKeyCode::F27 => '\u{f71e}',
+        UiKeyCode::F28 => '\u{f71f}',
+        UiKeyCode::F29 => '\u{f720}',
+        UiKeyCode::F30 => '\u{f721}',
+        UiKeyCode::F31 => '\u{f722}',
+        UiKeyCode::F32 => '\u{f723}',
+        UiKeyCode::F33 => '\u{f724}',
+        UiKeyCode::F34 => '\u{f725}',
+        UiKeyCode::F35 => '\u{f726}',
         UiKeyCode::Home => '\u{f729}',
         UiKeyCode::End => '\u{f72b}',
         UiKeyCode::PageUp => '\u{f72c}',
@@ -188,6 +232,27 @@ mod tests {
     use super::*;
     use bbui_native_menu::{NativeMenuCommand, NativeMenuState};
     use bbui_widgets::Command;
+
+    #[test]
+    fn punctuation_and_function_keys_have_native_equivalents() {
+        for (key, native) in [
+            (UiKeyCode::Backquote, '`'),
+            (UiKeyCode::Backslash, '\\'),
+            (UiKeyCode::BracketLeft, '['),
+            (UiKeyCode::BracketRight, ']'),
+            (UiKeyCode::Equal, '='),
+            (UiKeyCode::Minus, '-'),
+            (UiKeyCode::Period, '.'),
+            (UiKeyCode::Quote, '\''),
+            (UiKeyCode::Semicolon, ';'),
+            (UiKeyCode::Slash, '/'),
+            (UiKeyCode::F1, '\u{f704}'),
+            (UiKeyCode::F12, '\u{f70f}'),
+            (UiKeyCode::F35, '\u{f726}'),
+        ] {
+            assert_eq!(appkit_key(key), Some(native));
+        }
+    }
 
     #[test]
     fn registry_controls_menu_labels_availability_and_shortcuts() {
