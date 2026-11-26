@@ -31,6 +31,17 @@ pub fn bench(c: &mut Criterion) {
             ))
         })
     });
+    let mut fractional = NumericField::integer(0);
+    let unused_wide = HashMap::from([("unused".to_owned(), NumericValue::Unsigned(u64::MAX))]);
+    c.bench_function("numeric/integer_fractional_with_unused_wide", |b| {
+        b.iter(|| {
+            black_box(
+                fractional
+                    .evaluate_input(black_box("sqrt(2)*2"), black_box(&unused_wide))
+                    .is_ok(),
+            )
+        })
+    });
     let mut exact = NumericField::unsigned(u64::MAX - 2);
     c.bench_function("numeric/exact_u64_step_pair", |b| {
         b.iter(|| {

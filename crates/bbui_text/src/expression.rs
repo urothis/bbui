@@ -199,10 +199,9 @@ pub fn evaluate_exact_integer_with_vars(
 ) -> Result<i128, Error> {
     match evaluate_exact_basic(source, x) {
         Ok(value) => Ok(value),
-        Err(Error::InvalidCharacter(_) | Error::UnexpectedToken | Error::UnknownName(_)) => {
-            parse::<true>(source)?.evaluate_exact(x, vars)
-        }
-        Err(error) => Err(error),
+        // The basic parser can evaluate a branch before discovering a trailing
+        // conditional. Let the full grammar decide which branch is live.
+        Err(_) => parse::<true>(source)?.evaluate_exact(x, vars),
     }
 }
 
@@ -286,6 +285,22 @@ mod exact_integer_tests {
         assert_eq!(
             evaluate_exact_i64_with_vars("1 if 1 else 1/0", 0, &vars),
             Ok(1)
+        );
+        assert_eq!(
+            evaluate_exact_i64_with_vars("1/0 if 0 else 2", 0, &vars),
+            Ok(2)
+        );
+        assert_eq!(
+            evaluate_exact_i64_with_vars(
+                "170141183460469231731687303715884105727+1 if 0 else 2",
+                0,
+                &vars
+            ),
+            Ok(2)
+        );
+        assert_eq!(
+            evaluate_exact_i64_with_vars("1/0 if 1 else 2", 0, &vars),
+            Err(Error::DivisionByZero)
         );
         assert_eq!(evaluate_exact_i64("3/2", 0), Ok(2));
         let wide = HashMap::from([("limit".into(), NumericValue::Unsigned(u64::MAX - 1))]);
@@ -446,7 +461,14 @@ pub fn has_wide_numeric_literal(source: &str) -> bool {
 }
 
 pub fn evaluate(source: &str, vars: &HashMap<String, f64>) -> Result<f64, Error> {
-    parse::<false>(source)?.evaluate(&|name| vars.get(name).copied())
+    parse::<false>(source)?.evaluate(
+        &|name| {
+            vars.get(name)
+                .copied()
+                .ok_or_else(|| Error::UnknownName(name.into()))
+        },
+        false,
+    )
 }
 
 /// Evaluate a float expression against typed field variables without copying
@@ -456,13 +478,56 @@ pub fn evaluate_typed(
     x: f64,
     vars: &HashMap<String, NumericValue>,
 ) -> Result<f64, Error> {
-    parse::<false>(source)?.evaluate(&|name| {
-        if name == "x" {
-            Some(x)
+    parse::<false>(source)?.evaluate(
+        &|name| {
+            if name == "x" {
+                Ok(x)
+            } else {
+                vars.get(name)
+                    .map(|value| value.as_f64())
+                    .ok_or_else(|| Error::UnknownName(name.into()))
+            }
+        },
+        false,
+    )
+}
+
+/// Evaluate only safe-width values on the selected expression path.
+pub fn evaluate_typed_safe(
+    source: &str,
+    x: f64,
+    vars: &HashMap<String, NumericValue>,
+) -> Result<f64, Error> {
+    let safe = |value: f64| {
+        if value.is_finite() && value.abs() <= 9_007_199_254_740_992.0 {
+            Ok(value)
         } else {
-            vars.get(name).map(|value| value.as_f64())
+            Err(Error::Domain)
         }
-    })
+    };
+    parse::<true>(source)?.evaluate(
+        &|name| {
+            if name == "x" {
+                safe(x)
+            } else {
+                vars.get(name)
+                    .map(|value| match value {
+                        NumericValue::Integer(value)
+                            if value.unsigned_abs() <= 9_007_199_254_740_992 =>
+                        {
+                            safe(*value as f64)
+                        }
+                        NumericValue::Unsigned(value) if *value <= 9_007_199_254_740_992 => {
+                            safe(*value as f64)
+                        }
+                        NumericValue::Float(value) => safe(*value),
+                        _ => Err(Error::Domain),
+                    })
+                    .ok_or_else(|| Error::UnknownName(name.into()))?
+            }
+        },
+        true,
+    )
 }
 
 fn parse<const EXACT: bool>(source: &str) -> Result<Expression, Error> {
@@ -545,19 +610,31 @@ enum CompareOperation {
 }
 
 impl Expression {
-    fn evaluate<F: Fn(&str) -> Option<f64>>(&self, lookup: &F) -> Result<f64, Error> {
+    fn evaluate<F: Fn(&str) -> Result<f64, Error>>(
+        &self,
+        lookup: &F,
+        safe: bool,
+    ) -> Result<f64, Error> {
         match self {
-            Self::Number(value) => finite(*value),
-            Self::ExactNumber(value) => finite(*value as f64),
+            Self::Number(value) => {
+                if safe && value.abs() > 9_007_199_254_740_992.0 {
+                    return Err(Error::Domain);
+                }
+                finite(*value)
+            }
+            Self::ExactNumber(value) => {
+                if safe && value.unsigned_abs() > 9_007_199_254_740_992 {
+                    return Err(Error::Domain);
+                }
+                finite(*value as f64)
+            }
             Self::Name(name) => match name.as_str() {
                 "pi" => Ok(std::f64::consts::PI),
                 "e" => Ok(std::f64::consts::E),
-                _ => lookup(name)
-                    .ok_or_else(|| Error::UnknownName(name.clone()))
-                    .and_then(finite),
+                _ => lookup(name).and_then(finite),
             },
             Self::Unary { negative, value } => {
-                let value = value.evaluate(lookup)?;
+                let value = value.evaluate(lookup, safe)?;
                 finite(if *negative { -value } else { value })
             }
             Self::Binary {
@@ -565,8 +642,8 @@ impl Expression {
                 left,
                 right,
             } => {
-                let left = left.evaluate(lookup)?;
-                let right = right.evaluate(lookup)?;
+                let left = left.evaluate(lookup, safe)?;
+                let right = right.evaluate(lookup, safe)?;
                 match operation {
                     BinaryOperation::Add => finite(left + right),
                     BinaryOperation::Subtract => finite(left - right),
@@ -583,8 +660,8 @@ impl Expression {
                 left,
                 right,
             } => {
-                let left = left.evaluate(lookup)?;
-                let right = right.evaluate(lookup)?;
+                let left = left.evaluate(lookup, safe)?;
+                let right = right.evaluate(lookup, safe)?;
                 let value = match operation {
                     CompareOperation::Less => left < right,
                     CompareOperation::LessEq => left <= right,
@@ -600,16 +677,16 @@ impl Expression {
                 condition,
                 alternative,
             } => {
-                if condition.evaluate(lookup)? != 0.0 {
-                    value.evaluate(lookup)
+                if condition.evaluate(lookup, safe)? != 0.0 {
+                    value.evaluate(lookup, safe)
                 } else {
-                    alternative.evaluate(lookup)
+                    alternative.evaluate(lookup, safe)
                 }
             }
             Self::Call { name, arguments } => {
                 let values = arguments
                     .iter()
-                    .map(|argument| argument.evaluate(lookup))
+                    .map(|argument| argument.evaluate(lookup, safe))
                     .collect::<Result<Vec<_>, _>>()?;
                 function(name, &values)
             }

@@ -460,47 +460,32 @@ impl NumericField {
                 }
                 NumericValue::Float(_) => Err(Error::Domain),
             };
-            let exact_is_safe = match self.typed_value() {
-                NumericValue::Integer(value) => value.unsigned_abs() <= 9_007_199_254_740_992,
-                NumericValue::Unsigned(value) => value <= 9_007_199_254_740_992,
-                NumericValue::Float(_) => false,
-            };
             let has_division = input.contains('/');
             let needs_legacy = matches!(&result, Err(Error::Domain)) || has_division;
-            let legacy_safe = needs_legacy
-                && exact_is_safe
-                && vars.values().all(|value| match value {
-                    NumericValue::Integer(value) => value.unsigned_abs() <= 9_007_199_254_740_992,
-                    NumericValue::Unsigned(value) => *value <= 9_007_199_254_740_992,
-                    NumericValue::Float(value) => {
-                        value.is_finite() && value.abs() <= 9_007_199_254_740_992.0
-                    }
-                })
-                && !expression::has_wide_numeric_literal(input);
-            let result = if legacy_safe && has_division {
-                Err(Error::Domain)
-            } else {
-                result
+            let legacy_safe = needs_legacy;
+            let evaluate_fractional = || {
+                expression::evaluate_typed_safe(input, self.typed_value().as_f64(), vars).and_then(
+                    |value| {
+                        let rounded = value.round();
+                        if rounded.abs() > 9_007_199_254_740_992.0 {
+                            return Err(Error::Overflow);
+                        }
+                        match self.kind {
+                            NumericFieldKind::Integer => Ok(NumericValue::Integer(rounded as i64)),
+                            NumericFieldKind::Unsigned if rounded >= 0.0 => {
+                                Ok(NumericValue::Unsigned(rounded as u64))
+                            }
+                            _ => Err(Error::Domain),
+                        }
+                    },
+                )
             };
             let result = match result {
-                Err(Error::Domain) if legacy_safe => expression::evaluate_typed(
-                    input,
-                    self.typed_value().as_f64(),
-                    vars,
-                )
-                .and_then(|value| {
-                    let rounded = value.round();
-                    if rounded.abs() > 9_007_199_254_740_992.0 {
-                        return Err(Error::Overflow);
-                    }
-                    match self.kind {
-                        NumericFieldKind::Integer => Ok(NumericValue::Integer(rounded as i64)),
-                        NumericFieldKind::Unsigned if rounded >= 0.0 => {
-                            Ok(NumericValue::Unsigned(rounded as u64))
-                        }
-                        _ => Err(Error::Domain),
-                    }
-                }),
+                Err(Error::Domain) if legacy_safe => evaluate_fractional(),
+                Ok(exact) if legacy_safe && has_division => match evaluate_fractional() {
+                    Err(Error::Domain) => Ok(exact),
+                    result => result,
+                },
                 result => result,
             };
             let value = match result {
@@ -752,11 +737,25 @@ mod tests {
         assert_eq!(safe.typed_value(), NumericValue::Integer(3));
         assert!(safe.evaluate_input("sqrt(2)*2", &HashMap::new()).is_ok());
         assert_eq!(safe.typed_value(), NumericValue::Integer(3));
+        let unused_wide = HashMap::from([("unused".into(), NumericValue::Unsigned(u64::MAX))]);
+        assert!(safe.evaluate_input("sqrt(2)*2", &unused_wide).is_ok());
+        assert!(
+            safe.evaluate_input("sqrt(2)*2 if 1 else 18446744073709551615", &unused_wide)
+                .is_ok()
+        );
+        let selected_wide = HashMap::from([("wide".into(), NumericValue::Unsigned(u64::MAX))]);
+        assert!(safe.evaluate_input("sqrt(wide)", &selected_wide).is_err());
+        assert!(
+            safe.evaluate_input("sqrt(18446744073709551615)", &HashMap::new())
+                .is_err()
+        );
         assert!(
             field
                 .evaluate_input("x + sqrt(2)", &HashMap::new())
                 .is_err()
         );
+        assert!(field.evaluate_input("sqrt(2)", &HashMap::new()).is_ok());
+        assert_eq!(field.typed_value(), NumericValue::Unsigned(1));
 
         let mut wide_literal = NumericField::unsigned(0);
         assert!(
