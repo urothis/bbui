@@ -18,6 +18,7 @@ pub use world_input::{UiCrosshairPointer, WorldPointerState, bridge_world_pointe
 pub use bbui_macros::bbui;
 pub use bbui_media as media;
 pub use bbui_motion as motion;
+pub use bbui_native_menu as native_menu;
 pub use bbui_render as render;
 pub use bbui_widgets as widgets;
 

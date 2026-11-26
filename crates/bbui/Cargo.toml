@@ -17,6 +17,7 @@ bbui_render = { path = "../bbui_render" }
 bbui_media = { path = "../bbui_media" }
 bbui_widgets = { path = "../bbui_widgets" }
 bbui_macros = { path = "../bbui_macros" }
+bbui_native_menu = { path = "../bbui_native_menu" }
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 bevy = { workspace = true, features = ["system_clipboard"] }
