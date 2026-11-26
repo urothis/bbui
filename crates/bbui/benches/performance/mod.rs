@@ -4,6 +4,7 @@ pub mod input;
 pub mod integration;
 pub mod layout;
 pub mod modal;
+pub mod native_menu;
 pub mod render;
 pub mod text_media;
 pub mod toasts;

@@ -16,6 +16,8 @@ mod macos {
         edited: bool,
         show_grid: bool,
         commands: CommandRegistry,
+        menu_dirty: bool,
+        menu_installed: bool,
     }
 
     impl Default for Demo {
@@ -49,6 +51,8 @@ mod macos {
                 edited: false,
                 show_grid: false,
                 commands,
+                menu_dirty: true,
+                menu_installed: false,
             }
         }
     }
@@ -103,9 +107,18 @@ mod macos {
                 continue;
             }
             match id.as_str() {
-                "new" => demo.edited = true,
-                "save" => demo.edited = false,
-                "grid" => demo.show_grid = !demo.show_grid,
+                "new" => {
+                    demo.edited = true;
+                    demo.menu_dirty = true;
+                }
+                "save" => {
+                    demo.edited = false;
+                    demo.menu_dirty = true;
+                }
+                "grid" => {
+                    demo.show_grid = !demo.show_grid;
+                    demo.menu_dirty = true;
+                }
                 "quit" if !demo.edited => {
                     exits.write(AppExit::Success);
                 }
@@ -113,10 +126,20 @@ mod macos {
                 _ => info!("Selected {id}"),
             }
         }
-        let edited = demo.edited;
-        demo.commands.set_enabled("save", edited);
-        if let Err(error) = sync_native_menu_from_registry(&model(&demo), &demo.commands) {
-            warn!("Native menu update failed: {error:?}");
+        // AppKit may create the application menu after the first update. Once
+        // installed, rebuild only when command or checkmark state changes.
+        if demo.menu_dirty || !demo.menu_installed {
+            let edited = demo.edited;
+            demo.commands.set_enabled("save", edited);
+            match sync_native_menu_from_registry(&model(&demo), &demo.commands) {
+                Ok(true) => {
+                    demo.menu_dirty = false;
+                    demo.menu_installed = true;
+                }
+                Ok(false) if demo.menu_installed => demo.menu_dirty = false,
+                Ok(false) => {}
+                Err(error) => warn!("Native menu update failed: {error:?}"),
+            }
         }
     }
 
