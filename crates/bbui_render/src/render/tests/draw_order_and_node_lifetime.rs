@@ -29,13 +29,18 @@ pub(super) fn viewport_item_binds_camera_without_rebuilding_on_idle_update() {
     app.update();
 
     let mut query = app.world_mut().query::<(Entity, &ViewportNode)>();
-    let (viewport, node) = query.single(app.world()).expect("one viewport node");
-    assert_eq!(node.camera, Some(camera));
+    let viewport = {
+        let nodes: Vec<_> = query.iter(app.world()).collect();
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].1.camera, Some(camera));
+        nodes[0].0
+    };
 
     app.update();
-    let (idle_viewport, node) = query.single(app.world()).expect("one viewport node");
-    assert_eq!(idle_viewport, viewport);
-    assert_eq!(node.camera, Some(camera));
+    let nodes: Vec<_> = query.iter(app.world()).collect();
+    assert_eq!(nodes.len(), 1);
+    assert_eq!(nodes[0].0, viewport);
+    assert_eq!(nodes[0].1.camera, Some(camera));
 }
 
 #[test]
