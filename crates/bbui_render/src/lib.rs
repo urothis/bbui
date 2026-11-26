@@ -30,6 +30,7 @@ use bevy::{
     ui::{
         AngularColorStop, BackgroundGradient, BorderGradient, BoxShadow, ColorStop, ConicGradient,
         InterpolationColorSpace, LinearGradient, UiPosition, UiRect, UiTargetCamera, UiTransform,
+        widget::ViewportNode,
     },
 };
 

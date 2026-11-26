@@ -80,6 +80,12 @@ pub enum Primitive {
         rect: ClipRect,
         asset_id: u64,
     },
+    /// A host-owned camera displayed through Bevy's native `ViewportNode`.
+    /// The camera must target a Bevy `Image`.
+    Viewport {
+        rect: ClipRect,
+        camera: Entity,
+    },
     /// A rounded fill with a native Bevy UI box shadow.
     Shadow {
         rect: ClipRect,
@@ -240,6 +246,10 @@ impl UiPaint {
             Primitive::Image { asset_id, .. } => Primitive::Image {
                 rect,
                 asset_id: *asset_id,
+            },
+            Primitive::Viewport { camera, .. } => Primitive::Viewport {
+                rect,
+                camera: *camera,
             },
             Primitive::Shadow {
                 radius,

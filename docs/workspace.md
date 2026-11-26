@@ -12,6 +12,10 @@ Run `cargo run -p bbui --example workspace` to use the control in a native Bevy 
 
 For a composed editor, run `cargo run -p bbui --example editor_workspace`. It places a real node graph beside Scene and Properties panes, with a Console below the graph. F1–F4 reopen panes, F5 saves the layout, and F9 restores it. The [dark](visuals/examples/editor-workspace-dark.png) and [light](visuals/examples/editor-workspace-light.png) captures show the running example.
 
+For a real 3D viewport inside a dock pane, run `cargo run -p bbui --example docked_scene`. Give the host's 3D camera a Bevy image render target, then paint `Primitive::Viewport { camera, .. }` on a BBUI node inside the pane. BBUI places Bevy's native `ViewportNode` in its draw tree; Bevy resizes the image to the node's computed size. The example pauses the camera while its tab is hidden. The host retains control of scene content, camera movement, and input. Modals and other BBUI overlays can paint above the scene. Right drag orbits, middle drag pans, and the wheel zooms while the pointer is inside the pane. The [dark](visuals/examples/docked-scene-dark.png), [light](visuals/examples/docked-scene-light.png), and [modal overlay](visuals/examples/docked-scene-overlay.png) captures show the example.
+
+Set the scene camera's `order` below the UI camera and the viewport node's `UiZIndex` above its pane background, as the example does. The host's ordinary `Camera2d` remains the UI camera. Bevy owns target resizing; the host owns the camera and image handle lifecycle.
+
 ## Create panes
 
 Build a `WorkspaceLayout`, register each pane's title and UI builder, then insert `Workspace` as a resource. The builder receives a parent BBUI entity and mounts the pane UI under it. The [workspace example](../crates/bbui/examples/workspace.rs) shows a complete setup with tabs, a split, and a grid.

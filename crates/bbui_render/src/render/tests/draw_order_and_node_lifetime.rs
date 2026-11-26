@@ -1,6 +1,49 @@
 use super::*;
 
 #[test]
+pub(super) fn viewport_item_binds_camera_without_rebuilding_on_idle_update() {
+    let mut app = App::new();
+    app.add_plugins(BbuiRenderPlugin);
+    let camera = app.world_mut().spawn_empty().id();
+    let item = DrawItem {
+        clip: ClipRect {
+            x: 0.0,
+            y: 0.0,
+            width: 120.0,
+            height: 80.0,
+        },
+        z: 0,
+        primitive: Primitive::Viewport {
+            rect: ClipRect {
+                x: 10.0,
+                y: 8.0,
+                width: 80.0,
+                height: 60.0,
+            },
+            camera,
+        },
+    };
+    app.world_mut()
+        .resource_mut::<DisplayList>()
+        .replace_widget_items(vec![item]);
+    app.update();
+
+    let mut query = app.world_mut().query::<(Entity, &ViewportNode)>();
+    let viewport = {
+        let nodes: Vec<_> = query.iter(app.world()).collect();
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].1.camera, Some(camera));
+        nodes[0].0
+    };
+
+    app.update();
+    let nodes: Vec<_> = query.iter(app.world()).collect();
+    assert_eq!(nodes.len(), 1);
+    assert_eq!(nodes[0].0, viewport);
+    assert_eq!(nodes[0].1.camera, Some(camera));
+}
+
+#[test]
 pub(super) fn display_list_is_stably_ordered_by_z() {
     let mut list = DisplayList::default();
     list.push(rect_item(4, 1.0));
