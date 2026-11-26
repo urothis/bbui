@@ -430,6 +430,7 @@ pub struct AccessControlQueries<'w, 's> {
     ramps: Query<'w, 's, &'static ColorRamp>,
     colors: Query<'w, 's, &'static HsvColorEditor>,
     numbers: Query<'w, 's, &'static NumericField>,
+    sliders: Query<'w, 's, &'static Slider>,
     curves: Query<'w, 's, &'static CurveEditor>,
     collection_items: Query<'w, 's, &'static CollectionItemControl>,
     table_headers: Query<'w, 's, &'static DataTableHeaderControl>,
@@ -733,6 +734,26 @@ pub fn route_accessibility_actions(
                     && let Ok(field) = controls.numbers.get(target)
                 {
                     let parsed = match field.typed_value() {
+                        NumericValue::Integer(_) => {
+                            value.parse::<i64>().ok().map(NumericValue::Integer)
+                        }
+                        NumericValue::Unsigned(_) => {
+                            value.parse::<u64>().ok().map(NumericValue::Unsigned)
+                        }
+                        NumericValue::Float(_) => {
+                            value.parse::<f64>().ok().map(NumericValue::Float)
+                        }
+                    };
+                    if let Some(value) = parsed {
+                        actions.push(WidgetAction::new(
+                            target,
+                            WidgetActionKind::SetNumeric(value),
+                        ));
+                    }
+                } else if let Some(ActionData::Value(value)) = &request.data
+                    && let Ok(slider) = controls.sliders.get(target)
+                {
+                    let parsed = match slider.typed_value() {
                         NumericValue::Integer(_) => {
                             value.parse::<i64>().ok().map(NumericValue::Integer)
                         }

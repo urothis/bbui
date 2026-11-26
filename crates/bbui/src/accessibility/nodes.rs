@@ -423,12 +423,14 @@ pub(super) fn node_for(world: &World, entity: Entity) -> Option<Node> {
     if let Some(slider) = world.get::<Slider>(entity) {
         let mut node = Node::new(Role::Slider);
         node.set_label(label.unwrap_or_else(|| "Slider".to_owned()));
-        node.set_numeric_value(slider.value);
         node.set_value(slider.display());
-        let [min, max] = slider.range();
-        node.set_min_numeric_value(min);
-        node.set_max_numeric_value(max);
-        node.set_numeric_value_step(slider.step);
+        if slider.kind == bbui_widgets::NumericFieldKind::Float {
+            node.set_numeric_value(slider.value);
+            let [min, max] = slider.range();
+            node.set_min_numeric_value(min);
+            node.set_max_numeric_value(max);
+            node.set_numeric_value_step(slider.step);
+        }
         if let Some(error) = &slider.expression_error {
             node.set_description(error.to_string());
             node.set_live(Live::Assertive);
