@@ -4,6 +4,9 @@ impl UiLayoutNode {
     pub(super) fn sanitized(mut self) -> Self {
         self.padding = self.padding.sanitized();
         self.margin = self.margin.sanitized();
+        self.translation = self
+            .translation
+            .map(|value| if value.is_finite() { value } else { 0.0 });
         self.gap = nonnegative(self.gap);
         self.min_size = self
             .min_size

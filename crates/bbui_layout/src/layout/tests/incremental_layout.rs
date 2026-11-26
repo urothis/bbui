@@ -1,6 +1,72 @@
 use super::*;
 
 #[test]
+pub(super) fn translation_moves_entire_subtree_without_resizing_or_reflowing_siblings() {
+    let mut app = App::new();
+    app.add_plugins((CorePlugin, LayoutPlugin));
+    let window = app.world_mut().spawn_empty().id();
+    let root = app
+        .world_mut()
+        .spawn((
+            UiNode,
+            UiLayoutRoot::new(window, Rect::new(0.0, 0.0, 200.0, 200.0), 1.0),
+            UiLayoutNode::column(0.0),
+        ))
+        .id();
+    let card = app
+        .world_mut()
+        .spawn((
+            UiNode,
+            UiLayoutNode {
+                size: UiSize {
+                    width: UiLength::Px(100.0),
+                    height: UiLength::Px(60.0),
+                },
+                ..UiLayoutNode::default()
+            },
+        ))
+        .id();
+    let text = app
+        .world_mut()
+        .spawn((
+            UiNode,
+            UiLayoutNode::leaf(UiLength::Px(80.0), UiLength::Px(20.0)),
+        ))
+        .id();
+    let sibling = app
+        .world_mut()
+        .spawn((
+            UiNode,
+            UiLayoutNode::leaf(UiLength::Px(100.0), UiLength::Px(20.0)),
+        ))
+        .id();
+    set_parent(app.world_mut(), card, root).unwrap();
+    set_parent(app.world_mut(), text, card).unwrap();
+    set_parent(app.world_mut(), sibling, root).unwrap();
+    app.update();
+    let before_card = app.world().get::<UiLayoutResult>(card).unwrap().rect;
+    let before_text = app.world().get::<UiLayoutResult>(text).unwrap().rect;
+    let before_sibling = app.world().get::<UiLayoutResult>(sibling).unwrap().rect;
+
+    app.world_mut()
+        .get_mut::<UiLayoutNode>(card)
+        .unwrap()
+        .translation = [0.0, 40.0];
+    app.update();
+    let after_card = app.world().get::<UiLayoutResult>(card).unwrap().rect;
+    let after_text = app.world().get::<UiLayoutResult>(text).unwrap().rect;
+    assert_eq!(after_card.y, before_card.y + 40.0);
+    assert_eq!(after_text.y, before_text.y + 40.0);
+    assert_eq!(after_card.width, before_card.width);
+    assert_eq!(after_card.height, before_card.height);
+    assert_eq!(
+        app.world().get::<UiLayoutResult>(sibling).unwrap().rect,
+        before_sibling
+    );
+    assert_eq!(app.world().get::<UiHitBox>(text).unwrap().rect, after_text);
+}
+
+#[test]
 pub(super) fn unchanged_layout_results_and_hit_boxes_do_not_trigger_change_detection() {
     let mut app = App::new();
     app.add_plugins((CorePlugin, LayoutPlugin))

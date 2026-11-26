@@ -20,3 +20,5 @@ let handle = world.resource_mut::<MotionPlayer>()
 Use the returned handle to pause, resume, reverse, seek, change speed or delay, repeat, or cancel. `MotionEvents` reports completion and cancellation. `MotionCurve` offers linear, easing presets, steps, and validated cubic Bézier curves. Register a `MotionBinding` with read/write closures and dirty domains for a custom ECS value; implement `MotionValue` for its interpolation.
 
 `UiAutoAnimations` creates transitions for hover, state, and theme changes from theme motion tokens. Explicit clips own conflicting properties until they finish. `UiReducedMotion(true)` or zero theme motion scale snaps active UI clips. Panels animate `UiContentReveal` as well as paint, so following controls move with the collapsing panel.
+
+`TranslateX` and `TranslateY` move a node and its descendants in logical pixels without changing its measured size or the space allocated by its parent. Their layout and hitboxes follow the motion, so they work for floating toasts and other overlay transitions.

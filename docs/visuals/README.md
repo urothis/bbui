@@ -17,6 +17,8 @@ These are captures from runnable Bevy examples and BBUI's offscreen GPU tests. O
 | Modal dialog | [Dark](examples/modal-dialog-dark.png) · [Light](examples/modal-dialog-light.png) |
 | Command palette | [Dark](examples/command-palette-dark.png) · [Light](examples/command-palette-light.png) · [Hover](examples/command-palette-hover-dark.png) · [Focus](examples/command-palette-focus-dark.png) |
 | Window chrome | [Desktop dark](examples/chrome-desktop-dark.png) · [desktop light](examples/chrome-desktop-light.png) · [overlay sheet](examples/chrome-mobile-dark.png) · [sheet closed](examples/chrome-mobile-closed-dark.png) · [safe insets](examples/chrome-mobile-insets-dark.png) · [inset sheet](examples/chrome-mobile-insets-open-dark.png) · [long labels](examples/chrome-mobile-long-dark.png) · [compact light](examples/chrome-mobile-light.png) · [window controls](examples/chrome-controls-dark.png) · [control hover](examples/chrome-desktop-hover-dark.png) · [navigation hover](examples/chrome-mobile-hover-dark.png) |
+| Floating toasts | [60 fps animation](animations/toasts.webp) · [Dark](examples/toasts-dark.png) · [Light](examples/toasts-light.png) · [long error](examples/toasts-long-dark.png) · [empty](examples/toasts-empty-dark.png) · [dismiss hover](examples/toasts-hover-dark.png) · [text dismiss](examples/toasts-dismiss-copy-dark.png) · [entering](examples/toasts-enter-dark.png) · [exiting](examples/toasts-exit-dark.png) |
+| Toast gradient borders | [60 fps animation](animations/toast-gradient-borders.webp) · [Dark](examples/toast-gradient-borders-dark.png) |
 | Visual effects | [Gradient border and edge glow](examples/visual-effects-dark.png) · [rotated border](examples/visual-effects-rotated.png) · [eight variants](examples/visual-effect-variants.png) |
 | Progress bars | [Six-style gallery with corner options](examples/progress-gallery.png) |
 
@@ -43,7 +45,9 @@ Open menu and choice states are captured separately: [Render menu](examples/prop
 | [Menu opening](animations/menu_open.webp) · [properties Render menu](animations/properties_render_menu.webp) | Popup animation |
 | [Theme switch](animations/theme_switch.webp) | Smooth Dark/Light transition in the theme gallery |
 | [Workspace docking](animations/workspace_dock.webp) · [splitter resize](animations/workspace_resize.webp) | Tab drag and continuous split resizing in the dockable workspace |
+| [Floating toasts](animations/toasts.webp) | Separately curved fade and travel on entry and exit at 60 fps |
 | [Gradient border](animations/gradient-border.webp) · [edge glow](animations/edge-glow.webp) · [combined](animations/border-edge-glow.webp) · [full composition](animations/visual-effects.webp) | Rotating border and pulsing glow, captured at 60 fps |
+| [Toast gradient borders](animations/toast-gradient-borders.webp) | Separate rotating palettes for Info, Success, Warning, and Error |
 | [Eight effect variants](animations/visual-effect-variants.webp) | Solid and multicolor borders and glows, static and animated |
 | [Progress gallery](animations/progress-gallery.webp) · [gradient](animations/progress-gradient.webp) · [segmented](animations/progress-segmented.webp) · [glow](animations/progress-glow.webp) · [indeterminate](animations/progress-indeterminate.webp) | Filled-region effects and determinate/indeterminate motion at 60 fps |
 
@@ -61,6 +65,8 @@ cargo build --release -p bbui --examples --locked
 DISPLAY=:99 python3 scripts/capture_animations.py --profile release
 python3 scripts/capture_workspace_animations.py --profile release
 python3 scripts/capture_visual_effect_animations.py
+python3 scripts/capture_toast_animations.py
+python3 scripts/capture_toast_gradient_borders.py
 python3 scripts/capture_visual_effect_variants.py
 ```
 
@@ -80,7 +86,13 @@ The command palette captures come from `cargo test -p bbui --example command_pal
 
 The window chrome captures come from `cargo test -p bbui --example chrome_shell --locked -- --ignored`; the capture test writes desktop and compact views in both themes directly to `docs/visuals/examples/`.
 
+The toast captures come from `cargo test -p bbui --example toasts --locked -- --ignored`; the capture test writes both themes directly to `docs/visuals/examples/`.
+
+`capture_toast_animations.py` encodes the offscreen entrance and exit capture with independent opacity and travel curves at 60 fps.
+
 `capture_visual_effect_animations.py` uses offscreen GPU readback to write the visual effects stills and four 120-frame WebP clips. Each clip is two seconds at 60 fps. Pass `--frames-dir` to encode an existing set of capture frames.
+
+`capture_toast_gradient_borders.py` captures the toast gradient example through offscreen GPU readback and writes a full-size still plus a 120-frame, 60 fps WebP clip. Pass `--frames-dir` to encode an existing set of capture frames.
 
 `capture_visual_effect_variants.py` writes the eight-case overview and one WebP per variant. Animated variants sample 120 frames over two seconds; static variants are single-frame WebPs. Set `BBUI_VISUAL_VARIANTS=1` when running the `visual_effects` example to inspect the gallery live.
 

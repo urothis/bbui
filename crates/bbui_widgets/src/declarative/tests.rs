@@ -1,6 +1,98 @@
 use super::*;
 use crate::IconButtonAssetStatus;
+use bbui_core::UiLiveRegion;
 use bbui_core::{UiChildren, UiFocusable, UiParent};
+use bbui_style::UiAnimationSpec;
+
+#[test]
+fn auto_animations_follow_declarative_reconcile() {
+    let mut world = World::new();
+    let mut enter = UiAutoAnimations::default();
+    enter.set(
+        UiStyleProperty::Opacity,
+        UiAnimationSpec::new(std::time::Duration::from_millis(160)),
+    );
+    let root = WidgetTree::new(WidgetNode::label("Notice").with_auto_animations(enter.clone()))
+        .spawn(&mut world, None)
+        .unwrap();
+    assert_eq!(world.get::<UiAutoAnimations>(root), Some(&enter));
+    let mut exit = UiAutoAnimations::default();
+    exit.set(
+        UiStyleProperty::Opacity,
+        UiAnimationSpec::new(std::time::Duration::from_millis(120)),
+    );
+    WidgetTree::new(WidgetNode::label("Notice").with_auto_animations(exit.clone()))
+        .reconcile(&mut world, root)
+        .unwrap();
+    assert_eq!(world.get::<UiAutoAnimations>(root), Some(&exit));
+    WidgetTree::new(WidgetNode::label("Notice"))
+        .reconcile(&mut world, root)
+        .unwrap();
+    assert!(world.get::<UiAutoAnimations>(root).is_none());
+}
+
+#[test]
+fn reconcile_preserves_live_border_phase_when_only_notice_style_changes() {
+    let mut world = World::new();
+    let effects = UiVisualEffects::default().with_border(crate::UiBorderEffect::gradient(
+        [Rgba(0.2, 0.5, 1.0, 1.0), Rgba(0.5, 0.8, 1.0, 1.0)],
+        2.0,
+        8.0,
+    ));
+    let card = |opacity| {
+        let mut style = UiInlineStyle::default();
+        style.set(UiStyleProperty::Opacity, UiStyleValue::Scalar(opacity));
+        WidgetNode::boxed([])
+            .with_key("notice:1")
+            .with_style(style)
+            .with_visual_effects(effects.clone())
+    };
+    let root = WidgetTree::new(card(1.0)).spawn(&mut world, None).unwrap();
+    world
+        .get_mut::<UiVisualEffects>(root)
+        .unwrap()
+        .border
+        .as_mut()
+        .unwrap()
+        .phase = 0.42;
+
+    WidgetTree::new(card(0.0))
+        .reconcile(&mut world, root)
+        .unwrap();
+    assert_eq!(
+        world
+            .get::<UiVisualEffects>(root)
+            .unwrap()
+            .border
+            .as_ref()
+            .unwrap()
+            .phase,
+        0.42
+    );
+}
+
+#[test]
+fn live_region_follows_declarative_reconcile() {
+    let mut world = World::new();
+    let tree =
+        WidgetTree::new(WidgetNode::label("Working").with_live_region(UiLiveRegion::polite()));
+    let root = tree.spawn(&mut world, None).unwrap();
+    assert_eq!(
+        world.get::<UiLiveRegion>(root),
+        Some(&UiLiveRegion::polite())
+    );
+    WidgetTree::new(WidgetNode::label("Failed").with_live_region(UiLiveRegion::assertive()))
+        .reconcile(&mut world, root)
+        .unwrap();
+    assert_eq!(
+        world.get::<UiLiveRegion>(root),
+        Some(&UiLiveRegion::assertive())
+    );
+    WidgetTree::new(WidgetNode::label("Ready"))
+        .reconcile(&mut world, root)
+        .unwrap();
+    assert!(world.get::<UiLiveRegion>(root).is_none());
+}
 use bbui_layout::UiIntrinsicSize;
 use bbui_style::Theme;
 use bbui_text::TextPlugin;

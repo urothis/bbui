@@ -77,6 +77,8 @@ pub fn style_motion_binding(property: UiStyleProperty) -> MotionBinding<UiStyleV
                     | UiStyleProperty::MaxHeight
                     | UiStyleProperty::Padding
                     | UiStyleProperty::Margin
+                    | UiStyleProperty::TranslateX
+                    | UiStyleProperty::TranslateY
                     | UiStyleProperty::Gap
                     | UiStyleProperty::LayoutMode
                     | UiStyleProperty::AlignItems

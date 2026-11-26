@@ -1,5 +1,23 @@
 use super::*;
 
+fn fixed_color_opacity(paint: &PaintEntityContext<'_>) -> f32 {
+    paint
+        .world
+        .get::<UiComputedStyle>(paint.entity)
+        .and_then(|style| style.scalar(UiStyleProperty::Opacity))
+        .filter(|opacity| opacity.is_finite())
+        .unwrap_or(1.0)
+        .clamp(0.0, 1.0)
+}
+
+fn fade_fixed_colors(colors: &mut [UiEffectColor], opacity: f32) {
+    for color in colors {
+        if let UiEffectColor::Fixed(value) = color {
+            value.3 *= opacity;
+        }
+    }
+}
+
 pub(super) fn paint_edge_glow(paint: &mut PaintEntityContext<'_>) {
     let Some(effects) = paint.world.get::<UiVisualEffects>(paint.entity) else {
         return;
@@ -11,13 +29,15 @@ pub(super) fn paint_edge_glow(paint: &mut PaintEntityContext<'_>) {
         .border
         .as_ref()
         .map_or(paint.theme.corner_radius, |border| border.radius.max(0.0));
+    let mut glow = glow.clone();
+    fade_fixed_colors(&mut glow.colors, fixed_color_opacity(paint));
     push_effect_glow(
         paint.output,
         paint.layout.clip.map(ClipRect::from),
         paint.z,
         ClipRect::from(paint.rect),
         radius,
-        glow,
+        &glow,
         paint.theme,
     );
 }
@@ -126,12 +146,14 @@ pub(super) fn paint_gradient_border(paint: &mut PaintEntityContext<'_>) {
     else {
         return;
     };
+    let mut border = border.clone();
+    fade_fixed_colors(&mut border.colors, fixed_color_opacity(paint));
     push_effect_border(
         paint.output,
         paint.clip,
         paint.z.saturating_add(20),
         ClipRect::from(paint.rect),
-        border,
+        &border,
         paint.theme,
     );
 }

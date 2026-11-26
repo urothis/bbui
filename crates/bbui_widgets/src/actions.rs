@@ -12,7 +12,7 @@ use crate::{
     NodeGraph, NodeGraphError, NodeGraphTypeRegistry, NodeId, NodeSocket,
     NumericExpressionVariables, NumericField, NumericFieldKind, Panel, PanelGroup, PreviewGrid,
     Progress, RadioGroup, Slider, SocketDirection, SocketId, SocketPlacement, SocketType, TextArea,
-    TextField, Tooltip, TreeModel, UiVisualEffects, WidgetTree,
+    TextField, Tooltip, TreeModel, UiEffectColor, UiVisualEffects, WidgetTree,
     declarative::{
         CollectionEditorState, CollectionItemControl, CollectionItemKind, ColorRampEditorState,
         DataTableCellControl, DataTableHeaderControl, FileBrowserItem, FileBrowserViewState,

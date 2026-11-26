@@ -158,8 +158,10 @@ pub struct WidgetNode {
     pub role: Option<String>,
     pub scrollable: bool,
     pub style: Option<UiInlineStyle>,
+    pub auto_animations: Option<UiAutoAnimations>,
     pub visual_effects: Option<UiVisualEffects>,
     pub accessible_name: Option<String>,
+    pub live_region: Option<UiLiveRegion>,
     pub tab_selected: Option<bool>,
     pub tab_list: bool,
     pub palette_action_text: Option<crate::commands::PaletteActionText>,
@@ -171,8 +173,10 @@ pub(crate) struct WidgetProps {
     pub role: Option<String>,
     pub scrollable: bool,
     pub style: Option<UiInlineStyle>,
+    pub auto_animations: Option<UiAutoAnimations>,
     pub visual_effects: Option<UiVisualEffects>,
     pub accessible_name: Option<String>,
+    pub live_region: Option<UiLiveRegion>,
     pub tab_selected: Option<bool>,
     pub tab_list: bool,
     pub palette_action_text: Option<crate::commands::PaletteActionText>,
@@ -185,8 +189,10 @@ impl From<&WidgetNode> for WidgetProps {
             role: node.role.clone(),
             scrollable: node.scrollable,
             style: node.style.clone(),
+            auto_animations: node.auto_animations.clone(),
             visual_effects: node.visual_effects.clone(),
             accessible_name: node.accessible_name.clone(),
+            live_region: node.live_region,
             tab_selected: node.tab_selected,
             tab_list: node.tab_list,
             palette_action_text: node.palette_action_text.clone(),
@@ -204,8 +210,10 @@ impl WidgetNode {
             role: None,
             scrollable: false,
             style: None,
+            auto_animations: None,
             visual_effects: None,
             accessible_name: None,
+            live_region: None,
             tab_selected: None,
             tab_list: false,
             palette_action_text: None,
@@ -338,8 +346,10 @@ impl WidgetNode {
             role: None,
             scrollable: false,
             style: None,
+            auto_animations: None,
             visual_effects: None,
             accessible_name: None,
+            live_region: None,
             tab_selected: None,
             tab_list: false,
             palette_action_text: None,
@@ -368,8 +378,10 @@ impl WidgetNode {
             role: role.map(str::to_owned),
             scrollable: false,
             style: None,
+            auto_animations: None,
             visual_effects: None,
             accessible_name: None,
+            live_region: None,
             tab_selected: None,
             tab_list: false,
             palette_action_text: None,
@@ -487,8 +499,10 @@ impl WidgetNode {
             role: None,
             scrollable: false,
             style: None,
+            auto_animations: None,
             visual_effects: None,
             accessible_name: None,
+            live_region: None,
             tab_selected: None,
             tab_list: false,
             palette_action_text: None,
@@ -708,6 +722,10 @@ impl WidgetNode {
         self.style = Some(style);
         self
     }
+    pub fn with_auto_animations(mut self, animations: UiAutoAnimations) -> Self {
+        self.auto_animations = Some(animations);
+        self
+    }
     pub fn with_visual_effects(mut self, effects: UiVisualEffects) -> Self {
         self.visual_effects = Some(effects);
         self
@@ -724,6 +742,11 @@ impl WidgetNode {
     /// Set the name announced by assistive technology without changing the painted text.
     pub fn with_accessible_name(mut self, name: impl Into<String>) -> Self {
         self.accessible_name = Some(name.into());
+        self
+    }
+    /// Announce changes to this node using the host accessibility bridge.
+    pub fn with_live_region(mut self, region: UiLiveRegion) -> Self {
+        self.live_region = Some(region);
         self
     }
     /// Mark this control as a selectable tab.

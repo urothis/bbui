@@ -188,6 +188,9 @@ pub(super) fn spawn_node(
     if let Some(name) = &node.accessible_name {
         entity.insert(UiAccessibleName(name.clone()));
     }
+    if let Some(region) = node.live_region {
+        entity.insert(region);
+    }
     if let Some(selected) = node.tab_selected {
         entity.insert(UiTab { selected });
     }
@@ -208,6 +211,9 @@ pub(super) fn spawn_node(
     }
     if let Some(style) = &node.style {
         entity.insert(style.clone());
+    }
+    if let Some(animations) = &node.auto_animations {
+        entity.insert(animations.clone());
     }
     if let Some(effects) = &node.visual_effects {
         entity.insert(effects.clone());

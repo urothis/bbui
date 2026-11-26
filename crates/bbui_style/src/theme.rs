@@ -48,6 +48,8 @@ pub enum ThemeColorToken {
     Border,
     DisabledBorder,
     Focus,
+    Success,
+    Warning,
     Error,
     Icon,
     MutedIcon,
@@ -100,7 +102,7 @@ pub enum ThemeColorToken {
 impl ThemeColorToken {
     /// Every built-in semantic color token. Keep this list in sync with
     /// [`Theme::color`] so theme completeness can be checked exhaustively.
-    pub const ALL: [Self; 60] = [
+    pub const ALL: [Self; 62] = [
         Self::Background,
         Self::Surface,
         Self::HoverSurface,
@@ -114,6 +116,8 @@ impl ThemeColorToken {
         Self::Border,
         Self::DisabledBorder,
         Self::Focus,
+        Self::Success,
+        Self::Warning,
         Self::Error,
         Self::Icon,
         Self::MutedIcon,
@@ -523,6 +527,14 @@ impl Theme {
             ThemeColorToken::Border => self.border,
             ThemeColorToken::DisabledBorder => self.disabled_border,
             ThemeColorToken::Focus => self.focus,
+            ThemeColorToken::Success => match self.kind {
+                ThemeKind::Dark => Rgba(0.30, 0.76, 0.43, 1.0),
+                ThemeKind::Light => Rgba(0.12, 0.52, 0.26, 1.0),
+            },
+            ThemeColorToken::Warning => match self.kind {
+                ThemeKind::Dark => Rgba(0.96, 0.62, 0.18, 1.0),
+                ThemeKind::Light => Rgba(0.67, 0.31, 0.06, 1.0),
+            },
             ThemeColorToken::Error => self.error,
             ThemeColorToken::Icon => self.text,
             ThemeColorToken::MutedIcon => self.text_muted,
