@@ -18,6 +18,15 @@ use crate::world_input::WorldPointerState;
 pub(crate) struct MacInputFrame {
     pub(crate) available: bool,
     pub(crate) recovered_drag_window: Option<Entity>,
+    recovered_release_window: Option<Entity>,
+    recovered_releases: [bool; 3],
+}
+
+impl MacInputFrame {
+    pub(crate) fn recovered_release(&self, window: Entity, button: MouseButton) -> bool {
+        self.recovered_release_window == Some(window)
+            && button_index(button).is_some_and(|index| self.recovered_releases[index])
+    }
 }
 
 #[derive(Resource, Default)]
@@ -177,6 +186,8 @@ pub(crate) fn bridge_native_macos_input(
     mut queue: ResMut<UiInputQueue>,
 ) {
     frame.recovered_drag_window = None;
+    frame.recovered_release_window = None;
+    frame.recovered_releases = [false; 3];
     let Ok((window, data)) = primary.single() else {
         frame.available = false;
         return;
@@ -246,7 +257,9 @@ pub(crate) fn bridge_native_macos_input(
             MacInputSample::MouseDrag { .. } => {}
         }
     }
-    if let Some(position) = raw_drag_position {
+    // A Bevy cursor update from this frame is authoritative. Replaying an
+    // older AppKit drag sample after it would move the pointer backwards.
+    if let Some(position) = raw_drag_position.filter(|_| !pointer_moved) {
         let moved = pointer
             .last_cursor_position
             .is_none_or(|last| (position - last).length_squared() > 0.25);
@@ -289,6 +302,8 @@ pub(crate) fn bridge_native_macos_input(
     pointer.down = down;
     pointer.pending_up = pending;
     for index in recovered {
+        frame.recovered_release_window = Some(window);
+        frame.recovered_releases[index] = true;
         if let Some(buttons) = messages.mouse_buttons.as_deref_mut() {
             buttons.release(bevy_button(index));
         }
@@ -299,17 +314,39 @@ pub(crate) fn bridge_native_macos_input(
                 window,
             }));
         }
-        queue.push(UiInputEvent::PointerButton {
-            window,
-            button: pointer_button(index),
-            pressed: false,
-            position: pointer
-                .last_cursor_position
-                .or_else(|| data.cursor_position())
-                .unwrap_or_default()
-                .to_array(),
-            time_seconds,
-        });
+        if messages.world_pointers.hover_target(window).is_none() {
+            queue.push(UiInputEvent::PointerButton {
+                window,
+                button: pointer_button(index),
+                pressed: false,
+                position: pointer
+                    .last_cursor_position
+                    .or_else(|| data.cursor_position())
+                    .unwrap_or_default()
+                    .to_array(),
+                time_seconds,
+            });
+        }
+    }
+}
+
+/// Fan out recovered releases through the same Bevy message read by app code.
+/// This runs after native sampling and before world-space and BBUI input routing.
+pub(crate) fn publish_recovered_mouse_releases(
+    frame: Res<MacInputFrame>,
+    mut events: MessageWriter<MouseButtonInput>,
+) {
+    let Some(window) = frame.recovered_release_window else {
+        return;
+    };
+    for (index, recovered) in frame.recovered_releases.iter().enumerate() {
+        if *recovered {
+            events.write(MouseButtonInput {
+                button: bevy_button(index),
+                state: ButtonState::Released,
+                window,
+            });
+        }
     }
 }
 

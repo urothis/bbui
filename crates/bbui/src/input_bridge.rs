@@ -180,6 +180,17 @@ pub fn bridge_bevy_input(
         });
     }
     for event in messages.buttons.read() {
+        #[cfg(target_os = "macos")]
+        if event.state == ButtonState::Released
+            && messages
+                .trackpad
+                .as_ref()
+                .is_some_and(|frame| frame.recovered_release(event.window, event.button))
+        {
+            // The native bridge already queued this release with its precise
+            // AppKit position; Bevy listeners still receive the message.
+            continue;
+        }
         if messages.touch_state.active.contains_key(&event.window) {
             continue;
         }

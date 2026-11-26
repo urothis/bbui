@@ -98,8 +98,17 @@ impl Plugin for BbuiPlugin {
                 Update,
                 native_macos_input::bridge_native_macos_input
                     .in_set(bbui_core::UiSystems::Input)
+                    .before(native_macos_input::publish_recovered_mouse_releases)
+                    .before(world_input::bridge_world_pointer)
                     .before(input_bridge::bridge_bevy_input)
                     .before(bbui_core::process_ui_input),
+            );
+            app.add_systems(
+                Update,
+                native_macos_input::publish_recovered_mouse_releases
+                    .in_set(bbui_core::UiSystems::Input)
+                    .before(world_input::bridge_world_pointer)
+                    .before(input_bridge::bridge_bevy_input),
             );
         }
         app.init_resource::<cursor_bridge::CursorCaptureState>();
