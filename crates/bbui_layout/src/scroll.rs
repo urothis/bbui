@@ -15,6 +15,14 @@ pub fn apply_routed_scroll_input(world: &mut World) {
     let mut changed = false;
     for event in events {
         match event {
+            UiRoutedEvent::TouchGesture {
+                target,
+                phase: UiGesturePhase::Updated,
+                delta,
+                ..
+            } => {
+                changed |= scroll_ancestors(world, target, [-delta[0], -delta[1]]);
+            }
             UiRoutedEvent::Wheel {
                 target,
                 delta,

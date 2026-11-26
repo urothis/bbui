@@ -2,7 +2,9 @@
 
 use crate::cursor_bridge::{CursorCaptureState, logical_pointer_motion};
 use crate::world_input::WorldPointerState;
-use bbui_core::{UiInputEvent, UiInputQueue, UiKeyCode, UiModifiers, UiPointerButton, UiWheelUnit};
+use bbui_core::{
+    UiInputEvent, UiInputQueue, UiKeyCode, UiModifiers, UiPointerButton, UiTouchPhase, UiWheelUnit,
+};
 use bevy::ecs::system::SystemParam;
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{KeyCode, KeyboardInput};
@@ -155,6 +157,17 @@ pub fn bridge_bevy_input(
             }
             _ => {}
         }
+        queue.push(UiInputEvent::Touch {
+            window: event.window,
+            id: event.id,
+            position,
+            phase: match event.phase {
+                TouchPhase::Started => UiTouchPhase::Started,
+                TouchPhase::Moved => UiTouchPhase::Moved,
+                TouchPhase::Ended => UiTouchPhase::Ended,
+                TouchPhase::Canceled => UiTouchPhase::Cancelled,
+            },
+        });
     }
     for event in messages.buttons.read() {
         if messages.touch_state.active.contains_key(&event.window) {

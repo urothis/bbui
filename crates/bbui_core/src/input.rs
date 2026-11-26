@@ -19,9 +19,10 @@ type HitTestStructuralChanged<'w, 's> = Query<
 >;
 
 use crate::{
-    UiChildren, UiClickRecord, UiDirty, UiDirtyDomain, UiEnabled, UiFocus, UiFocusable, UiHitBox,
-    UiLifecycleEvents, UiNode, UiParent, UiRect, UiTabIndex, UiVisible, has_visible_focus_geometry,
-    has_window_assignment, is_interactable_in_window, ui_components_changed_since,
+    UiChildren, UiClickRecord, UiDirty, UiDirtyDomain, UiEnabled, UiFocus, UiFocusable,
+    UiGestureSurface, UiHitBox, UiLifecycleEvents, UiNode, UiParent, UiRect, UiTabIndex, UiVisible,
+    has_visible_focus_geometry, has_window_assignment, is_interactable_in_window,
+    ui_components_changed_since,
 };
 
 const DOUBLE_CLICK_SECONDS: f64 = 0.35;
@@ -152,6 +153,12 @@ pub enum UiKeyCode {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum UiInputEvent {
+    Touch {
+        window: Entity,
+        id: u64,
+        position: [f32; 2],
+        phase: UiTouchPhase,
+    },
     PointerMove {
         window: Entity,
         position: [f32; 2],
@@ -216,6 +223,22 @@ pub enum UiInputEvent {
     },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UiTouchPhase {
+    Started,
+    Moved,
+    Ended,
+    Cancelled,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UiGesturePhase {
+    Started,
+    Updated,
+    Ended,
+    Cancelled,
+}
+
 #[derive(Resource, Debug, Default)]
 pub struct UiInputQueue {
     events: VecDeque<UiInputEvent>,
@@ -250,6 +273,16 @@ impl UiInputQueue {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum UiRoutedEvent {
+    /// Two touches on a common gesture surface. `delta` and `scale` describe
+    /// the change since the preceding event; the first event uses zero and 1.
+    TouchGesture {
+        window: Entity,
+        target: Entity,
+        phase: UiGesturePhase,
+        center: [f32; 2],
+        delta: [f32; 2],
+        scale: f32,
+    },
     PointerEnter {
         window: Entity,
         target: Entity,
@@ -378,6 +411,9 @@ pub use validate::clear_invalid_ui_focus;
 
 mod pointer;
 use pointer::*;
+
+mod touch;
+use touch::*;
 
 mod focus;
 use focus::*;

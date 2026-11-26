@@ -17,8 +17,9 @@ pub mod search;
 pub use geometry::UiRect;
 pub use history::{TextSelection, UiEditContext, UiHistory, UiHistoryRestore, UiValue};
 pub use input::{
-    UiInputEvent, UiInputQueue, UiKeyCode, UiModifiers, UiPointerButton, UiRoutedEvent,
-    UiRoutedEvents, UiWheelUnit, clear_invalid_ui_focus, process_ui_input, refresh_ui_hover,
+    UiGesturePhase, UiInputEvent, UiInputQueue, UiKeyCode, UiModifiers, UiPointerButton,
+    UiRoutedEvent, UiRoutedEvents, UiTouchPhase, UiWheelUnit, clear_invalid_ui_focus,
+    process_ui_input, refresh_ui_hover,
 };
 pub use invalidation::{UiDirty, UiDirtyBatch, UiDirtyDomain, ui_components_changed_since};
 
@@ -139,6 +140,12 @@ pub struct UiTabList;
 pub struct UiTab {
     pub selected: bool,
 }
+
+/// Marks a surface that can own a two-finger touch gesture. Descendant
+/// controls keep their normal single-touch behavior until a second touch
+/// starts within this surface.
+#[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct UiGestureSurface;
 
 /// Lets a focused composite control handle Ctrl+Z/Y through its own transaction history.
 #[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]

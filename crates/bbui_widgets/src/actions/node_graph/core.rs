@@ -1,4 +1,5 @@
 use super::*;
+use bbui_core::UiGesturePhase;
 
 pub(in crate::actions) fn edit_node_graph(
     world: &mut World,
@@ -111,6 +112,32 @@ pub(in crate::actions) fn process_node_graph_event(
     emitted: &mut Vec<WidgetEvent>,
 ) -> bool {
     match event {
+        UiRoutedEvent::TouchGesture {
+            target,
+            phase: UiGesturePhase::Updated,
+            center,
+            delta,
+            scale,
+            ..
+        } if let Some(owner) = node_graph_owner(world, *target) => {
+            let Some(rect) = world.get::<UiLayoutResult>(owner).map(|layout| layout.rect) else {
+                return true;
+            };
+            let theme = world.get_resource::<Theme>().cloned().unwrap_or_default();
+            let spacing = &theme.spacing.node_graph;
+            edit_node_graph(world, owner, emitted, |graph| {
+                let previous_center = [center[0] - delta[0], center[1] - delta[1]];
+                let anchor = node_graph_data_position(graph, rect, previous_center, spacing);
+                let before = graph.zoom;
+                graph.zoom_by(*scale);
+                graph.pan = [
+                    center[0] - rect.x - anchor[0] * graph.zoom,
+                    center[1] - rect.y - spacing.header_height - anchor[1] * graph.zoom,
+                ];
+                *delta != [0.0, 0.0] || graph.zoom != before
+            });
+            true
+        }
         UiRoutedEvent::PointerDown {
             window,
             target,

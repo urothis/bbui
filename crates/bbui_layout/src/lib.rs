@@ -6,8 +6,9 @@ use bevy_ecs::prelude::*;
 use bevy_ecs::{change_detection::Tick, component::ComponentId};
 
 use bbui_core::{
-    UiChildren, UiDirty, UiDirtyDomain, UiHitBox, UiKeyCode, UiNode, UiParent, UiRoutedEvent,
-    UiRoutedEvents, UiSystems, UiVisible, UiWheelUnit, UiZIndex, ui_components_changed_since,
+    UiChildren, UiDirty, UiDirtyDomain, UiGesturePhase, UiGestureSurface, UiHitBox, UiKeyCode,
+    UiNode, UiParent, UiRoutedEvent, UiRoutedEvents, UiSystems, UiVisible, UiWheelUnit, UiZIndex,
+    ui_components_changed_since,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -264,6 +265,7 @@ pub struct UiIntrinsicSize(pub [f32; 2]);
 /// as their inherited clip. The same resulting rect and clip are written to
 /// `UiHitBox`, so hit testing follows the scrolled content.
 #[derive(Component, Debug, Clone, Copy, Default, PartialEq)]
+#[require(UiGestureSurface)]
 #[component(summary_tick)]
 pub struct UiScroll {
     pub offset: [f32; 2],

@@ -1,5 +1,93 @@
 use super::*;
-use crate::{UiChildren, UiNode, UiParent, UiVisible, cleanup_removed_node, set_parent};
+use crate::{
+    UiChildren, UiGestureSurface, UiNode, UiParent, UiVisible, cleanup_removed_node, set_parent,
+};
+
+#[test]
+fn second_touch_cancels_control_press_and_routes_pan_and_pinch() {
+    let (mut world, window, surface, button) = setup();
+    world.entity_mut(surface).insert(UiGestureSurface);
+    world.resource_mut::<UiInputQueue>().extend([
+        UiInputEvent::PointerButton {
+            window,
+            button: UiPointerButton::Primary,
+            pressed: true,
+            position: [20.0, 20.0],
+            time_seconds: 0.0,
+        },
+        UiInputEvent::Touch {
+            window,
+            id: 1,
+            position: [20.0, 20.0],
+            phase: UiTouchPhase::Started,
+        },
+        UiInputEvent::Touch {
+            window,
+            id: 2,
+            position: [50.0, 20.0],
+            phase: UiTouchPhase::Started,
+        },
+    ]);
+    process_ui_input(&mut world);
+    let events = &world.resource::<UiRoutedEvents>().events;
+    assert!(events.iter().any(|event| matches!(event,
+        UiRoutedEvent::PointerCancel { target, .. } if *target == button)));
+    assert!(events.iter().any(|event| matches!(event,
+        UiRoutedEvent::TouchGesture {
+            target, phase: UiGesturePhase::Started, center, ..
+        } if *target == surface && *center == [35.0, 20.0])));
+
+    world
+        .resource_mut::<UiInputQueue>()
+        .push(UiInputEvent::Touch {
+            window,
+            id: 2,
+            position: [60.0, 20.0],
+            phase: UiTouchPhase::Moved,
+        });
+    process_ui_input(&mut world);
+    assert!(
+        world
+            .resource::<UiRoutedEvents>()
+            .events
+            .iter()
+            .any(|event| matches!(event,
+        UiRoutedEvent::TouchGesture {
+            phase: UiGesturePhase::Updated, center, delta, scale, ..
+        } if *center == [40.0, 20.0] && *delta == [5.0, 0.0]
+            && (*scale - 4.0 / 3.0).abs() < 0.0001))
+    );
+
+    world.resource_mut::<UiInputQueue>().extend([
+        UiInputEvent::PointerButton {
+            window,
+            button: UiPointerButton::Primary,
+            pressed: false,
+            position: [20.0, 20.0],
+            time_seconds: 0.1,
+        },
+        UiInputEvent::Touch {
+            window,
+            id: 1,
+            position: [20.0, 20.0],
+            phase: UiTouchPhase::Ended,
+        },
+    ]);
+    process_ui_input(&mut world);
+    let events = &world.resource::<UiRoutedEvents>().events;
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, UiRoutedEvent::Click { .. }))
+    );
+    assert!(events.iter().any(|event| matches!(
+        event,
+        UiRoutedEvent::TouchGesture {
+            phase: UiGesturePhase::Ended,
+            ..
+        }
+    )));
+}
 
 fn setup() -> (World, Entity, Entity, Entity) {
     let mut world = World::new();

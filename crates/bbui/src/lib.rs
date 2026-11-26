@@ -130,8 +130,9 @@ pub mod prelude {
     };
     pub use crate::workspace::{Workspace, WorkspaceAppearance, WorkspacePlugin};
     pub use bbui_core::{
-        UiDirty, UiDirtyBatch, UiDirtyDomain, UiEnabled, UiFocus, UiFocusable, UiHistoryDelegate,
-        UiKey, UiLivePoliteness, UiLiveRegion, UiNode, UiSystems, UiVisible,
+        UiDirty, UiDirtyBatch, UiDirtyDomain, UiEnabled, UiFocus, UiFocusable, UiGesturePhase,
+        UiGestureSurface, UiHistoryDelegate, UiKey, UiLivePoliteness, UiLiveRegion, UiNode,
+        UiRoutedEvent, UiRoutedEvents, UiSystems, UiVisible,
     };
     pub use bbui_layout::{
         Rect, UiAlign, UiEdges, UiFlexDirection, UiFlexItem, UiIntrinsicSize, UiJustify,

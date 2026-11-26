@@ -102,6 +102,7 @@ impl CanvasObject {
 }
 
 #[derive(Component, Debug, Clone, PartialEq)]
+#[require(bbui_core::UiGestureSurface)]
 pub struct Canvas {
     pub objects: Vec<CanvasObject>,
     pub selected: BTreeSet<u64>,
