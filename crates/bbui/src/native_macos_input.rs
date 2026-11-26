@@ -79,12 +79,7 @@ impl MacInputFrame {
         if began || (!momentum && !ended && !cancelled && !momentum_ended) {
             self.flush_scroll_end(queue);
         }
-        if cancelled {
-            self.pending_scroll_end = None;
-            if let Some(event) = convert(sample, window, height) {
-                queue.push(event);
-            }
-        } else if momentum_ended {
+        if cancelled || momentum_ended {
             self.pending_scroll_end = None;
             if let Some(event) = convert(sample, window, height) {
                 queue.push(event);
