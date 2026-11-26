@@ -42,7 +42,10 @@ impl LayoutPass {
             .sanitized();
         let rect = match assigned {
             AssignedRect::Raw(assigned) => {
-                apply_margins_and_constraints(assigned, style.margin, style)
+                let mut rect = apply_margins_and_constraints(assigned, style.margin, style);
+                rect.x += style.translation[0];
+                rect.y += style.translation[1];
+                rect
             }
             AssignedRect::Resolved(rect) => rect,
         };
@@ -159,7 +162,9 @@ pub(super) fn layout_context_changed(
         .copied()
         .unwrap_or_default()
         .sanitized();
-    let rect = apply_margins_and_constraints(assigned, style.margin, style);
+    let mut rect = apply_margins_and_constraints(assigned, style.margin, style);
+    rect.x += style.translation[0];
+    rect.y += style.translation[1];
     previous.rect != rect
         || previous.clip != inherited_clip
         || previous.window != window

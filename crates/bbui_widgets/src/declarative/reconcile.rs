@@ -183,6 +183,19 @@ pub(super) fn reconcile_node(
         }
         if old_props
             .as_ref()
+            .is_none_or(|old| old.auto_animations != props.auto_animations)
+        {
+            match &props.auto_animations {
+                Some(animations) => {
+                    world.entity_mut(entity).insert(animations.clone());
+                }
+                None => {
+                    world.entity_mut(entity).remove::<UiAutoAnimations>();
+                }
+            }
+        }
+        if old_props
+            .as_ref()
             .is_none_or(|old| old.visual_effects != props.visual_effects)
         {
             match &props.visual_effects {
@@ -221,6 +234,19 @@ pub(super) fn reconcile_node(
                 }
                 None => {
                     world.entity_mut(entity).remove::<UiAccessibleName>();
+                }
+            }
+        }
+        if old_props
+            .as_ref()
+            .is_none_or(|old| old.live_region != props.live_region)
+        {
+            match props.live_region {
+                Some(region) => {
+                    world.entity_mut(entity).insert(region);
+                }
+                None => {
+                    world.entity_mut(entity).remove::<UiLiveRegion>();
                 }
             }
         }

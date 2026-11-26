@@ -29,6 +29,8 @@ pub enum UiStyleProperty {
     MaxHeight,
     Padding,
     Margin,
+    TranslateX,
+    TranslateY,
     Gap,
     LayoutMode,
     AlignItems,

@@ -134,6 +134,8 @@ pub struct UiLayoutNode {
     pub max_size: [Option<f32>; 2],
     pub padding: UiEdges,
     pub margin: UiEdges,
+    /// Visual offset in logical pixels; does not consume layout space.
+    pub translation: [f32; 2],
     pub gap: f32,
     pub align_items: UiAlign,
     pub justify_content: UiJustify,
@@ -172,6 +174,7 @@ impl Default for UiLayoutNode {
             max_size: [None, None],
             padding: UiEdges::ZERO,
             margin: UiEdges::ZERO,
+            translation: [0.0, 0.0],
             gap: 0.0,
             align_items: UiAlign::Stretch,
             justify_content: UiJustify::Start,

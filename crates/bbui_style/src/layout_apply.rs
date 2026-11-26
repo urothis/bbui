@@ -40,6 +40,12 @@ pub(super) fn add_base_layout_values(style: &mut UiComputedStyle, layout: UiLayo
         .entry(Margin)
         .or_insert(UiStyleValue::Edges(layout.margin));
     properties
+        .entry(TranslateX)
+        .or_insert(UiStyleValue::Scalar(layout.translation[0]));
+    properties
+        .entry(TranslateY)
+        .or_insert(UiStyleValue::Scalar(layout.translation[1]));
+    properties
         .entry(Gap)
         .or_insert(UiStyleValue::Scalar(layout.gap));
     properties
@@ -70,6 +76,8 @@ pub(super) fn apply_layout_style(world: &mut World, entity: Entity, computed: &U
     apply_layout_property(&mut layout, computed, UiStyleProperty::MaxHeight);
     apply_layout_property(&mut layout, computed, UiStyleProperty::Padding);
     apply_layout_property(&mut layout, computed, UiStyleProperty::Margin);
+    apply_layout_property(&mut layout, computed, UiStyleProperty::TranslateX);
+    apply_layout_property(&mut layout, computed, UiStyleProperty::TranslateY);
     apply_layout_property(&mut layout, computed, UiStyleProperty::Gap);
     apply_layout_property(&mut layout, computed, UiStyleProperty::LayoutMode);
     apply_layout_property(&mut layout, computed, UiStyleProperty::AlignItems);
@@ -129,6 +137,12 @@ pub(super) fn apply_layout_property(
         }
         (Padding, Some(UiStyleValue::Edges(value))) => layout.padding = value,
         (Margin, Some(UiStyleValue::Edges(value))) => layout.margin = value,
+        (TranslateX, Some(UiStyleValue::Scalar(value))) if value.is_finite() => {
+            layout.translation[0] = value
+        }
+        (TranslateY, Some(UiStyleValue::Scalar(value))) if value.is_finite() => {
+            layout.translation[1] = value
+        }
         (Gap, Some(UiStyleValue::Scalar(value))) => layout.gap = nonnegative(value),
         (LayoutMode, Some(UiStyleValue::LayoutMode(value))) => layout.mode = value,
         (AlignItems, Some(UiStyleValue::Align(value))) => layout.align_items = value,

@@ -9,6 +9,7 @@ mod clipboard_bridge;
 mod cursor_bridge;
 mod input_bridge;
 pub mod modal;
+pub mod toasts;
 mod window_layout;
 pub mod workspace;
 mod world_input;
@@ -33,6 +34,7 @@ impl Plugin for BbuiPlugin {
         app.add_plugins(bbui_widgets::WidgetPlugin);
         app.add_plugins(workspace::WorkspacePlugin);
         app.add_plugins(modal::ModalPlugin);
+        app.add_plugins(toasts::ToastsPlugin);
         app.init_resource::<accessibility::BbuiFocusMirror>();
         app.init_resource::<accessibility::AccessibilityLinkSelection>();
         app.init_resource::<accessibility::AccessibilitySyncCache>();
@@ -121,6 +123,10 @@ pub mod prelude {
     };
     pub use crate::modal::{
         ModalAction, ModalDialog, ModalDialogs, ModalDismissal, ModalError, ModalEvent,
+    };
+    pub use crate::toasts::{
+        ToastAppearance, ToastCenter, ToastCorner, ToastLifetime, ToastMotion,
+        ToastOverlayAppearance, ToastSeverity, ToastSlots, ToastsPlugin,
     };
     pub use crate::workspace::{Workspace, WorkspaceAppearance, WorkspacePlugin};
     pub use bbui_core::{

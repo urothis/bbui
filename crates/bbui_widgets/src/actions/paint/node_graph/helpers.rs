@@ -258,10 +258,11 @@ pub(in crate::actions) fn push_rect_outline_with_width(
     width: f32,
     output: &mut Vec<DrawItem>,
 ) {
-    let left = rect.x;
-    let top = rect.y;
-    let right = rect.x + rect.width;
-    let bottom = rect.y + rect.height;
+    let inset = width * 0.5;
+    let left = rect.x + inset;
+    let top = rect.y + inset;
+    let right = rect.x + rect.width - inset;
+    let bottom = rect.y + rect.height - inset;
     for (from, to) in [
         ([left, top], [right, top]),
         ([right, top], [right, bottom]),
