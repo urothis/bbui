@@ -260,7 +260,13 @@ impl InstalledMenu {
             app_menu.insertItem_atIndex(installed.item(), index as isize + 1);
             application.push(installed);
         }
-        if !application.is_empty() {
+        let next_is_separator = app_menu
+            .itemAtIndex(application.len() as isize + 1)
+            .is_some_and(|item| item.isSeparatorItem());
+        if !application.is_empty()
+            && !next_is_separator
+            && !matches!(model.application.last(), Some(NativeMenuEntry::Separator))
+        {
             let separator = InstalledEntry::Separator {
                 item: NSMenuItem::separatorItem(mtm),
             };
