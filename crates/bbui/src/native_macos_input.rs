@@ -8,10 +8,11 @@ use bevy::ecs::system::SystemParam;
 use bevy::input::ButtonState;
 use bevy::input::mouse::{MouseButton, MouseButtonInput};
 use bevy::prelude::*;
-use bevy::window::{CursorMoved, PrimaryWindow, RawHandleWrapper};
+use bevy::window::{CursorMoved, PrimaryWindow, RawHandleWrapper, WindowEvent};
 use std::time::{Duration, Instant};
 
 use crate::cursor_bridge::CursorCaptureState;
+use crate::world_input::WorldPointerState;
 
 #[derive(Resource, Default)]
 pub(crate) struct MacInputFrame {
@@ -79,7 +80,9 @@ pub(crate) struct NativePointerMessages<'w, 's> {
     mouse_events: MessageReader<'w, 's, MouseButtonInput>,
     cursor_events: MessageReader<'w, 's, CursorMoved>,
     mouse_buttons: Option<ResMut<'w, ButtonInput<MouseButton>>>,
+    window_events: Option<ResMut<'w, Messages<WindowEvent>>>,
     capture: Res<'w, CursorCaptureState>,
+    world_pointers: Res<'w, WorldPointerState>,
     time: Option<Res<'w, Time>>,
 }
 
@@ -250,7 +253,9 @@ pub(crate) fn bridge_native_macos_input(
         if moved {
             pointer.last_cursor_position = Some(position);
             pointer_moved = true;
-            if messages.capture.active.is_none() {
+            if messages.capture.active.is_none()
+                && messages.world_pointers.hover_target(window).is_none()
+            {
                 frame.recovered_drag_window = Some(window);
                 queue.push(UiInputEvent::PointerMove {
                     window,
@@ -286,6 +291,13 @@ pub(crate) fn bridge_native_macos_input(
     for index in recovered {
         if let Some(buttons) = messages.mouse_buttons.as_deref_mut() {
             buttons.release(bevy_button(index));
+        }
+        if let Some(events) = messages.window_events.as_deref_mut() {
+            events.write(WindowEvent::MouseButtonInput(MouseButtonInput {
+                button: bevy_button(index),
+                state: ButtonState::Released,
+                window,
+            }));
         }
         queue.push(UiInputEvent::PointerButton {
             window,
