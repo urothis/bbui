@@ -7,7 +7,7 @@ use objc2::runtime::{AnyObject, Sel};
 use objc2::{MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
     NSApplication, NSControlStateValueMixed, NSControlStateValueOff, NSControlStateValueOn,
-    NSEventModifierFlags, NSMenu, NSMenuItem,
+    NSEventModifierFlags, NSMenu, NSMenuItem, NSMenuItemValidation,
 };
 use objc2_foundation::{MainThreadMarker, NSObject, NSObjectProtocol, NSString};
 use std::cell::RefCell;
@@ -16,8 +16,13 @@ use std::ptr;
 
 thread_local! {
     static INSTALLED: RefCell<Option<InstalledMenu>> = const { RefCell::new(None) };
-    static COMMAND_IDS: RefCell<HashMap<isize, String>> = RefCell::new(HashMap::new());
+    static COMMAND_IDS: RefCell<HashMap<isize, CommandBinding>> = RefCell::new(HashMap::new());
     static SELECTED: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+}
+
+struct CommandBinding {
+    id: String,
+    enabled: bool,
 }
 
 define_class!(
@@ -26,13 +31,19 @@ define_class!(
     struct MenuTarget;
 
     unsafe impl NSObjectProtocol for MenuTarget {}
+    unsafe impl NSMenuItemValidation for MenuTarget {
+        #[unsafe(method(validateMenuItem:))]
+        fn validateMenuItem(&self, sender: &NSMenuItem) -> bool {
+            COMMAND_IDS.with_borrow(|ids| ids.get(&sender.tag()).is_some_and(|command| command.enabled))
+        }
+    }
 
     impl MenuTarget {
         #[unsafe(method(performBbuiNativeCommand:))]
         fn perform_command(&self, sender: &NSMenuItem) {
             COMMAND_IDS.with_borrow(|ids| {
-                if let Some(id) = ids.get(&sender.tag()) {
-                    SELECTED.with_borrow_mut(|selected| selected.push(id.clone()));
+                if let Some(command) = ids.get(&sender.tag()).filter(|command| command.enabled) {
+                    SELECTED.with_borrow_mut(|selected| selected.push(command.id.clone()));
                 }
             });
         }
@@ -215,11 +226,17 @@ fn update_entry(entry: &NativeMenuEntry, installed: &InstalledEntry) {
 fn collect_ids(
     entry: &NativeMenuEntry,
     installed: &InstalledEntry,
-    ids: &mut HashMap<isize, String>,
+    ids: &mut HashMap<isize, CommandBinding>,
 ) {
     match (entry, installed) {
         (NativeMenuEntry::Command(command), InstalledEntry::Command { tag, .. }) => {
-            ids.insert(*tag, command.id.clone());
+            ids.insert(
+                *tag,
+                CommandBinding {
+                    id: command.id.clone(),
+                    enabled: command.enabled,
+                },
+            );
         }
         (NativeMenuEntry::Submenu(group), InstalledEntry::Submenu { children, .. }) => {
             for (entry, child) in group.items.iter().zip(children) {
@@ -337,7 +354,13 @@ impl InstalledMenu {
             );
         }
         if let Some(quit) = &self.model.quit_command {
-            ids.insert(-1, quit.clone());
+            ids.insert(
+                -1,
+                CommandBinding {
+                    id: quit.clone(),
+                    enabled: true,
+                },
+            );
         }
         COMMAND_IDS.with_borrow_mut(|shared| *shared = ids);
     }
