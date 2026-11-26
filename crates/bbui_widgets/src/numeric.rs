@@ -407,12 +407,39 @@ impl NumericField {
         if self.kind != NumericFieldKind::Float {
             let result = match self.typed_value() {
                 NumericValue::Integer(value) => {
-                    expression::evaluate_exact_i64(input, value).map(NumericValue::Integer)
+                    expression::evaluate_exact_i64_with_vars(input, value, vars)
+                        .map(NumericValue::Integer)
                 }
                 NumericValue::Unsigned(value) => {
-                    expression::evaluate_exact_u64(input, value).map(NumericValue::Unsigned)
+                    expression::evaluate_exact_u64_with_vars(input, value, vars)
+                        .map(NumericValue::Unsigned)
                 }
                 NumericValue::Float(_) => Err(Error::Domain),
+            };
+            let exact_is_safe = match self.typed_value() {
+                NumericValue::Integer(value) => value.unsigned_abs() <= 9_007_199_254_740_992,
+                NumericValue::Unsigned(value) => value <= 9_007_199_254_740_992,
+                NumericValue::Float(_) => false,
+            };
+            let result = match result {
+                Err(Error::Domain) if exact_is_safe => {
+                    let mut context = vars.clone();
+                    context.insert("x".into(), self.value);
+                    expression::evaluate(input, &context).and_then(|value| {
+                        let rounded = value.round();
+                        if rounded.abs() > 9_007_199_254_740_992.0 {
+                            return Err(Error::Overflow);
+                        }
+                        match self.kind {
+                            NumericFieldKind::Integer => Ok(NumericValue::Integer(rounded as i64)),
+                            NumericFieldKind::Unsigned if rounded >= 0.0 => {
+                                Ok(NumericValue::Unsigned(rounded as u64))
+                            }
+                            _ => Err(Error::Domain),
+                        }
+                    })
+                }
+                result => result,
             };
             let value = match result {
                 Ok(value) => value,
@@ -637,6 +664,27 @@ mod tests {
                 .unwrap()
         );
         assert_eq!(unsigned.value_text(), u64::MAX.to_string());
+    }
+
+    #[test]
+    fn integer_fields_keep_named_expression_features_without_rounding_full_width_values() {
+        let mut field = NumericField::unsigned(u64::MAX - 1);
+        let vars = HashMap::from([("c".into(), 1.0), ("y".into(), 3.0)]);
+        assert!(field.evaluate_input("x + y if c else 0", &vars).is_err());
+        assert_eq!(field.typed_value(), NumericValue::Unsigned(u64::MAX - 1));
+        assert!(field.evaluate_input("max(x, 7)", &vars).is_ok());
+        assert_eq!(field.typed_value(), NumericValue::Unsigned(u64::MAX - 1));
+        assert!(field.evaluate_input("x - y if c else 0", &vars).unwrap());
+        assert_eq!(field.typed_value(), NumericValue::Unsigned(u64::MAX - 4));
+
+        let mut safe = NumericField::integer(3);
+        assert!(safe.evaluate_input("round(1.7)", &HashMap::new()).unwrap());
+        assert_eq!(safe.typed_value(), NumericValue::Integer(2));
+        assert!(
+            safe.evaluate_input("min(4, 3) + 2*pi", &HashMap::new())
+                .unwrap()
+        );
+        assert_eq!(safe.typed_value(), NumericValue::Integer(9));
     }
 
     #[test]

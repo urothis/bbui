@@ -35,7 +35,7 @@ impl std::error::Error for Error {}
 
 /// Evaluate integer arithmetic without passing any value through floating
 /// point. The `x` variable is the control's exact current value.
-pub fn evaluate_exact_integer(source: &str, x: i128) -> Result<i128, Error> {
+fn evaluate_exact_basic(source: &str, x: i128) -> Result<i128, Error> {
     struct Parser<'a> {
         bytes: &'a [u8],
         at: usize,
@@ -76,11 +76,7 @@ pub fn evaluate_exact_integer(source: &str, x: i128) -> Result<i128, Error> {
                     value = value.checked_mul(self.atom()?).ok_or(Error::Overflow)?;
                 } else if self.eat(b'/') {
                     let divisor = self.atom()?;
-                    value = value.checked_div(divisor).ok_or(if divisor == 0 {
-                        Error::DivisionByZero
-                    } else {
-                        Error::Overflow
-                    })?;
+                    value = rounded_div(value, divisor)?;
                 } else {
                     return Ok(value);
                 }
@@ -169,12 +165,78 @@ pub fn evaluate_exact_integer(source: &str, x: i128) -> Result<i128, Error> {
     Ok(value)
 }
 
+fn rounded_div(value: i128, divisor: i128) -> Result<i128, Error> {
+    if divisor == 0 {
+        return Err(Error::DivisionByZero);
+    }
+    let quotient = value.checked_div(divisor).ok_or(Error::Overflow)?;
+    let remainder = value.checked_rem(divisor).ok_or(Error::Overflow)?;
+    if remainder == 0 {
+        return Ok(quotient);
+    }
+    let denominator = divisor.unsigned_abs();
+    let numerator = remainder.unsigned_abs();
+    if numerator < denominator.div_ceil(2) {
+        return Ok(quotient);
+    }
+    quotient
+        .checked_add(if (value < 0) == (divisor < 0) { 1 } else { -1 })
+        .ok_or(Error::Overflow)
+}
+
+pub fn evaluate_exact_integer(source: &str, x: i128) -> Result<i128, Error> {
+    evaluate_exact_basic(source, x)
+}
+
+/// Evaluate the shared expression language while retaining exact integer
+/// values. Named variables supplied as `f64` must be exactly representable
+/// integers; fractional expressions remain available for safe-width fields.
+pub fn evaluate_exact_integer_with_vars(
+    source: &str,
+    x: i128,
+    vars: &HashMap<String, f64>,
+) -> Result<i128, Error> {
+    match evaluate_exact_basic(source, x) {
+        Ok(value) => Ok(value),
+        Err(Error::InvalidCharacter(_) | Error::UnexpectedToken | Error::UnknownName(_)) => {
+            parse(source, true)?.evaluate_exact(x, vars)
+        }
+        Err(error) => Err(error),
+    }
+}
+
 pub fn evaluate_exact_i64(source: &str, x: i64) -> Result<i64, Error> {
     i64::try_from(evaluate_exact_integer(source, i128::from(x))?).map_err(|_| Error::Overflow)
 }
 
 pub fn evaluate_exact_u64(source: &str, x: u64) -> Result<u64, Error> {
     u64::try_from(evaluate_exact_integer(source, i128::from(x))?).map_err(|_| Error::Overflow)
+}
+
+pub fn evaluate_exact_i64_with_vars(
+    source: &str,
+    x: i64,
+    vars: &HashMap<String, f64>,
+) -> Result<i64, Error> {
+    i64::try_from(evaluate_exact_integer_with_vars(
+        source,
+        i128::from(x),
+        vars,
+    )?)
+    .map_err(|_| Error::Overflow)
+}
+
+pub fn evaluate_exact_u64_with_vars(
+    source: &str,
+    x: u64,
+    vars: &HashMap<String, f64>,
+) -> Result<u64, Error> {
+    u64::try_from(evaluate_exact_integer_with_vars(
+        source,
+        i128::from(x),
+        vars,
+    )?)
+    .map_err(|_| Error::Overflow)
 }
 
 #[cfg(test)]
@@ -196,11 +258,38 @@ mod exact_integer_tests {
         assert_eq!(evaluate_exact_u64("-1", 0), Err(Error::Overflow));
         assert!(evaluate_exact_i64("1.5", 0).is_err());
     }
+
+    #[test]
+    fn exact_values_support_named_variables_and_shared_expression_forms() {
+        let vars = HashMap::from([("c".into(), 1.0), ("y".into(), 7.0)]);
+        assert_eq!(
+            evaluate_exact_u64_with_vars("x if c else y", u64::MAX, &vars),
+            Ok(u64::MAX)
+        );
+        assert_eq!(
+            evaluate_exact_u64_with_vars("max(x, 18446744073709551614)", u64::MAX, &vars),
+            Ok(u64::MAX)
+        );
+        assert_eq!(
+            evaluate_exact_u64_with_vars("x - y*2", u64::MAX, &vars),
+            Ok(u64::MAX - 14)
+        );
+        assert_eq!(
+            evaluate_exact_u64_with_vars("x + 1.0", u64::MAX - 1, &vars),
+            Ok(u64::MAX)
+        );
+        assert_eq!(evaluate_exact_i64_with_vars("2**3 + 7%4", 0, &vars), Ok(11));
+        assert_eq!(
+            evaluate_exact_i64_with_vars("1 if 1 else 1/0", 0, &vars),
+            Ok(1)
+        );
+        assert_eq!(evaluate_exact_i64("3/2", 0), Ok(2));
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
 enum Token {
-    Number(f64),
+    Number(NumberLiteral),
     Name(String),
     Plus,
     Minus,
@@ -222,7 +311,13 @@ enum Token {
     End,
 }
 
-fn lex(source: &str) -> Result<Vec<Token>, Error> {
+#[derive(Debug, Clone, PartialEq)]
+struct NumberLiteral {
+    float: f64,
+    exact: Option<i128>,
+}
+
+fn lex(source: &str, exact_literals: bool) -> Result<Vec<Token>, Error> {
     let bytes = source.as_bytes();
     let mut i = 0;
     let mut out = Vec::new();
@@ -256,10 +351,19 @@ fn lex(source: &str) -> Result<Vec<Token>, Error> {
                         return Err(Error::InvalidNumber(start));
                     }
                 }
-                let n = source[start..i]
-                    .parse()
-                    .map_err(|_| Error::InvalidNumber(start))?;
-                out.push(Token::Number(n));
+                let raw = &source[start..i];
+                let float: f64 = raw.parse().map_err(|_| Error::InvalidNumber(start))?;
+                let exact = exact_literals
+                    .then(|| {
+                        raw.parse::<i128>().ok().or_else(|| {
+                            (float.is_finite()
+                                && float.fract() == 0.0
+                                && float.abs() <= 9_007_199_254_740_992.0)
+                                .then_some(float as i128)
+                        })
+                    })
+                    .flatten();
+                out.push(Token::Number(NumberLiteral { float, exact }));
                 continue;
             }
             b'a'..=b'z' | b'A'..=b'Z' | b'_' => {
@@ -318,10 +422,14 @@ fn lex(source: &str) -> Result<Vec<Token>, Error> {
 }
 
 pub fn evaluate(source: &str, vars: &HashMap<String, f64>) -> Result<f64, Error> {
+    parse(source, false)?.evaluate(vars)
+}
+
+fn parse(source: &str, exact_literals: bool) -> Result<Expression, Error> {
     if source.len() > 4_096 {
         return Err(Error::TooComplex);
     }
-    let tokens = lex(source)?;
+    let tokens = lex(source, exact_literals)?;
     if tokens.len() > 512 {
         return Err(Error::TooComplex);
     }
@@ -333,7 +441,7 @@ pub fn evaluate(source: &str, vars: &HashMap<String, f64>) -> Result<f64, Error>
     if parser.peek() != &Token::End {
         return Err(Error::UnexpectedToken);
     }
-    expression.evaluate(vars)
+    Ok(expression)
 }
 
 fn finite(value: f64) -> Result<f64, Error> {
@@ -348,7 +456,7 @@ fn finite(value: f64) -> Result<f64, Error> {
 
 #[derive(Debug, Clone)]
 enum Expression {
-    Number(f64),
+    Number(NumberLiteral),
     Name(String),
     Unary {
         negative: bool,
@@ -398,7 +506,7 @@ enum CompareOperation {
 impl Expression {
     fn evaluate(&self, vars: &HashMap<String, f64>) -> Result<f64, Error> {
         match self {
-            Self::Number(value) => finite(*value),
+            Self::Number(value) => finite(value.float),
             Self::Name(name) => match name.as_str() {
                 "pi" => Ok(std::f64::consts::PI),
                 "e" => Ok(std::f64::consts::E),
@@ -466,6 +574,116 @@ impl Expression {
                 function(name, &values)
             }
         }
+    }
+
+    fn evaluate_exact(&self, x: i128, vars: &HashMap<String, f64>) -> Result<i128, Error> {
+        match self {
+            Self::Number(value) => value.exact.ok_or(Error::Domain),
+            Self::Name(name) if name == "x" => Ok(x),
+            Self::Name(name) if name == "pi" || name == "e" => Err(Error::Domain),
+            Self::Name(name) => {
+                let value = vars
+                    .get(name)
+                    .copied()
+                    .ok_or_else(|| Error::UnknownName(name.clone()))?;
+                if !value.is_finite()
+                    || value.fract() != 0.0
+                    || value.abs() > 9_007_199_254_740_992.0
+                {
+                    return Err(Error::Domain);
+                }
+                Ok(value as i128)
+            }
+            Self::Unary { negative, value } => {
+                let value = value.evaluate_exact(x, vars)?;
+                if *negative {
+                    value.checked_neg().ok_or(Error::Overflow)
+                } else {
+                    Ok(value)
+                }
+            }
+            Self::Binary {
+                operation,
+                left,
+                right,
+            } => {
+                let left = left.evaluate_exact(x, vars)?;
+                let right = right.evaluate_exact(x, vars)?;
+                match operation {
+                    BinaryOperation::Add => left.checked_add(right).ok_or(Error::Overflow),
+                    BinaryOperation::Subtract => left.checked_sub(right).ok_or(Error::Overflow),
+                    BinaryOperation::Multiply => left.checked_mul(right).ok_or(Error::Overflow),
+                    BinaryOperation::Divide => rounded_div(left, right),
+                    BinaryOperation::Remainder if right == 0 => Err(Error::DivisionByZero),
+                    BinaryOperation::Remainder => left.checked_rem(right).ok_or(Error::Overflow),
+                    BinaryOperation::Power => {
+                        let exponent = u32::try_from(right).map_err(|_| Error::Domain)?;
+                        left.checked_pow(exponent).ok_or(Error::Overflow)
+                    }
+                }
+            }
+            Self::Compare {
+                operation,
+                left,
+                right,
+            } => {
+                let left = left.evaluate_exact(x, vars)?;
+                let right = right.evaluate_exact(x, vars)?;
+                Ok(i128::from(match operation {
+                    CompareOperation::Less => left < right,
+                    CompareOperation::LessEq => left <= right,
+                    CompareOperation::Greater => left > right,
+                    CompareOperation::GreaterEq => left >= right,
+                    CompareOperation::Equal => left == right,
+                    CompareOperation::NotEqual => left != right,
+                }))
+            }
+            Self::Conditional {
+                value,
+                condition,
+                alternative,
+            } => {
+                if condition.evaluate_exact(x, vars)? != 0 {
+                    value.evaluate_exact(x, vars)
+                } else {
+                    alternative.evaluate_exact(x, vars)
+                }
+            }
+            Self::Call { name, arguments } => {
+                let values = arguments
+                    .iter()
+                    .map(|argument| argument.evaluate_exact(x, vars))
+                    .collect::<Result<Vec<_>, _>>()?;
+                exact_function(name, &values)
+            }
+        }
+    }
+}
+
+fn exact_function(name: &str, args: &[i128]) -> Result<i128, Error> {
+    let invalid = || Error::InvalidArguments(name.into());
+    match (name, args) {
+        ("min", [_first, ..]) => args.iter().copied().min().ok_or_else(invalid),
+        ("max", [_first, ..]) => args.iter().copied().max().ok_or_else(invalid),
+        ("abs", [value]) => value.checked_abs().ok_or(Error::Overflow),
+        ("round" | "floor" | "ceil", [value]) => Ok(*value),
+        ("clamp", [value, min, max]) if min <= max => Ok((*value).clamp(*min, *max)),
+        ("pow", [base, exponent]) => {
+            let exponent = u32::try_from(*exponent).map_err(|_| Error::Domain)?;
+            base.checked_pow(exponent).ok_or(Error::Overflow)
+        }
+        _ if args
+            .iter()
+            .all(|value| value.unsigned_abs() <= 9_007_199_254_740_992) =>
+        {
+            let floats: Vec<_> = args.iter().map(|value| *value as f64).collect();
+            let result = function(name, &floats)?.round();
+            if result.abs() > 9_007_199_254_740_992.0 {
+                return Err(Error::Domain);
+            }
+            Ok(result as i128)
+        }
+        _ => Err(invalid()),
     }
 }
 
