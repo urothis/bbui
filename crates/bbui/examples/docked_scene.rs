@@ -134,6 +134,8 @@ fn sync_scene_viewport(
     camera.is_active = camera.viewport.is_some();
 }
 
+// Bevy injects these independent event, layout, and camera resources as system parameters.
+#[allow(clippy::too_many_arguments)]
 fn scene_input(
     window: Single<(Entity, &Window), With<PrimaryWindow>>,
     workspace: Res<Workspace>,
@@ -284,11 +286,14 @@ fn setup(
 }
 
 fn install_workspace(world: &mut World) {
-    let window = world
+    let Ok(window) = world
         .query_filtered::<Entity, With<PrimaryWindow>>()
         .single(world)
-        .expect("primary window");
-    let shell = WidgetTree::new(
+    else {
+        eprintln!("docked scene requires a primary window");
+        return;
+    };
+    let Ok(shell) = WidgetTree::new(
         WidgetNode::column([
             WidgetNode::row([
                 WidgetNode::label("SCENE  /  DOCKED VIEWPORT").with_width(UiLength::Fill(1.0)),
@@ -303,20 +308,28 @@ fn install_workspace(world: &mut World) {
         .with_width(UiLength::Fill(1.0))
         .with_height(UiLength::Fill(1.0)),
     )
-    .spawn(world, None)
-    .expect("shell");
-    let dimensions = world.get::<Window>(window).unwrap().resolution.size();
+    .spawn(world, None) else {
+        eprintln!("failed to mount scene shell");
+        return;
+    };
+    let Some(window_data) = world.get::<Window>(window) else {
+        return;
+    };
+    let dimensions = window_data.resolution.size();
     world.entity_mut(shell).insert(UiLayoutRoot::new(
         window,
         Rect::new(0.0, 0.0, dimensions.x, dimensions.y),
         1.0,
     ));
-    let host = world
+    let Some(host) = world
         .query::<(Entity, &UiKey)>()
         .iter(world)
         .find_map(|(entity, key)| (key.0 == "scene:workspace-host").then_some(entity))
-        .expect("workspace host");
-    let mut workspace = Workspace::new(WorkspaceLayout::new(DockNode::Split {
+    else {
+        eprintln!("scene workspace host is missing");
+        return;
+    };
+    let Ok(mut workspace) = Workspace::new(WorkspaceLayout::new(DockNode::Split {
         id: "main-split".into(),
         axis: SplitAxis::Horizontal,
         shares: vec![3.0, 1.0],
@@ -327,11 +340,13 @@ fn install_workspace(world: &mut World) {
             )),
             DockNode::Tabs(TabGroup::new("inspector-tabs", vec!["inspector".into()])),
         ],
-    }))
-    .expect("workspace layout");
+    })) else {
+        eprintln!("invalid scene workspace layout");
+        return;
+    };
     workspace.set_mount_parent(host);
     workspace.register_pane("scene", "Scene", |world, parent| {
-        WidgetTree::new(
+        if let Err(error) = WidgetTree::new(
             WidgetNode::column([
                 WidgetNode::column([])
                     .with_key(SCENE_KEY)
@@ -345,17 +360,21 @@ fn install_workspace(world: &mut World) {
             .with_height(UiLength::Fill(1.0)),
         )
         .spawn(world, Some(parent))
-        .expect("scene pane");
+        {
+            eprintln!("failed to mount scene pane: {error:?}");
+        }
     });
     workspace.register_pane("notes", "Notes", |world, parent| {
-        WidgetTree::new(WidgetNode::label(
+        if let Err(error) = WidgetTree::new(WidgetNode::label(
             "The scene camera sleeps while this tab is open.",
         ))
         .spawn(world, Some(parent))
-        .expect("notes pane");
+        {
+            eprintln!("failed to mount notes pane: {error:?}");
+        }
     });
     workspace.register_pane("inspector", "Inspector", |world, parent| {
-        WidgetTree::new(
+        if let Err(error) = WidgetTree::new(
             WidgetNode::column([
                 WidgetNode::panel(
                     "View",
@@ -397,7 +416,9 @@ fn install_workspace(world: &mut World) {
             .with_padding(UiEdges::all(10.0)),
         )
         .spawn(world, Some(parent))
-        .expect("inspector pane");
+        {
+            eprintln!("failed to mount inspector pane: {error:?}");
+        }
     });
     world.insert_resource(workspace);
 }
