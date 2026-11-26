@@ -18,8 +18,8 @@ pub use geometry::UiRect;
 pub use history::{TextSelection, UiEditContext, UiHistory, UiHistoryRestore, UiValue};
 pub use input::{
     UiGesturePhase, UiInputEvent, UiInputQueue, UiKeyCode, UiModifiers, UiPointerButton,
-    UiRoutedEvent, UiRoutedEvents, UiTouchPhase, UiWheelUnit, clear_invalid_ui_focus,
-    process_ui_input, refresh_ui_hover,
+    UiRoutedEvent, UiRoutedEvents, UiTouchPhase, UiTrackpadGesture, UiTrackpadKind, UiWheelUnit,
+    clear_invalid_ui_focus, process_ui_input, refresh_ui_hover,
 };
 pub use invalidation::{UiDirty, UiDirtyBatch, UiDirtyDomain, ui_components_changed_since};
 

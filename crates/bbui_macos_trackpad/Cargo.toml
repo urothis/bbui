@@ -1,0 +1,15 @@
+[package]
+name = "bbui_macos_trackpad"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "=0.6.2"
+objc2 = "=0.6.5"
+objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["NSEvent", "block2", "objc2-core-foundation"] }
+
+# The AppKit monitor is the only BBUI crate with a native unsafe boundary.
+# Existing framework crates continue to inherit the workspace's unsafe_code forbid.
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"

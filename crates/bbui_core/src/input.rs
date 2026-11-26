@@ -159,6 +159,9 @@ pub enum UiInputEvent {
         position: [f32; 2],
         phase: UiTouchPhase,
     },
+    /// A positioned macOS trackpad sample, already converted to logical UI
+    /// pixels by the host. `scale` is the incremental magnification ratio.
+    TrackpadGesture(UiTrackpadGesture),
     PointerMove {
         window: Entity,
         position: [f32; 2],
@@ -239,6 +242,23 @@ pub enum UiGesturePhase {
     Cancelled,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum UiTrackpadKind {
+    Scroll,
+    Magnify,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct UiTrackpadGesture {
+    pub window: Entity,
+    pub position: [f32; 2],
+    pub delta: [f32; 2],
+    pub scale: f32,
+    pub kind: UiTrackpadKind,
+    pub phase: UiGesturePhase,
+    pub phased: bool,
+}
+
 #[derive(Resource, Debug, Default)]
 pub struct UiInputQueue {
     events: VecDeque<UiInputEvent>,
@@ -273,9 +293,9 @@ impl UiInputQueue {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum UiRoutedEvent {
-    /// Two touches on a common gesture surface. `delta` and `scale` describe
-    /// the change since the preceding event; the first event uses zero and 1.
-    TouchGesture {
+    /// A touchscreen or trackpad gesture on an opted-in surface. `delta` and
+    /// `scale` describe the change since the preceding event.
+    SurfaceGesture {
         window: Entity,
         target: Entity,
         phase: UiGesturePhase,
@@ -414,6 +434,9 @@ use pointer::*;
 
 mod touch;
 use touch::*;
+
+mod trackpad;
+use trackpad::*;
 
 mod focus;
 use focus::*;

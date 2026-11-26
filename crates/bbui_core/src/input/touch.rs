@@ -133,7 +133,7 @@ pub(super) fn route_touch(
         }
         emit(
             world,
-            UiRoutedEvent::TouchGesture {
+            UiRoutedEvent::SurfaceGesture {
                 window,
                 target,
                 phase: UiGesturePhase::Started,
@@ -153,7 +153,7 @@ pub(super) fn route_touch(
         if ending || !valid {
             emit(
                 world,
-                UiRoutedEvent::TouchGesture {
+                UiRoutedEvent::SurfaceGesture {
                     window,
                     target: active.target,
                     phase: if phase == UiTouchPhase::Cancelled || !valid {
@@ -189,7 +189,7 @@ pub(super) fn route_touch(
                 }
                 emit(
                     world,
-                    UiRoutedEvent::TouchGesture {
+                    UiRoutedEvent::SurfaceGesture {
                         window,
                         target: active.target,
                         phase: UiGesturePhase::Updated,
@@ -218,7 +218,7 @@ pub(super) fn cancel_touch_window(world: &mut World, window: Entity) {
     {
         emit(
             world,
-            UiRoutedEvent::TouchGesture {
+            UiRoutedEvent::SurfaceGesture {
                 window,
                 target: gesture.target,
                 phase: UiGesturePhase::Cancelled,

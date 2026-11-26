@@ -15,7 +15,7 @@ pub fn apply_routed_scroll_input(world: &mut World) {
     let mut changed = false;
     for event in events {
         match event {
-            UiRoutedEvent::TouchGesture {
+            UiRoutedEvent::SurfaceGesture {
                 target,
                 phase: UiGesturePhase::Updated,
                 delta,

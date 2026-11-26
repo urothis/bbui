@@ -112,7 +112,7 @@ pub(in crate::actions) fn process_node_graph_event(
     emitted: &mut Vec<WidgetEvent>,
 ) -> bool {
     match event {
-        UiRoutedEvent::TouchGesture {
+        UiRoutedEvent::SurfaceGesture {
             target,
             phase: UiGesturePhase::Updated,
             center,

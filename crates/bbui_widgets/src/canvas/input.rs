@@ -39,7 +39,7 @@ pub fn process_canvas_input(world: &mut World) {
         .collect();
     for event in events {
         match event {
-            UiRoutedEvent::TouchGesture {
+            UiRoutedEvent::SurfaceGesture {
                 target,
                 phase: UiGesturePhase::Updated,
                 center,

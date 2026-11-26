@@ -9,6 +9,8 @@ mod clipboard_bridge;
 mod cursor_bridge;
 mod input_bridge;
 pub mod modal;
+#[cfg(target_os = "macos")]
+mod native_trackpad;
 pub mod toasts;
 mod window_layout;
 pub mod workspace;
@@ -87,6 +89,18 @@ impl Plugin for BbuiPlugin {
         );
         app.init_resource::<input_bridge::ImeBridgeState>();
         app.init_resource::<input_bridge::TouchBridgeState>();
+        #[cfg(target_os = "macos")]
+        {
+            app.insert_non_send_resource(bbui_macos_trackpad::TrackpadMonitor::default());
+            app.init_resource::<native_trackpad::MacTrackpadFrame>();
+            app.add_systems(
+                Update,
+                native_trackpad::bridge_native_trackpad
+                    .in_set(bbui_core::UiSystems::Input)
+                    .before(input_bridge::bridge_bevy_input)
+                    .before(bbui_core::process_ui_input),
+            );
+        }
         app.init_resource::<cursor_bridge::CursorCaptureState>();
         app.init_resource::<world_input::WorldPointerState>();
         app.init_resource::<Assets<Mesh>>();
@@ -132,7 +146,7 @@ pub mod prelude {
     pub use bbui_core::{
         UiDirty, UiDirtyBatch, UiDirtyDomain, UiEnabled, UiFocus, UiFocusable, UiGesturePhase,
         UiGestureSurface, UiHistoryDelegate, UiKey, UiLivePoliteness, UiLiveRegion, UiNode,
-        UiRoutedEvent, UiRoutedEvents, UiSystems, UiVisible,
+        UiRoutedEvent, UiRoutedEvents, UiSystems, UiTrackpadGesture, UiTrackpadKind, UiVisible,
     };
     pub use bbui_layout::{
         Rect, UiAlign, UiEdges, UiFlexDirection, UiFlexItem, UiIntrinsicSize, UiJustify,
