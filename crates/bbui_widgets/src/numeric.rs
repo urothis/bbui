@@ -87,6 +87,18 @@ impl NumericField {
         {
             return Err("invalid numeric field value, bounds, or step");
         }
+        if kind == NumericFieldKind::Unsigned
+            && (value < 0.0
+                || min.is_some_and(|bound| bound < 0.0)
+                || max.is_some_and(|bound| bound < 0.0))
+        {
+            return Err("unsigned numeric values and bounds cannot be negative");
+        }
+        if kind != NumericFieldKind::Float
+            && (step.fract() != 0.0 || step > 9_007_199_254_740_992.0)
+        {
+            return Err("integer numeric step must be an exactly representable whole number");
+        }
         if kind == NumericFieldKind::Integer && integer_bounds(min, max).is_none() {
             return Err("integer numeric bounds contain no representable value");
         }
@@ -100,10 +112,7 @@ impl NumericField {
             exact_min: None,
             exact_max: None,
             step,
-            exact_step: (kind != NumericFieldKind::Float
-                && step > 0.0
-                && step <= 9_007_199_254_740_992.0)
-                .then_some(step.round().max(1.0) as u64),
+            exact_step: (kind != NumericFieldKind::Float).then_some(step as u64),
             kind,
             unit: None,
             enabled: true,
@@ -715,6 +724,19 @@ mod tests {
         assert_eq!(field.min, Some(0.2));
         assert_eq!(field.max, Some(3.7));
         assert_eq!(field.value, 3.0);
+    }
+
+    #[test]
+    fn unsigned_constructor_rejects_negative_inputs_and_fractional_steps() {
+        for (value, min, max) in [
+            (-1.0, None, None),
+            (0.0, Some(-1.0), Some(10.0)),
+            (0.0, Some(0.0), Some(-1.0)),
+        ] {
+            assert!(NumericField::new(value, min, max, 1.0, NumericFieldKind::Unsigned).is_err());
+        }
+        assert!(NumericField::new(2.0, None, None, 0.5, NumericFieldKind::Integer).is_err());
+        assert!(NumericField::new(2.0, None, None, 0.5, NumericFieldKind::Unsigned).is_err());
     }
 
     #[test]
