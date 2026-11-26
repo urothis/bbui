@@ -54,10 +54,17 @@ pub(super) fn read_entries(directory: &Path) -> BrowserResult<Vec<FileEntry>> {
         fs::read_dir(directory).map_err(|error| failure("list directory", directory, error))?;
     let mut entries = Vec::new();
     for result in reader {
-        let entry = result.map_err(|error| failure("read directory entry", directory, error))?;
+        let entry = match result {
+            Ok(entry) => entry,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(failure("read directory entry", directory, error)),
+        };
         let path = entry.path();
-        let metadata =
-            fs::symlink_metadata(&path).map_err(|error| failure("read metadata", &path, error))?;
+        let metadata = match fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(failure("read metadata", &path, error)),
+        };
         let name = entry.file_name().to_string_lossy().into_owned();
         let directory = metadata.is_dir();
         entries.push(FileEntry {
