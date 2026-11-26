@@ -73,7 +73,7 @@ fn save_png(path: &std::path::Path, padded: &[u8]) {
 }
 
 #[test]
-#[ignore = "writes docs/visuals/examples/docked-scene-{dark,light}.png"]
+#[ignore = "writes docked-scene dark, light, and overlay gallery PNGs"]
 fn capture_docked_scene_dark_and_light() {
     let mut app = App::new();
     app.add_plugins(
@@ -95,8 +95,8 @@ fn capture_docked_scene_dark_and_light() {
     .add_plugins(BbuiPlugin)
     .init_resource::<SceneOrbit>()
     .init_resource::<Frames>()
-    .add_systems(Startup, (setup, install_workspace))
-    .add_systems(PostUpdate, sync_scene_viewport);
+    .add_systems(Startup, (setup, install_workspace).chain())
+    .add_systems(Update, sync_scene_activity.after(UiSystems::Widgets));
     app.finish();
     app.cleanup();
     let mut target = Image::new_target_texture(WIDTH, HEIGHT, TextureFormat::Rgba8UnormSrgb, None);
@@ -110,15 +110,13 @@ fn capture_docked_scene_dark_and_light() {
         PrimaryWindow,
     ));
     app.update();
-    let mut cameras = app.world_mut().query_filtered::<Entity, With<Camera>>();
+    let mut cameras = app.world_mut().query_filtered::<Entity, With<Camera2d>>();
     let camera_ids: Vec<_> = cameras.iter(app.world()).collect();
     for camera in camera_ids {
         app.world_mut()
             .entity_mut(camera)
             .insert(RenderTarget::Image(target.clone().into()));
-        if app.world().get::<Camera2d>(camera).is_some() {
-            app.world_mut().entity_mut(camera).insert(IsDefaultUiCamera);
-        }
+        app.world_mut().entity_mut(camera).insert(IsDefaultUiCamera);
     }
     let output =
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/visuals/examples");
@@ -133,8 +131,46 @@ fn capture_docked_scene_dark_and_light() {
             .query_filtered::<&Camera, With<DockedSceneCamera>>();
         let camera = cameras.single(app.world()).expect("scene camera");
         assert!(
-            camera.is_active && camera.viewport.is_some(),
+            camera.is_active && camera.viewport.is_none(),
             "scene pane did not activate its camera"
+        );
+        let mut scene_cameras = app
+            .world_mut()
+            .query_filtered::<Entity, With<DockedSceneCamera>>();
+        let scene_camera = scene_cameras
+            .single(app.world())
+            .expect("scene camera entity");
+        let scene_image = app
+            .world()
+            .get::<RenderTarget>(scene_camera)
+            .and_then(RenderTarget::as_image)
+            .expect("scene image target");
+        let image = app
+            .world()
+            .resource::<Assets<Image>>()
+            .get(scene_image)
+            .expect("viewport image asset");
+        let image_size = image.texture_descriptor.size;
+        let mut surfaces = app.world_mut().query::<(&UiKey, &UiLayoutResult)>();
+        let pane = surfaces
+            .iter(app.world())
+            .find_map(|(key, layout)| (key.0 == SCENE_KEY).then_some(layout.rect))
+            .expect("scene pane layout");
+        assert!(image_size.width.abs_diff(pane.width as u32) <= 2);
+        assert!(image_size.height.abs_diff(pane.height as u32) <= 2);
+        let composed = read_frame(&mut app, &target, index);
+        let stride = (WIDTH as usize * 4).div_ceil(256) * 256;
+        let visible: std::collections::HashSet<_> = (140..680)
+            .step_by(8)
+            .flat_map(|y| (80..800).step_by(8).map(move |x| (y, x)))
+            .map(|(y, x)| {
+                let offset = y * stride + x * 4;
+                [composed[offset], composed[offset + 1], composed[offset + 2]]
+            })
+            .collect();
+        assert!(
+            visible.len() > 32,
+            "3D scene is hidden behind workspace chrome"
         );
         save_png(
             &output.join(format!(
@@ -145,7 +181,26 @@ fn capture_docked_scene_dark_and_light() {
                     "light"
                 }
             )),
-            &read_frame(&mut app, &target, index),
+            &composed,
         );
     }
+    *app.world_mut().resource_mut::<Theme>() = Theme::new(ThemeKind::Dark);
+    let mut windows = app
+        .world_mut()
+        .query_filtered::<Entity, With<PrimaryWindow>>();
+    let window = windows.single(app.world()).expect("capture window");
+    ModalDialog::new(
+        "Scene settings",
+        "This dialog remains above the live 3D viewport.",
+        vec![ModalAction::new("close", "Done")],
+    )
+    .show(app.world_mut(), window)
+    .expect("open scene overlay");
+    for _ in 0..8 {
+        app.update();
+    }
+    save_png(
+        &output.join("docked-scene-overlay.png"),
+        &read_frame(&mut app, &target, 2),
+    );
 }

@@ -293,6 +293,18 @@ pub(super) fn spawn_primitive(
                 ));
             }
         }
+        Primitive::Viewport { rect, camera } if valid_clip(*rect) => {
+            output.push(spawn_item_node(
+                parent,
+                (
+                    positioned_node(*rect, item.clip),
+                    ViewportNode::new(*camera),
+                ),
+                item.z,
+                context.local_z,
+                true,
+            ));
+        }
         Primitive::Shadow {
             rect,
             radius,

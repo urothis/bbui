@@ -4,12 +4,14 @@
 //! to orbit, middle-drag to pan, and scroll over the scene to zoom.
 
 use bbui::prelude::*;
+use bbui::render::{Primitive, UiPaint};
 use bbui::widgets::WidgetNode;
-use bbui_core::{UiFocus, UiKey};
+use bbui_core::{UiFocus, UiKey, UiSystems, UiZIndex};
 use bbui_layout::{Rect, UiEdges, UiLayoutResult};
-use bevy::camera::{ClearColorConfig, Viewport};
+use bevy::camera::{ClearColorConfig, RenderTarget};
 use bevy::input::mouse::{MouseButtonInput, MouseWheel};
 use bevy::prelude::*;
+use bevy::render::render_resource::TextureFormat;
 use bevy::render::view::Tonemapping;
 use bevy::window::{PrimaryWindow, WindowResolution};
 
@@ -45,54 +47,6 @@ impl Default for SceneOrbit {
     }
 }
 
-/// Convert the clipped logical pane rectangle to Bevy's physical viewport.
-fn physical_viewport(rect: Rect, scale: f32, size: UVec2) -> Option<Viewport> {
-    if !scale.is_finite() || scale <= 0.0 {
-        return None;
-    }
-    let left = (rect.x * scale).round().clamp(0.0, size.x as f32) as u32;
-    let top = (rect.y * scale).round().clamp(0.0, size.y as f32) as u32;
-    let right = ((rect.x + rect.width) * scale)
-        .round()
-        .clamp(0.0, size.x as f32) as u32;
-    let bottom = ((rect.y + rect.height) * scale)
-        .round()
-        .clamp(0.0, size.y as f32) as u32;
-    (right > left && bottom > top).then_some(Viewport {
-        physical_position: UVec2::new(left, top),
-        physical_size: UVec2::new(right - left, bottom - top),
-        depth: 0.0..1.0,
-    })
-}
-
-#[cfg(test)]
-mod geometry_tests {
-    use super::*;
-
-    #[test]
-    fn pane_viewport_uses_physical_pixels_and_clips_to_window() {
-        let viewport = physical_viewport(
-            Rect::new(20.0, 12.0, 160.0, 90.0),
-            1.5,
-            UVec2::new(300, 200),
-        )
-        .unwrap();
-        assert_eq!(viewport.physical_position, UVec2::new(30, 18));
-        assert_eq!(viewport.physical_size, UVec2::new(240, 135));
-        let clipped = physical_viewport(
-            Rect::new(180.0, 100.0, 80.0, 80.0),
-            1.5,
-            UVec2::new(300, 200),
-        )
-        .unwrap();
-        assert_eq!(clipped.physical_size, UVec2::new(30, 50));
-        assert!(
-            physical_viewport(Rect::new(300.0, 0.0, 20.0, 20.0), 1.0, UVec2::new(300, 200))
-                .is_none()
-        );
-    }
-}
-
 fn surface_rect(layout: &UiLayoutResult) -> Option<Rect> {
     let rect = layout.rect;
     let clip = layout.clip.unwrap_or(rect);
@@ -101,41 +55,6 @@ fn surface_rect(layout: &UiLayoutResult) -> Option<Rect> {
     let right = (rect.x + rect.width).min(clip.x + clip.width);
     let bottom = (rect.y + rect.height).min(clip.y + clip.height);
     (right > left && bottom > top).then_some(Rect::new(left, top, right - left, bottom - top))
-}
-
-fn sync_scene_viewport(
-    window: Single<(Entity, &Window), With<PrimaryWindow>>,
-    workspace: Res<Workspace>,
-    modals: Res<ModalDialogs>,
-    surfaces: Query<(&UiKey, &UiLayoutResult)>,
-    mut camera: Single<&mut Camera, With<DockedSceneCamera>>,
-) {
-    let (window_entity, window) = *window;
-    let active = workspace
-        .layout()
-        .group("scene-tabs")
-        .and_then(|group| group.active.as_ref())
-        .is_some_and(|pane| pane.0 == "scene");
-    let rect = active
-        .then(|| {
-            surfaces.iter().find_map(|(key, layout)| {
-                (key.0 == SCENE_KEY).then(|| surface_rect(layout)).flatten()
-            })
-        })
-        .flatten();
-    camera.viewport = rect.and_then(|rect| {
-        physical_viewport(
-            rect,
-            window.scale_factor(),
-            UVec2::new(
-                window.resolution.physical_width(),
-                window.resolution.physical_height(),
-            ),
-        )
-    });
-    // This example renders the scene directly to the window after the 2D UI.
-    // A native modal must remain visible instead of being covered by that pass.
-    camera.is_active = camera.viewport.is_some() && !modals.is_open(window_entity);
 }
 
 // Bevy injects these independent event, layout, and camera resources as system parameters.
@@ -223,19 +142,26 @@ fn scene_input(
 
 fn setup(
     mut commands: Commands,
+    mut images: ResMut<Assets<Image>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
+    // Bevy's ViewportNode resizes this image to the pane's computed UI size.
+    let scene_image = images.add(Image::new_target_texture(
+        0,
+        0,
+        TextureFormat::Bgra8UnormSrgb,
+        None,
+    ));
     commands.spawn((
         Camera3d::default(),
         Tonemapping::None,
         Camera {
-            // Draw after the opaque dock group background. The viewport confines
-            // the scene to its content rect; tab chrome and the inspector stay outside it.
-            order: 2,
-            is_active: false,
+            // Render before the UI camera samples the scene texture.
+            order: -1,
             ..default()
         },
+        RenderTarget::Image(scene_image.into()),
         Transform::from_xyz(5.0, 4.0, 8.0).looking_at(Vec3::ZERO, Vec3::Y),
         DockedSceneCamera,
     ));
@@ -291,6 +217,13 @@ fn setup(
 }
 
 fn install_workspace(world: &mut World) {
+    let Ok(scene_camera) = world
+        .query_filtered::<Entity, With<DockedSceneCamera>>()
+        .single(world)
+    else {
+        eprintln!("docked scene requires a scene camera");
+        return;
+    };
     let Ok(window) = world
         .query_filtered::<Entity, With<PrimaryWindow>>()
         .single(world)
@@ -350,7 +283,7 @@ fn install_workspace(world: &mut World) {
         return;
     };
     workspace.set_mount_parent(host);
-    workspace.register_pane("scene", "Scene", |world, parent| {
+    workspace.register_pane("scene", "Scene", move |world, parent| {
         if let Err(error) = WidgetTree::new(
             WidgetNode::column([
                 WidgetNode::column([])
@@ -367,6 +300,19 @@ fn install_workspace(world: &mut World) {
         .spawn(world, Some(parent))
         {
             eprintln!("failed to mount scene pane: {error:?}");
+        }
+        if let Some(surface) = world
+            .query::<(Entity, &UiKey)>()
+            .iter(world)
+            .find_map(|(entity, key)| (key.0 == SCENE_KEY).then_some(entity))
+        {
+            world.entity_mut(surface).insert((
+                UiPaint(Primitive::Viewport {
+                    rect: Rect::new(0.0, 0.0, 0.0, 0.0).into(),
+                    camera: scene_camera,
+                }),
+                UiZIndex(1),
+            ));
         }
     });
     workspace.register_pane("notes", "Notes", |world, parent| {
@@ -440,25 +386,22 @@ fn main() {
         }))
         .add_plugins(BbuiPlugin)
         .init_resource::<SceneOrbit>()
-        .add_systems(Startup, (setup, install_workspace))
+        .add_systems(Startup, (setup, install_workspace).chain())
         .add_systems(Update, scene_input)
-        .add_systems(PostUpdate, sync_scene_viewport)
+        .add_systems(Update, sync_scene_activity.after(UiSystems::Widgets))
         .run();
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn viewport_clips_and_scales_without_leaving_window() {
-        let viewport =
-            physical_viewport(Rect::new(-5.0, 10.0, 75.0, 40.0), 2.0, UVec2::new(100, 80)).unwrap();
-        assert_eq!(viewport.physical_position, UVec2::new(0, 20));
-        assert_eq!(viewport.physical_size, UVec2::new(100, 60));
-        assert!(
-            physical_viewport(Rect::new(200.0, 0.0, 20.0, 20.0), 1.0, UVec2::new(100, 80))
-                .is_none()
-        );
+fn sync_scene_activity(
+    workspace: Res<Workspace>,
+    mut camera: Single<&mut Camera, With<DockedSceneCamera>>,
+) {
+    let active = workspace
+        .layout()
+        .group("scene-tabs")
+        .and_then(|group| group.active.as_ref())
+        .is_some_and(|pane| pane.0 == "scene");
+    if camera.is_active != active {
+        camera.is_active = active;
     }
 }

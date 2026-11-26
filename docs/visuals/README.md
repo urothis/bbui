@@ -12,7 +12,7 @@ These are captures from runnable Bevy examples and BBUI's offscreen GPU tests. O
 | Full showcase | [Showcase](examples/showcase.png) · [layout gallery](examples/layout_gallery.png) |
 | Live themes | [Theme gallery](examples/theme_gallery.png) |
 | Docking workspace | [Dark](examples/workspace-dark.png) · [Light](examples/workspace-light.png) · [edge drop preview](examples/workspace-drop.png) |
-| Docked 3D scene | [Dark](examples/docked-scene-dark.png) · [Light](examples/docked-scene-light.png) |
+| Docked 3D scene | [Dark](examples/docked-scene-dark.png) · [Light](examples/docked-scene-light.png) · [Modal overlay](examples/docked-scene-overlay.png) |
 | Editor workspace composition | [Dark](examples/editor-workspace-dark.png) · [Light](examples/editor-workspace-light.png) |
 | Workspace shell | [Dark](examples/workspace-shell-dark.png) · [Light](examples/workspace-shell-light.png) |
 | Modal dialog | [Dark](examples/modal-dialog-dark.png) · [Light](examples/modal-dialog-light.png) |
@@ -77,7 +77,7 @@ python3 scripts/capture_visual_effect_variants.py
 
 The workspace captures come from `cargo test -p bbui workspace::gpu::capture_workspace_dark_and_light --lib -- --ignored`; copy the resulting `target/workspace-preview-*.png` files into `docs/visuals/examples/` after visual review.
 
-The docked scene captures come from `cargo test -p bbui --example docked_scene --locked -- --ignored`; the test writes both themes directly to `docs/visuals/examples/`.
+The docked scene captures come from `cargo test -p bbui --example docked_scene --locked -- --ignored`; the test writes both themes and the modal overlay directly to `docs/visuals/examples/`.
 
 The editor workspace captures come from `cargo test -p bbui --example editor_workspace --locked -- --ignored`; the capture test writes both themes directly to `docs/visuals/examples/`.
 
