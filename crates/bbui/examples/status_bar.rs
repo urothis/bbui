@@ -1,8 +1,8 @@
-//! Cancellable job status in an application shell.
+//! Application-composed status bar in an application shell.
 //! Run with `cargo run -p bbui --example status_bar`.
 
 use bbui::prelude::*;
-use bbui::widgets::{Command, CommandRegistry, WidgetEventQueue};
+use bbui::widgets::{Command, CommandRegistry, WidgetEvent, WidgetEventQueue};
 use bevy::prelude::*;
 use bevy::window::{PrimaryWindow, WindowResolution};
 
@@ -12,13 +12,61 @@ mod capture;
 #[path = "editor_workspace/content.rs"]
 mod editor_content;
 
-#[cfg(test)]
-#[derive(Resource)]
-struct ExampleState {
-    status: StatusBar,
+fn status_slots(compact: bool) -> StatusBarSlots {
+    let text = |size, token| {
+        let mut style = UiInlineStyle::default();
+        style.set(UiStyleProperty::FontSize, UiStyleValue::Scalar(size));
+        style.set_color_token(UiStyleProperty::Foreground, token);
+        style
+    };
+    let leading = WidgetNode::row([
+        WidgetNode::label("Material.001")
+            .with_key("host:document")
+            .with_style(text(11.5, ThemeColorToken::Text)),
+        WidgetNode::label("Rendering preview")
+            .with_key("host:activity")
+            .with_live_region(UiLiveRegion::polite())
+            .with_style(text(11.5, ThemeColorToken::Accent)),
+    ])
+    .with_gap(16.0);
+    let leading = if compact {
+        WidgetNode::label("Material.001")
+            .with_key("host:document")
+            .with_style(text(11.5, ThemeColorToken::Text))
+    } else {
+        leading
+    };
+    let mut cancel_style = text(11.5, ThemeColorToken::Text);
+    cancel_style.set_color_token(UiStyleProperty::Background, ThemeColorToken::Background);
+    cancel_style.set(UiStyleProperty::CornerRadius, UiStyleValue::Scalar(4.0));
+    StatusBarSlots {
+        leading: Some(leading),
+        center: if compact {
+            None
+        } else {
+            Some(
+                WidgetNode::label("Preview 65%")
+                    .with_key("host:progress-label")
+                    .with_live_region(UiLiveRegion::polite())
+                    .with_style(text(11.5, ThemeColorToken::MutedText)),
+            )
+        },
+        trailing: Some(
+            WidgetNode::row([
+                WidgetNode::progress(0.65)
+                    .with_key("host:progress")
+                    .with_width(UiLength::Px(if compact { 100.0 } else { 150.0 })),
+                WidgetNode::button("Cancel")
+                    .with_key("status:cancel")
+                    .with_accessible_name("Cancel rendering preview")
+                    .with_style(cancel_style),
+            ])
+            .with_gap(14.0),
+        ),
+    }
 }
 
-fn page(status: &StatusBar) -> WidgetTree {
+fn page() -> WidgetTree {
     let mut brand_style = UiInlineStyle::default();
     brand_style.set_color_token(UiStyleProperty::Foreground, ThemeColorToken::Accent);
     let mut muted = UiInlineStyle::default();
@@ -59,7 +107,7 @@ fn page(status: &StatusBar) -> WidgetTree {
                 .with_key("status:workspace")
                 .with_width(UiLength::Fill(1.0))
                 .with_height(UiLength::Fill(1.0)),
-            status.view(),
+            StatusBar.view_with_slots(&StatusBarAppearance::default(), status_slots(false)),
         ])
         .with_width(UiLength::Fill(1.0))
         .with_height(UiLength::Fill(1.0)),
@@ -114,18 +162,7 @@ fn install(world: &mut World) {
     else {
         return;
     };
-    let status = StatusBar {
-        items: vec![
-            StatusItem::new("Material.001", StatusTone::Normal),
-            StatusItem::new("Rendering preview", StatusTone::Accent),
-        ],
-        progress: Some(StatusProgress {
-            label: "Preview 65%".into(),
-            fraction: 0.65,
-            cancel_label: Some("Cancel".into()),
-        }),
-    };
-    let Ok(root) = page(&status).spawn(world, None) else {
+    let Ok(root) = page().spawn(world, None) else {
         return;
     };
     world.entity_mut(root).insert(UiLayoutRoot::new(
@@ -140,8 +177,6 @@ fn install(world: &mut World) {
     {
         install_editor(world, host);
     }
-    #[cfg(test)]
-    world.insert_resource(ExampleState { status });
 }
 
 fn setup(world: &mut World) {
@@ -152,7 +187,11 @@ fn setup(world: &mut World) {
 fn process(world: &mut World) {
     let events = world.resource_mut::<WidgetEventQueue>().take();
     for event in &events {
-        if status_action(world, event) == Some(StatusAction::CancelRequested) {
+        if let WidgetEvent::Activated { target } = event
+            && world
+                .get::<UiKey>(*target)
+                .is_some_and(|key| key.0 == "status:cancel")
+        {
             info!("Host should cancel its active job");
         }
     }
@@ -162,7 +201,7 @@ fn main() {
     App::new()
         .add_plugins(DefaultPlugins.set(bevy::window::WindowPlugin {
             primary_window: Some(Window {
-                title: "BBUI Job Status".into(),
+                title: "BBUI Status Bar".into(),
                 resolution: WindowResolution::new(1536, 900),
                 ..default()
             }),

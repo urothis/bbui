@@ -123,10 +123,7 @@ pub mod prelude {
     pub use crate::modal::{
         ModalAction, ModalDialog, ModalDialogs, ModalDismissal, ModalError, ModalEvent,
     };
-    pub use crate::status::{
-        StatusAction, StatusBar, StatusBarAppearance, StatusBarSlots, StatusItem, StatusProgress,
-        StatusTone, status_action,
-    };
+    pub use crate::status::{StatusBar, StatusBarAppearance, StatusBarSlots};
     pub use crate::workspace::{Workspace, WorkspaceAppearance, WorkspacePlugin};
     pub use bbui_core::{
         UiDirty, UiDirtyBatch, UiDirtyDomain, UiEnabled, UiFocus, UiFocusable, UiHistoryDelegate,

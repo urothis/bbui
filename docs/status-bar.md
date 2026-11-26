@@ -1,31 +1,27 @@
-# Job status bar
+# Status bar
 
-`StatusBar` presents application-owned status items, progress, and an optional cancel control. It does not start jobs or change their state. `StatusProgress::normalized_fraction` clamps progress to 0–1 and treats invalid values as zero. `status_action` returns `CancelRequested` when the host activates the cancel button.
+`StatusBar` is a compact surface with three equal-width widget sockets: `leading`, `center`, and `trailing`. The center socket is centered in the window, and the trailing socket is right-aligned. Each socket accepts any `WidgetNode`, including text, progress, controls, or an application-defined row. The bar owns no job state or actions; hosts handle events from their own widgets.
 
-`StatusBarAppearance` controls height, padding, gap, progress width, copy visibility, and styles for each tone, progress label, cancel control, and bar surface. `StatusBarSlots` inserts host content before the status items or after the job controls. The bar marks changing status text and progress labels as accessible live regions.
+`StatusBarAppearance` controls the height, padding, region gap, and surface style. Supply only the regions you need. The host can put accessible live regions on changing content and can choose its own compact presentation by changing the supplied widgets.
 
 ```rust
-let status = StatusBar {
-    items: vec![
-        StatusItem::new("Ready", StatusTone::Normal),
-        StatusItem::new("Rendering preview", StatusTone::Accent),
-    ],
-    progress: Some(StatusProgress {
-        label: "Preview 65%".into(),
-        fraction: 0.65,
-        cancel_label: Some("Cancel".into()),
-    }),
-};
-let bar = status.view_with(&StatusBarAppearance::default());
+let bar = StatusBar.view_with_slots(
+    &StatusBarAppearance::default(),
+    StatusBarSlots {
+        leading: Some(WidgetNode::label("Ready")),
+        center: Some(WidgetNode::label("Preview 65%")),
+        trailing: Some(WidgetNode::progress(0.65)),
+    },
+);
 ```
 
-Run `cargo run -p bbui --example status_bar` to inspect the standalone editor shell. Run `cargo test -p bbui --example status_bar --locked -- --ignored` to regenerate the captures, and `cargo bench -p bbui --bench performance --locked -- status/reconcile` to measure progress reconciliation.
+The [example](../crates/bbui/examples/status_bar.rs) composes a status label, job progress, and a cancel button through these sockets. Run `cargo run -p bbui --example status_bar` to inspect it. Run `cargo test -p bbui --example status_bar --locked -- --ignored` to regenerate the captures, and `cargo bench -p bbui --bench performance --locked -- status/reconcile` to measure progress reconciliation.
 
 | Dark | Light |
 | --- | --- |
-| ![Job status in dark theme](visuals/examples/status-bar-dark.png) | ![Job status in light theme](visuals/examples/status-bar-light.png) |
+| ![Status bar in dark theme](visuals/examples/status-bar-dark.png) | ![Status bar in light theme](visuals/examples/status-bar-light.png) |
 
 | State | Dark | Light |
 | --- | --- | --- |
 | Compact | [Preview](visuals/examples/status-bar-compact-dark.png) | [Preview](visuals/examples/status-bar-compact-light.png) |
-| Cancel hover | [Preview](visuals/examples/status-bar-hover-dark.png) | [Preview](visuals/examples/status-bar-hover-light.png) |
+| Action hover | [Preview](visuals/examples/status-bar-hover-dark.png) | [Preview](visuals/examples/status-bar-hover-light.png) |

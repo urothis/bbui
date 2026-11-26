@@ -51,7 +51,7 @@ fn read_frame(app: &mut App, target: &Handle<Image>, index: usize) -> Vec<u8> {
         .0
         .get(&index)
         .cloned()
-        .expect("status and notices GPU capture timed out");
+        .expect("status bar GPU capture timed out");
     app.world_mut().despawn(readback);
     bytes
 }
@@ -71,7 +71,7 @@ fn save_png(path: &std::path::Path, padded: &[u8]) {
         image::ColorType::Rgba8,
         image::ImageFormat::Png,
     )
-    .expect("save status and notices capture");
+    .expect("save status bar capture");
 }
 
 #[test]
@@ -138,20 +138,12 @@ fn capture_status_bar() {
                         .then_some(entry.id())
                 })
                 .expect("status bar mounted");
-            let appearance = if scenario == "compact" {
-                StatusBarAppearance {
-                    show_secondary_items: false,
-                    show_progress_label: false,
-                    progress_width: 100.0,
-                    ..Default::default()
-                }
-            } else {
-                StatusBarAppearance::default()
-            };
-            let status = app.world().resource::<ExampleState>().status.clone();
-            WidgetTree::new(status.view_with(&appearance))
-                .reconcile(app.world_mut(), status_root)
-                .expect("reconcile status scenario");
+            let appearance = StatusBarAppearance::default();
+            WidgetTree::new(
+                StatusBar.view_with_slots(&appearance, status_slots(scenario == "compact")),
+            )
+            .reconcile(app.world_mut(), status_root)
+            .expect("reconcile status scenario");
             let cancel = app.world().iter_entities().find_map(|entry| {
                 entry
                     .get::<UiKey>()
@@ -172,6 +164,22 @@ fn capture_status_bar() {
             for _ in 0..5 {
                 app.update();
             }
+            if scenario == "default" && kind == ThemeKind::Dark {
+                let label = app
+                    .world()
+                    .iter_entities()
+                    .find_map(|entry| {
+                        (entry.get::<UiKey>()?.0 == "host:progress-label")
+                            .then(|| {
+                                entry
+                                    .get::<bbui_layout::UiLayoutResult>()
+                                    .map(|layout| layout.rect)
+                            })
+                            .flatten()
+                    })
+                    .expect("center label layout");
+                assert!((label.x + label.width / 2.0 - WIDTH as f32 / 2.0).abs() < 1.0);
+            }
             let bytes = read_frame(&mut app, &target, theme_index * 3 + scenario_index);
             let theme = if kind == ThemeKind::Dark {
                 "dark"
@@ -186,27 +194,4 @@ fn capture_status_bar() {
             save_png(&output.join(name), &bytes);
         }
     }
-}
-
-#[allow(clippy::expect_used)]
-fn save_motion_crop(path: &std::path::Path, padded: &[u8]) {
-    const LEFT: usize = 1228;
-    const TOP: usize = 700;
-    const CROP_WIDTH: usize = 302;
-    const CROP_HEIGHT: usize = 160;
-    let row_stride = (WIDTH as usize * 4).div_ceil(256) * 256;
-    let mut pixels = Vec::with_capacity(CROP_WIDTH * CROP_HEIGHT * 4);
-    for y in TOP..TOP + CROP_HEIGHT {
-        let start = y * row_stride + LEFT * 4;
-        pixels.extend_from_slice(&padded[start..start + CROP_WIDTH * 4]);
-    }
-    image::save_buffer_with_format(
-        path,
-        &pixels,
-        CROP_WIDTH as u32,
-        CROP_HEIGHT as u32,
-        image::ColorType::Rgba8,
-        image::ImageFormat::Png,
-    )
-    .expect("save notice motion crop");
 }
