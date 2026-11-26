@@ -466,7 +466,7 @@ dependencies = [
  "accesskit",
  "bbui_core",
  "bbui_layout",
- "bbui_macos_trackpad",
+ "bbui_macos_input",
  "bbui_macros",
  "bbui_media",
  "bbui_motion",
@@ -500,7 +500,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "bbui_macos_trackpad"
+name = "bbui_macos_input"
 version = "0.1.0"
 dependencies = [
  "block2 0.6.2",

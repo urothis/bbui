@@ -1,4 +1,11 @@
-//! AppKit's positioned, phased trackpad events behind a safe sampling API.
+//! AppKit pointer and trackpad events behind a safe sampling API.
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum MacInputSample {
+    Trackpad(TrackpadSample),
+    MouseUp(u8),
+    MouseDrag { button: u8, position: [f64; 2] },
+}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TrackpadSample {
@@ -24,7 +31,7 @@ pub enum TrackpadSample {
 
 #[cfg(target_os = "macos")]
 mod macos {
-    use super::TrackpadSample;
+    use super::{MacInputSample, TrackpadSample};
     use objc2::rc::Retained;
     use objc2::runtime::AnyObject;
     use objc2_app_kit::{NSEvent, NSEventMask, NSEventModifierFlags, NSEventPhase, NSEventType};
@@ -32,7 +39,7 @@ mod macos {
 
     #[derive(Default)]
     pub struct TrackpadMonitor {
-        receiver: Option<Receiver<TrackpadSample>>,
+        receiver: Option<Receiver<MacInputSample>>,
         token: Option<Retained<AnyObject>>,
         attempted: bool,
     }
@@ -43,13 +50,18 @@ mod macos {
         }
 
         /// Install on the main thread and drain samples in AppKit event order.
-        pub fn drain(&mut self) -> Vec<TrackpadSample> {
+        pub fn drain(&mut self) -> Vec<MacInputSample> {
             if !self.attempted {
                 self.install();
             }
             self.receiver
                 .as_ref()
                 .map_or_else(Vec::new, |receiver| receiver.try_iter().collect())
+        }
+
+        /// Button snapshot used only when AppKit's local monitor could not be installed.
+        pub fn pressed_mouse_buttons() -> usize {
+            NSEvent::pressedMouseButtons()
         }
 
         fn install(&mut self) {
@@ -66,7 +78,7 @@ mod macos {
                     let ended = phase.intersects(NSEventPhase::Ended | NSEventPhase::Cancelled);
                     let momentum_ended =
                         momentum.intersects(NSEventPhase::Ended | NSEventPhase::Cancelled);
-                    let _ = sender.send(TrackpadSample::Scroll {
+                    let _ = sender.send(MacInputSample::Trackpad(TrackpadSample::Scroll {
                         position,
                         delta: [event.scrollingDeltaX(), event.scrollingDeltaY()],
                         began: phase.intersects(NSEventPhase::Began | NSEventPhase::MayBegin),
@@ -76,21 +88,51 @@ mod macos {
                         command: event.modifierFlags().intersects(
                             NSEventModifierFlags::Command | NSEventModifierFlags::Control,
                         ),
-                    });
+                    }));
                 } else if event.r#type() == NSEventType::Magnify {
                     let phase = event.phase();
-                    let _ = sender.send(TrackpadSample::Magnify {
+                    let _ = sender.send(MacInputSample::Trackpad(TrackpadSample::Magnify {
                         position,
                         delta: event.magnification(),
                         began: phase.intersects(NSEventPhase::Began),
                         ended: phase.intersects(NSEventPhase::Ended),
                         cancelled: phase.intersects(NSEventPhase::Cancelled),
                         phased: phase != NSEventPhase::None,
-                    });
+                    }));
+                } else if matches!(
+                    event.r#type(),
+                    NSEventType::LeftMouseDragged
+                        | NSEventType::RightMouseDragged
+                        | NSEventType::OtherMouseDragged
+                ) {
+                    let button = event.buttonNumber();
+                    if (0..=2).contains(&button) {
+                        let _ = sender.send(MacInputSample::MouseDrag {
+                            button: button as u8,
+                            position,
+                        });
+                    }
+                } else if matches!(
+                    event.r#type(),
+                    NSEventType::LeftMouseUp
+                        | NSEventType::RightMouseUp
+                        | NSEventType::OtherMouseUp
+                ) {
+                    let button = event.buttonNumber();
+                    if (0..=2).contains(&button) {
+                        let _ = sender.send(MacInputSample::MouseUp(button as u8));
+                    }
                 }
                 event as *const NSEvent as *mut NSEvent
             });
-            let mask = NSEventMask::ScrollWheel | NSEventMask::Magnify;
+            let mask = NSEventMask::ScrollWheel
+                | NSEventMask::Magnify
+                | NSEventMask::LeftMouseUp
+                | NSEventMask::RightMouseUp
+                | NSEventMask::OtherMouseUp
+                | NSEventMask::LeftMouseDragged
+                | NSEventMask::RightMouseDragged
+                | NSEventMask::OtherMouseDragged;
             // SAFETY: This local monitor is installed and later removed on AppKit's main thread.
             if let Some(token) =
                 unsafe { NSEvent::addLocalMonitorForEventsMatchingMask_handler(mask, &block) }

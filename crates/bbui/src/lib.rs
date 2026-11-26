@@ -10,7 +10,7 @@ mod cursor_bridge;
 mod input_bridge;
 pub mod modal;
 #[cfg(target_os = "macos")]
-mod native_trackpad;
+mod native_macos_input;
 pub mod toasts;
 mod window_layout;
 pub mod workspace;
@@ -91,11 +91,12 @@ impl Plugin for BbuiPlugin {
         app.init_resource::<input_bridge::TouchBridgeState>();
         #[cfg(target_os = "macos")]
         {
-            app.insert_non_send(bbui_macos_trackpad::TrackpadMonitor::default());
-            app.init_resource::<native_trackpad::MacTrackpadFrame>();
+            app.insert_non_send(bbui_macos_input::TrackpadMonitor::default());
+            app.init_resource::<native_macos_input::MacInputFrame>();
+            app.init_resource::<native_macos_input::MacPointerState>();
             app.add_systems(
                 Update,
-                native_trackpad::bridge_native_trackpad
+                native_macos_input::bridge_native_macos_input
                     .in_set(bbui_core::UiSystems::Input)
                     .before(input_bridge::bridge_bevy_input)
                     .before(bbui_core::process_ui_input),

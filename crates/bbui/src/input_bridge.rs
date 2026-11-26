@@ -41,7 +41,7 @@ pub struct InputMessages<'w, 's> {
     buttons: MessageReader<'w, 's, MouseButtonInput>,
     wheels: MessageReader<'w, 's, MouseWheel>,
     #[cfg(target_os = "macos")]
-    trackpad: Option<Res<'w, crate::native_trackpad::MacTrackpadFrame>>,
+    trackpad: Option<Res<'w, crate::native_macos_input::MacInputFrame>>,
     keys: MessageReader<'w, 's, KeyboardInput>,
     ime: MessageReader<'w, 's, Ime>,
     focus: MessageReader<'w, 's, WindowFocused>,
@@ -60,6 +60,14 @@ pub fn bridge_bevy_input(
 ) {
     let now = time.elapsed_secs_f64();
     for event in messages.moves.read() {
+        #[cfg(target_os = "macos")]
+        if messages
+            .trackpad
+            .as_ref()
+            .is_some_and(|frame| frame.recovered_drag_window == Some(event.window))
+        {
+            continue;
+        }
         if messages.world_pointers.hover_target(event.window).is_some() {
             continue;
         }

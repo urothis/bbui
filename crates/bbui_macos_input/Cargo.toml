@@ -1,5 +1,5 @@
 [package]
-name = "bbui_macos_trackpad"
+name = "bbui_macos_input"
 version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
