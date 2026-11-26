@@ -64,7 +64,6 @@ impl MacInputFrame {
         now: Instant,
         queue: &mut UiInputQueue,
     ) {
-        self.expire_scroll_end(now, queue);
         let TrackpadSample::Scroll {
             position,
             began,
@@ -553,15 +552,16 @@ mod tests {
             scroll_sample(false, false, false, true, false),
             window,
             100.0,
-            now + Duration::from_millis(10),
+            // A slow frame may drain momentum after the nominal deadline.
+            now + Duration::from_millis(60),
             &mut queue,
         );
-        frame.expire_scroll_end(now + SCROLL_MOMENTUM_GRACE, &mut queue);
+        frame.expire_scroll_end(now + Duration::from_millis(60), &mut queue);
         frame.push_scroll(
             scroll_sample(false, false, false, true, true),
             window,
             100.0,
-            now + Duration::from_millis(60),
+            now + Duration::from_millis(70),
             &mut queue,
         );
         assert_eq!(
