@@ -14,6 +14,8 @@ mod macos {
         show_grid: bool,
     }
 
+    struct MainThreadToken;
+
     fn command(id: &str, title: &str, key: Option<char>) -> Entry {
         let mut command = NativeMenuCommand::new(id, title);
         if let Some(key) = key {
@@ -72,7 +74,11 @@ mod macos {
         }
     }
 
-    fn update(mut demo: ResMut<Demo>, mut exits: MessageWriter<AppExit>) {
+    fn update(
+        _main_thread: NonSend<MainThreadToken>,
+        mut demo: ResMut<Demo>,
+        mut exits: MessageWriter<AppExit>,
+    ) {
         for id in native_menu::take_commands() {
             match id.as_str() {
                 "new" => demo.edited = true,
@@ -99,6 +105,7 @@ mod macos {
                 }),
                 ..Default::default()
             }))
+            .insert_non_send(MainThreadToken)
             .init_resource::<Demo>()
             .add_systems(Update, update)
             .run();
