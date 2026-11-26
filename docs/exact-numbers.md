@@ -6,4 +6,4 @@ Typed editing accepts checked integer arithmetic with parentheses, unary signs, 
 
 The legacy `NumericField::new` constructor accepts integer values and bounds only within the exact `f64` range. Unsigned fields reject negative input, and integer steps must be positive, whole, and exactly representable. Use the typed constructors and `set_typed_bounds` for values outside that range.
 
-The [dark](visuals/examples/exact-numbers-dark.png) and [light](visuals/examples/exact-numbers-light.png) captures come from `cargo run -p bbui --example exact_numbers`. Run `cargo bench -p bbui --bench performance --locked -- numeric/exact` for the parser and typed-update measurements.
+The [dark](visuals/examples/exact-numbers-dark.png) and [light](visuals/examples/exact-numbers-light.png) captures come from `cargo run -p bbui --example exact_numbers`. Run `cargo bench -p bbui --bench performance --locked -- numeric/` for the parser and step measurements.
