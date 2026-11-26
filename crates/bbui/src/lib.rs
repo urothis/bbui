@@ -9,6 +9,7 @@ mod clipboard_bridge;
 mod cursor_bridge;
 mod input_bridge;
 pub mod modal;
+pub mod status;
 mod window_layout;
 pub mod workspace;
 mod world_input;
@@ -121,6 +122,10 @@ pub mod prelude {
     };
     pub use crate::modal::{
         ModalAction, ModalDialog, ModalDialogs, ModalDismissal, ModalError, ModalEvent,
+    };
+    pub use crate::status::{
+        StatusAction, StatusBar, StatusBarAppearance, StatusBarSlots, StatusItem, StatusProgress,
+        StatusTone, status_action,
     };
     pub use crate::workspace::{Workspace, WorkspaceAppearance, WorkspacePlugin};
     pub use bbui_core::{

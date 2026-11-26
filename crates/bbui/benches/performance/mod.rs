@@ -5,6 +5,7 @@ pub mod integration;
 pub mod layout;
 pub mod modal;
 pub mod render;
+pub mod status;
 pub mod text_media;
 pub mod widgets;
 pub mod workspace;

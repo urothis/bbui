@@ -188,6 +188,9 @@ pub(super) fn spawn_node(
     if let Some(name) = &node.accessible_name {
         entity.insert(UiAccessibleName(name.clone()));
     }
+    if let Some(region) = node.live_region {
+        entity.insert(region);
+    }
     if let Some(selected) = node.tab_selected {
         entity.insert(UiTab { selected });
     }

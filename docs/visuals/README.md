@@ -17,6 +17,7 @@ These are captures from runnable Bevy examples and BBUI's offscreen GPU tests. O
 | Modal dialog | [Dark](examples/modal-dialog-dark.png) · [Light](examples/modal-dialog-light.png) |
 | Command palette | [Dark](examples/command-palette-dark.png) · [Light](examples/command-palette-light.png) · [Hover](examples/command-palette-hover-dark.png) · [Focus](examples/command-palette-focus-dark.png) |
 | Window chrome | [Desktop dark](examples/chrome-desktop-dark.png) · [desktop light](examples/chrome-desktop-light.png) · [overlay sheet](examples/chrome-mobile-dark.png) · [sheet closed](examples/chrome-mobile-closed-dark.png) · [safe insets](examples/chrome-mobile-insets-dark.png) · [inset sheet](examples/chrome-mobile-insets-open-dark.png) · [long labels](examples/chrome-mobile-long-dark.png) · [compact light](examples/chrome-mobile-light.png) · [window controls](examples/chrome-controls-dark.png) · [control hover](examples/chrome-desktop-hover-dark.png) · [navigation hover](examples/chrome-mobile-hover-dark.png) |
+| Job status bar | [Dark](examples/status-bar-dark.png) · [Light](examples/status-bar-light.png) · [compact](examples/status-bar-compact-dark.png) · [cancel hover](examples/status-bar-hover-dark.png) |
 | Visual effects | [Gradient border and edge glow](examples/visual-effects-dark.png) · [rotated border](examples/visual-effects-rotated.png) · [eight variants](examples/visual-effect-variants.png) |
 | Progress bars | [Six-style gallery with corner options](examples/progress-gallery.png) |
 

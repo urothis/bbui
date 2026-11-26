@@ -224,6 +224,19 @@ pub(super) fn reconcile_node(
                 }
             }
         }
+        if old_props
+            .as_ref()
+            .is_none_or(|old| old.live_region != props.live_region)
+        {
+            match props.live_region {
+                Some(region) => {
+                    world.entity_mut(entity).insert(region);
+                }
+                None => {
+                    world.entity_mut(entity).remove::<UiLiveRegion>();
+                }
+            }
+        }
         if old_props.as_ref().is_none_or(|old| old.role != props.role) {
             match &props.role {
                 Some(role) => {
