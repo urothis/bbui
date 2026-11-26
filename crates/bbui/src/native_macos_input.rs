@@ -16,13 +16,17 @@ use crate::world_input::WorldPointerState;
 
 #[derive(Resource, Default)]
 pub(crate) struct MacInputFrame {
-    pub(crate) available: bool,
+    pub(crate) native_scroll_window: Option<Entity>,
     pub(crate) recovered_drag_window: Option<Entity>,
     recovered_release_window: Option<Entity>,
     recovered_releases: [bool; 3],
 }
 
 impl MacInputFrame {
+    pub(crate) fn suppresses_pixel_wheel(&self, window: Entity) -> bool {
+        self.native_scroll_window == Some(window)
+    }
+
     pub(crate) fn recovered_release(&self, window: Entity, button: MouseButton) -> bool {
         self.recovered_release_window == Some(window)
             && button_index(button).is_some_and(|index| self.recovered_releases[index])
@@ -189,7 +193,7 @@ pub(crate) fn bridge_native_macos_input(
     frame.recovered_release_window = None;
     frame.recovered_releases = [false; 3];
     let Ok((window, data, raw_handle)) = primary.single() else {
-        frame.available = false;
+        frame.native_scroll_window = None;
         return;
     };
     let primary_window_number = TrackpadMonitor::window_number(raw_handle.get_window_handle());
@@ -239,7 +243,8 @@ pub(crate) fn bridge_native_macos_input(
         }
     }
     let samples = monitor.drain();
-    frame.available = monitor.available() && primary_window_number.is_some();
+    frame.native_scroll_window =
+        (monitor.available() && primary_window_number.is_some()).then_some(window);
     let height = data.resolution.height();
     let mut observed_up = [false; 3];
     let mut raw_drag_position = None;
@@ -361,6 +366,18 @@ pub(crate) fn publish_recovered_mouse_releases(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_scroll_deduplicates_only_its_source_window() {
+        let primary = Entity::from_bits(1);
+        let secondary = Entity::from_bits(2);
+        let frame = MacInputFrame {
+            native_scroll_window: Some(primary),
+            ..Default::default()
+        };
+        assert!(frame.suppresses_pixel_wheel(primary));
+        assert!(!frame.suppresses_pixel_wheel(secondary));
+    }
 
     #[test]
     fn native_magnify_keeps_position_and_incremental_scale() {

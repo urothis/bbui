@@ -7,6 +7,7 @@ pub(super) struct UiTrackpadState(HashMap<(Entity, UiTrackpadKind), UiTrackpadOw
 #[derive(Clone, Copy)]
 enum UiTrackpadOwner {
     Surface(Entity),
+    Wheel(Entity),
     Elsewhere,
 }
 
@@ -46,14 +47,23 @@ pub(super) fn route_trackpad(world: &mut World, sample: UiTrackpadGesture) {
     let fresh = phase == UiGesturePhase::Started || (phased && prior.is_none());
     let initial_hit = (!phased || fresh).then(|| hit_test(world, window, position));
     let owner = if !phased || fresh {
-        surface_ancestor(world, window, initial_hit.flatten())
-            .map_or(UiTrackpadOwner::Elsewhere, UiTrackpadOwner::Surface)
+        if let Some(surface) = surface_ancestor(world, window, initial_hit.flatten()) {
+            UiTrackpadOwner::Surface(surface)
+        } else if kind == UiTrackpadKind::Scroll {
+            initial_hit
+                .flatten()
+                .or_else(|| focused(world, window))
+                .filter(|entity| is_interactable_in_window(world, *entity, window))
+                .map_or(UiTrackpadOwner::Elsewhere, UiTrackpadOwner::Wheel)
+        } else {
+            UiTrackpadOwner::Elsewhere
+        }
     } else {
         prior.unwrap_or(UiTrackpadOwner::Elsewhere)
     };
     let target = match owner {
         UiTrackpadOwner::Surface(target) => Some(target),
-        UiTrackpadOwner::Elsewhere => None,
+        UiTrackpadOwner::Wheel(_) | UiTrackpadOwner::Elsewhere => None,
     };
 
     if fresh
@@ -82,26 +92,23 @@ pub(super) fn route_trackpad(world: &mut World, sample: UiTrackpadGesture) {
     }
     let Some(target) = target else {
         // Controls without gesture surfaces still receive ordinary pixel scrolling.
-        if kind == UiTrackpadKind::Scroll && !ending && delta != [0.0, 0.0] {
-            let hit = initial_hit.unwrap_or_else(|| hit_test(world, window, position));
-            if !phased || surface_ancestor(world, window, hit).is_none() {
-                let wheel_target = hit.or_else(|| focused(world, window));
-                if let Some(wheel_target) =
-                    wheel_target.filter(|entity| is_interactable_in_window(world, *entity, window))
-                {
-                    emit(
-                        world,
-                        UiRoutedEvent::Wheel {
-                            window,
-                            target: wheel_target,
-                            position,
-                            delta,
-                            unit: UiWheelUnit::Pixels,
-                            modifiers: UiModifiers::default(),
-                        },
-                    );
-                }
-            }
+        if kind == UiTrackpadKind::Scroll
+            && !ending
+            && delta != [0.0, 0.0]
+            && let UiTrackpadOwner::Wheel(wheel_target) = owner
+            && is_interactable_in_window(world, wheel_target, window)
+        {
+            emit(
+                world,
+                UiRoutedEvent::Wheel {
+                    window,
+                    target: wheel_target,
+                    position,
+                    delta,
+                    unit: UiWheelUnit::Pixels,
+                    modifiers: UiModifiers::default(),
+                },
+            );
         }
         return;
     };
@@ -169,26 +176,27 @@ pub(super) fn cancel_trackpad_window(world: &mut World, window: Entity) {
         .resource::<UiTrackpadState>()
         .0
         .iter()
-        .filter_map(|(&(owner_window, kind), &owner)| match owner {
-            UiTrackpadOwner::Surface(target) if owner_window == window => Some((kind, target)),
-            _ => None,
+        .filter_map(|(&(owner_window, kind), &owner)| {
+            (owner_window == window).then_some((kind, owner))
         })
         .collect();
-    for (kind, target) in owners {
+    for (kind, owner) in owners {
         world
             .resource_mut::<UiTrackpadState>()
             .0
             .remove(&(window, kind));
-        emit(
-            world,
-            UiRoutedEvent::SurfaceGesture {
-                window,
-                target,
-                phase: UiGesturePhase::Cancelled,
-                center: [0.0, 0.0],
-                delta: [0.0, 0.0],
-                scale: 1.0,
-            },
-        );
+        if let UiTrackpadOwner::Surface(target) = owner {
+            emit(
+                world,
+                UiRoutedEvent::SurfaceGesture {
+                    window,
+                    target,
+                    phase: UiGesturePhase::Cancelled,
+                    center: [0.0, 0.0],
+                    delta: [0.0, 0.0],
+                    scale: 1.0,
+                },
+            );
+        }
     }
 }

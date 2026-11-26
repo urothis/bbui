@@ -230,7 +230,7 @@ pub fn bridge_bevy_input(
             && messages
                 .trackpad
                 .as_ref()
-                .is_some_and(|trackpad| trackpad.available)
+                .is_some_and(|trackpad| trackpad.suppresses_pixel_wheel(event.window))
         {
             // AppKit supplied the positioned, phased form of this wheel sample.
             continue;
