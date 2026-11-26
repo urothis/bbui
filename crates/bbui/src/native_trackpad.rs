@@ -10,6 +10,9 @@ pub(crate) struct MacTrackpadFrame {
     pub(crate) available: bool,
 }
 
+type NativePrimaryWindow<'w, 's> =
+    Query<'w, 's, (Entity, &'static Window), (With<PrimaryWindow>, With<RawHandleWrapper>)>;
+
 fn logical_position(position: [f64; 2], window_height: f32) -> Option<[f32; 2]> {
     let [x, y] = position;
     (x.is_finite() && y.is_finite() && window_height.is_finite())
@@ -93,7 +96,7 @@ fn convert(sample: TrackpadSample, window: Entity, height: f32) -> Option<UiInpu
 }
 
 pub(crate) fn bridge_native_trackpad(
-    primary: Query<(Entity, &Window), (With<PrimaryWindow>, With<RawHandleWrapper>)>,
+    primary: NativePrimaryWindow,
     mut monitor: NonSendMut<TrackpadMonitor>,
     mut frame: ResMut<MacTrackpadFrame>,
     mut queue: ResMut<UiInputQueue>,
