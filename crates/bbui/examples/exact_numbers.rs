@@ -20,13 +20,17 @@ fn install_ui(world: &mut World) {
         return;
     };
     let mut slider_field = NumericField::unsigned(u64::MAX - 25);
-    slider_field
-        .set_typed_bounds(
-            Some(NumericValue::Unsigned(u64::MAX - 100)),
-            Some(NumericValue::Unsigned(u64::MAX)),
-        )
-        .expect("valid full-width slider bounds");
-    let slider = Slider::from_field(slider_field).expect("bounded exact slider");
+    let Ok(_) = slider_field.set_typed_bounds(
+        Some(NumericValue::Unsigned(u64::MAX - 100)),
+        Some(NumericValue::Unsigned(u64::MAX)),
+    ) else {
+        eprintln!("invalid full-width slider bounds");
+        return;
+    };
+    let Ok(slider) = Slider::from_field(slider_field) else {
+        eprintln!("failed to construct bounded exact slider");
+        return;
+    };
     let Ok(root) = WidgetTree::new(
         WidgetNode::column([
             WidgetNode::label("EXACT NUMERIC FIELDS").with_height(UiLength::Px(36.0)),
