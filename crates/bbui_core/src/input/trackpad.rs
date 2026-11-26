@@ -10,8 +10,7 @@ enum UiTrackpadOwner {
     Elsewhere,
 }
 
-fn surface_at(world: &mut World, window: Entity, position: [f32; 2]) -> Option<Entity> {
-    let mut current = hit_test(world, window, position);
+fn surface_ancestor(world: &World, window: Entity, mut current: Option<Entity>) -> Option<Entity> {
     let mut visited = std::collections::HashSet::new();
     while let Some(entity) = current {
         if !visited.insert(entity) {
@@ -45,8 +44,9 @@ pub(super) fn route_trackpad(world: &mut World, sample: UiTrackpadGesture) {
         return;
     }
     let fresh = phase == UiGesturePhase::Started || (phased && prior.is_none());
+    let initial_hit = (!phased || fresh).then(|| hit_test(world, window, position));
     let owner = if !phased || fresh {
-        surface_at(world, window, position)
+        surface_ancestor(world, window, initial_hit.flatten())
             .map_or(UiTrackpadOwner::Elsewhere, UiTrackpadOwner::Surface)
     } else {
         prior.unwrap_or(UiTrackpadOwner::Elsewhere)
@@ -82,26 +82,25 @@ pub(super) fn route_trackpad(world: &mut World, sample: UiTrackpadGesture) {
     }
     let Some(target) = target else {
         // Controls without gesture surfaces still receive ordinary pixel scrolling.
-        if kind == UiTrackpadKind::Scroll
-            && !ending
-            && delta != [0.0, 0.0]
-            && (!phased || surface_at(world, window, position).is_none())
-        {
-            let wheel_target = hit_test(world, window, position).or_else(|| focused(world, window));
-            if let Some(wheel_target) =
-                wheel_target.filter(|entity| is_interactable_in_window(world, *entity, window))
-            {
-                emit(
-                    world,
-                    UiRoutedEvent::Wheel {
-                        window,
-                        target: wheel_target,
-                        position,
-                        delta,
-                        unit: UiWheelUnit::Pixels,
-                        modifiers: UiModifiers::default(),
-                    },
-                );
+        if kind == UiTrackpadKind::Scroll && !ending && delta != [0.0, 0.0] {
+            let hit = initial_hit.unwrap_or_else(|| hit_test(world, window, position));
+            if !phased || surface_ancestor(world, window, hit).is_none() {
+                let wheel_target = hit.or_else(|| focused(world, window));
+                if let Some(wheel_target) =
+                    wheel_target.filter(|entity| is_interactable_in_window(world, *entity, window))
+                {
+                    emit(
+                        world,
+                        UiRoutedEvent::Wheel {
+                            window,
+                            target: wheel_target,
+                            position,
+                            delta,
+                            unit: UiWheelUnit::Pixels,
+                            modifiers: UiModifiers::default(),
+                        },
+                    );
+                }
             }
         }
         return;
