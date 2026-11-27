@@ -57,15 +57,21 @@ fn typed_numeric_expression_uses_field_variables_and_preserves_invalid_edits() {
             },
             NumericField::float(3.0).unwrap(),
             NumericExpressionVariables(HashMap::from([
-                ("c".to_owned(), 0.0),
-                ("y".to_owned(), 7.0),
-                ("x".to_owned(), 999.0),
+                ("c".to_owned(), bbui_widgets::NumericValue::Float(0.0)),
+                ("y".to_owned(), bbui_widgets::NumericValue::Float(7.0)),
+                ("x".to_owned(), bbui_widgets::NumericValue::Float(999.0)),
             ])),
         ))
         .id();
 
     edit(&mut app, window, field, "x if c else y");
-    assert_eq!(app.world().get::<NumericField>(field).unwrap().value, 7.0);
+    assert_eq!(
+        app.world()
+            .get::<NumericField>(field)
+            .unwrap()
+            .value_projection(),
+        7.0
+    );
     assert!(
         app.world()
             .resource::<WidgetEventQueue>()
@@ -79,13 +85,16 @@ fn typed_numeric_expression_uses_field_variables_and_preserves_invalid_edits() {
 
     edit(&mut app, window, field, "2*pi");
     assert_eq!(
-        app.world().get::<NumericField>(field).unwrap().value,
+        app.world()
+            .get::<NumericField>(field)
+            .unwrap()
+            .value_projection(),
         2.0 * std::f64::consts::PI
     );
 
     edit(&mut app, window, field, "1/0");
     let current = app.world().get::<NumericField>(field).unwrap();
-    assert_eq!(current.value, 2.0 * std::f64::consts::PI);
+    assert_eq!(current.value_projection(), 2.0 * std::f64::consts::PI);
     assert_eq!(current.editing.as_deref(), Some("1/0"));
     assert_eq!(
         current.expression_error.as_ref().map(ToString::to_string),
@@ -148,7 +157,7 @@ fn typed_numeric_expression_uses_field_variables_and_preserves_invalid_edits() {
     ];
     app.update();
     let current = app.world().get::<NumericField>(field).unwrap();
-    assert_eq!(current.value, 0.5);
+    assert_eq!(current.value_projection(), 0.5);
     assert_eq!(current.expression_error, None);
     assert_eq!(app.world().resource::<bbui_core::UiHistory>().undo_len(), 3);
 
@@ -159,7 +168,7 @@ fn typed_numeric_expression_uses_field_variables_and_preserves_invalid_edits() {
     ] {
         edit(&mut app, window, field, source);
         let current = app.world().get::<NumericField>(field).unwrap();
-        assert_eq!(current.value, 0.5);
+        assert_eq!(current.value_projection(), 0.5);
         assert_eq!(
             current.expression_error.as_ref().map(ToString::to_string),
             Some(expected.to_owned())

@@ -309,7 +309,13 @@ fn painted_checkboxes_and_numeric_scrubs_each_restore_as_one_gesture() {
     world.resource_mut::<UiRoutedEvents>().events =
         vec![key_event(window, numeric, UiKeyCode::Z, false)];
     process_widget_undo_shortcuts(&mut world);
-    assert_eq!(world.get::<NumericField>(numeric).unwrap().value, 1.0);
+    assert_eq!(
+        world
+            .get::<NumericField>(numeric)
+            .unwrap()
+            .value_projection(),
+        1.0
+    );
 }
 
 #[test]
@@ -332,14 +338,32 @@ fn numeric_group_scrub_restores_all_fields_in_one_transaction() {
     world.resource_mut::<UiRoutedEvents>().events =
         vec![key_event(window, first, UiKeyCode::Z, false)];
     process_widget_undo_shortcuts(&mut world);
-    assert_eq!(world.get::<NumericField>(first).unwrap().value, 1.0);
-    assert_eq!(world.get::<NumericField>(second).unwrap().value, 10.0);
+    assert_eq!(
+        world.get::<NumericField>(first).unwrap().value_projection(),
+        1.0
+    );
+    assert_eq!(
+        world
+            .get::<NumericField>(second)
+            .unwrap()
+            .value_projection(),
+        10.0
+    );
 
     world.resource_mut::<UiRoutedEvents>().events =
         vec![key_event(window, first, UiKeyCode::Z, true)];
     process_widget_undo_shortcuts(&mut world);
-    assert_eq!(world.get::<NumericField>(first).unwrap().value, 4.0);
-    assert_eq!(world.get::<NumericField>(second).unwrap().value, 12.0);
+    assert_eq!(
+        world.get::<NumericField>(first).unwrap().value_projection(),
+        4.0
+    );
+    assert_eq!(
+        world
+            .get::<NumericField>(second)
+            .unwrap()
+            .value_projection(),
+        12.0
+    );
 }
 
 #[test]
@@ -361,11 +385,11 @@ fn slider_drag_undo_redo_restores_value_even_after_becoming_read_only() {
     world.resource_mut::<UiRoutedEvents>().events =
         vec![key_event(window, slider, UiKeyCode::Z, false)];
     process_widget_undo_shortcuts(&mut world);
-    assert_eq!(world.get::<Slider>(slider).unwrap().value, 4.0);
+    assert_eq!(world.get::<Slider>(slider).unwrap().value_projection(), 4.0);
     world.resource_mut::<UiRoutedEvents>().events =
         vec![key_event(window, slider, UiKeyCode::Z, true)];
     process_widget_undo_shortcuts(&mut world);
-    assert_eq!(world.get::<Slider>(slider).unwrap().value, 7.0);
+    assert_eq!(world.get::<Slider>(slider).unwrap().value_projection(), 7.0);
 }
 
 #[test]

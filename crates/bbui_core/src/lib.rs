@@ -22,6 +22,24 @@ pub use input::{
 };
 pub use invalidation::{UiDirty, UiDirtyBatch, UiDirtyDomain, ui_components_changed_since};
 
+/// Lossless values shared by numeric controls and expression variables.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum NumericValue {
+    Integer(i64),
+    Unsigned(u64),
+    Float(f64),
+}
+
+impl NumericValue {
+    pub fn as_f64(self) -> f64 {
+        match self {
+            Self::Integer(value) => value as f64,
+            Self::Unsigned(value) => value as f64,
+            Self::Float(value) => value,
+        }
+    }
+}
+
 /// Ordered phases for BBUI's frame work. Plugins should put their systems in
 /// these sets to make layout, input, widget updates, and rendering agree.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]

@@ -4,10 +4,28 @@ const NUMERIC_SCRUB_LOCK_DISTANCE: f64 = 3.0;
 
 pub(super) fn numeric_target(field: &NumericField) -> NumericTarget {
     NumericTarget {
-        start: field.value,
-        min: field.min.unwrap_or(-f64::MAX),
-        max: field.max.unwrap_or(f64::MAX),
-        step: field.step,
+        start: field.value_projection(),
+        min: field.min_projection().unwrap_or(-f64::MAX),
+        max: field.max_projection().unwrap_or(f64::MAX),
+        step: field.step_projection(),
+    }
+}
+
+fn exact_scrub_value(start: NumericValue, step: u64, motion: f64) -> NumericValue {
+    let steps = motion.round() as i128;
+    let delta = steps.saturating_mul(i128::from(step));
+    match start {
+        NumericValue::Integer(value) => NumericValue::Integer(
+            i128::from(value)
+                .saturating_add(delta)
+                .clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64,
+        ),
+        NumericValue::Unsigned(value) => NumericValue::Unsigned(
+            i128::from(value)
+                .saturating_add(delta)
+                .clamp(0, i128::from(u64::MAX)) as u64,
+        ),
+        NumericValue::Float(value) => NumericValue::Float(value),
     }
 }
 
@@ -49,7 +67,7 @@ pub(super) fn begin_slider_drag(
     if !slider.enabled || slider.read_only {
         return;
     }
-    let (Some(min), Some(max)) = (slider.min, slider.max) else {
+    let (Some(min), Some(max)) = (slider.min_projection(), slider.max_projection()) else {
         return;
     };
     if !min.is_finite() || !max.is_finite() || !(max - min).is_finite() {
@@ -69,7 +87,8 @@ pub(super) fn begin_slider_drag(
     let base_theme = world.get_resource::<Theme>().cloned().unwrap_or_default();
     let theme = styled_theme(world, target, &base_theme);
     let (track_left, track_right) = slider_track_x(rect, &theme);
-    let before = slider.value;
+    let before = slider.value_projection();
+    let before_exact = slider.typed_value();
     if let Some(mut slider) = world.get_mut::<Slider>(target) {
         let _ =
             slider.set_normalized_value(slider_value_at_x(position[0], track_left, track_right));
@@ -82,6 +101,7 @@ pub(super) fn begin_slider_drag(
             SliderDrag {
                 target,
                 before,
+                before_exact,
                 min,
                 max,
                 track_left,
@@ -102,8 +122,8 @@ pub(super) fn update_slider_drag(world: &mut World, window: Entity, x: f32) {
     if let Some(mut slider) = world.get_mut::<Slider>(drag.target)
         && slider.enabled
         && !slider.read_only
-        && slider.min == Some(drag.min)
-        && slider.max == Some(drag.max)
+        && slider.min_projection() == Some(drag.min)
+        && slider.max_projection() == Some(drag.max)
     {
         let _ =
             slider.set_normalized_value(slider_value_at_x(x, drag.track_left, drag.track_right));
@@ -120,20 +140,29 @@ pub(super) fn finish_slider_drag(
         return;
     };
     if cancelled {
-        let _ = slider.restore_value(drag.before);
+        let _ = slider.field.restore_typed_value(drag.before_exact);
         emitted.push(WidgetEvent::NumericCancelled {
             target: drag.target,
             restored: vec![drag.before],
         });
         return;
     }
-    let after = slider.value;
-    if drag.before != after {
-        emitted.push(WidgetEvent::NumericCommitted {
-            target: drag.target,
-            before: vec![drag.before],
-            after: vec![after],
-        });
+    let after = slider.value_projection();
+    let after_exact = slider.typed_value();
+    if drag.before_exact != after_exact {
+        if slider.kind() == NumericFieldKind::Float {
+            emitted.push(WidgetEvent::NumericCommitted {
+                target: drag.target,
+                before: vec![drag.before],
+                after: vec![after],
+            });
+        } else {
+            emitted.push(WidgetEvent::ExactNumericCommitted {
+                target: drag.target,
+                before: drag.before_exact,
+                after: after_exact,
+            });
+        }
     }
 }
 
@@ -179,14 +208,16 @@ pub(super) fn begin_numeric_scrub(
                 entity: target,
                 targets: vec![target],
                 target_specs: vec![target_data],
-                starts: vec![field.value],
-                last_values: vec![field.value],
+                starts: vec![field.value_projection()],
+                exact_starts: vec![field.typed_value()],
+                exact_motion: 0.0,
+                last_values: vec![field.value_projection()],
                 gesture,
                 phase: NumericScrubPhase::Selecting,
                 last_position: position,
                 pending_x: 0.0,
                 pending_moves: Vec::new(),
-                kind: field.kind,
+                kind: field.kind(),
                 unit: field.unit,
             },
         );
@@ -208,7 +239,7 @@ pub(super) fn numeric_targets_crossed(
     to: [f32; 2],
     kind: NumericFieldKind,
     unit: Option<&str>,
-) -> Vec<(Entity, NumericTarget)> {
+) -> Vec<(Entity, NumericTarget, NumericValue)> {
     let delta_y = to[1] - from[1];
     if delta_y.abs() < f32::EPSILON {
         return Vec::new();
@@ -219,7 +250,7 @@ pub(super) fn numeric_targets_crossed(
     let mut crossed: Vec<_> = query
         .iter(world)
         .filter_map(|(entity, field, hit)| {
-            if field.kind != kind
+            if field.kind() != kind
                 || field.unit.as_deref() != unit
                 || !field.enabled
                 || field.read_only
@@ -242,7 +273,13 @@ pub(super) fn numeric_targets_crossed(
             {
                 return None;
             }
-            Some((t, hit.z_index, entity, numeric_target(field)))
+            Some((
+                t,
+                hit.z_index,
+                entity,
+                numeric_target(field),
+                field.typed_value(),
+            ))
         })
         .collect();
     crossed.sort_by(|a, b| {
@@ -252,7 +289,7 @@ pub(super) fn numeric_targets_crossed(
     });
     crossed
         .into_iter()
-        .map(|(_, _, entity, target)| (entity, target))
+        .map(|(_, _, entity, target, exact)| (entity, target, exact))
         .collect()
 }
 
@@ -300,11 +337,12 @@ pub(super) fn update_numeric_scrub(
             return;
         };
         if scrub.phase == NumericScrubPhase::Selecting {
-            for (entity, target) in additions {
+            for (entity, target, exact) in additions {
                 if !scrub.targets.contains(&entity) {
                     scrub.targets.push(entity);
                     scrub.target_specs.push(target);
                     scrub.starts.push(target.start);
+                    scrub.exact_starts.push(exact);
                     scrub.last_values.push(target.start);
                     if let Ok(gesture) = NumericGesture::begin(scrub.target_specs.clone()) {
                         scrub.gesture = gesture;
@@ -312,12 +350,19 @@ pub(super) fn update_numeric_scrub(
                         scrub.targets.pop();
                         scrub.target_specs.pop();
                         scrub.starts.pop();
+                        scrub.exact_starts.pop();
                         scrub.last_values.pop();
                     }
                 }
             }
         }
         scrub.last_position = position;
+        if scrub.kind != NumericFieldKind::Float {
+            let increment = f64::from(delta_x) * if modifiers.precision { 0.1 } else { 1.0 };
+            if increment.is_finite() {
+                scrub.exact_motion += increment;
+            }
+        }
         if scrub.phase == NumericScrubPhase::Selecting {
             let dx = f64::from(delta_x);
             scrub.pending_x += dx;
@@ -354,14 +399,28 @@ pub(super) fn update_numeric_scrub(
     let Some(updates) = updates else {
         return;
     };
+    let exact = world
+        .resource::<WidgetInteractionState>()
+        .numeric_scrubs
+        .get(&window)
+        .map(|scrub| (scrub.exact_starts.clone(), scrub.exact_motion));
     let actual_values: Vec<_> = updates
         .into_iter()
-        .map(|(entity, value)| {
+        .enumerate()
+        .map(|(index, (entity, value))| {
             let actual = if let Some(mut field) = world.get_mut::<NumericField>(entity) {
                 if field.enabled && !field.read_only {
-                    let _ = field.set_value(value);
+                    if field.kind() == NumericFieldKind::Float {
+                        let _ = field.set_value(value);
+                    } else if let Some((starts, motion)) = &exact
+                        && let Some(start) = starts.get(index)
+                    {
+                        let next =
+                            exact_scrub_value(*start, field.typed_step().unwrap_or(1), *motion);
+                        let _ = field.set_typed_value(next);
+                    }
                 }
-                field.value
+                field.value_projection()
             } else {
                 value
             };
@@ -394,14 +453,19 @@ pub(super) fn finish_numeric_scrub(
             restore_position: true,
         });
     if cancelled {
-        for (entity, start) in scrub
+        for ((entity, start), exact_start) in scrub
             .targets
             .iter()
             .copied()
             .zip(scrub.starts.iter().copied())
+            .zip(scrub.exact_starts.iter().copied())
         {
             if let Some(mut field) = world.get_mut::<NumericField>(entity) {
-                field.value = start;
+                if field.kind() == NumericFieldKind::Float {
+                    let _ = field.restore_value(start);
+                } else {
+                    let _ = field.restore_typed_value(exact_start);
+                }
             }
         }
         emitted.push(WidgetEvent::NumericCancelled {
@@ -410,13 +474,35 @@ pub(super) fn finish_numeric_scrub(
         });
         return;
     }
+    if scrub.kind != NumericFieldKind::Float {
+        let changes: Vec<_> = scrub
+            .targets
+            .iter()
+            .copied()
+            .zip(scrub.exact_starts.iter().copied())
+            .filter_map(|(entity, before)| {
+                let after = world.get::<NumericField>(entity)?.typed_value();
+                (before != after).then_some((entity, before, after))
+            })
+            .collect();
+        match changes.as_slice() {
+            [] => {}
+            [(target, before, after)] => emitted.push(WidgetEvent::ExactNumericCommitted {
+                target: *target,
+                before: *before,
+                after: *after,
+            }),
+            _ => emitted.push(WidgetEvent::ExactNumericGroupCommitted { changes }),
+        }
+        return;
+    }
     let changes: Vec<_> = scrub
         .targets
         .iter()
         .copied()
         .zip(scrub.starts.iter().copied())
         .filter_map(|(entity, before)| {
-            let after = world.get::<NumericField>(entity)?.value;
+            let after = world.get::<NumericField>(entity)?.value_projection();
             (before != after).then_some((entity, before, after))
         })
         .collect();

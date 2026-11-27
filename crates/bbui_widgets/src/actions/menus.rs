@@ -329,17 +329,15 @@ pub(super) fn finish_numeric_edit_on_focus_departure(
         field.cancel_edit();
         return;
     }
-    let before = field.value;
+    let before = field.typed_value();
     match field.commit_edit(&variables) {
         Ok(true) => emitted.push(WidgetEvent::ValueChanged {
             target,
-            before: WidgetValue::Number(before),
-            after: WidgetValue::Number(field.value),
+            before: WidgetValue::from(before),
+            after: WidgetValue::from(field.typed_value()),
         }),
         Ok(false) => {}
         Err(error) => {
-            field.editing = None;
-            field.replace_on_input = false;
             field.expression_error = Some(error.clone());
             emitted.push(WidgetEvent::NumericExpressionError {
                 target,

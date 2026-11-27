@@ -63,8 +63,8 @@ fn setup(world: &mut World) {
     world
         .entity_mut(field)
         .insert(NumericExpressionVariables(HashMap::from([
-            ("c".to_owned(), 0.0),
-            ("y".to_owned(), 7.0),
+            ("c".to_owned(), bbui::widgets::NumericValue::Float(0.0)),
+            ("y".to_owned(), bbui::widgets::NumericValue::Float(7.0)),
         ])));
 }
 

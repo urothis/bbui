@@ -1,5 +1,6 @@
 //! Numeric expressions for editable values. Evaluation never mutates a control.
 
+use bbui_core::NumericValue;
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -33,9 +34,305 @@ impl std::fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
+/// Evaluate integer arithmetic without passing any value through floating
+/// point. The `x` variable is the control's exact current value.
+fn evaluate_exact_basic(source: &str, x: i128) -> Result<i128, Error> {
+    struct Parser<'a> {
+        bytes: &'a [u8],
+        at: usize,
+        x: i128,
+        depth: u8,
+    }
+    impl Parser<'_> {
+        fn skip_space(&mut self) {
+            while self.bytes.get(self.at).is_some_and(u8::is_ascii_whitespace) {
+                self.at += 1;
+            }
+        }
+        fn eat(&mut self, token: u8) -> bool {
+            self.skip_space();
+            if self.bytes.get(self.at) == Some(&token) {
+                self.at += 1;
+                true
+            } else {
+                false
+            }
+        }
+        fn sum(&mut self) -> Result<i128, Error> {
+            let mut value = self.product()?;
+            loop {
+                if self.eat(b'+') {
+                    value = value.checked_add(self.product()?).ok_or(Error::Overflow)?;
+                } else if self.eat(b'-') {
+                    value = value.checked_sub(self.product()?).ok_or(Error::Overflow)?;
+                } else {
+                    return Ok(value);
+                }
+            }
+        }
+        fn product(&mut self) -> Result<i128, Error> {
+            let mut value = self.atom()?;
+            loop {
+                if self.eat(b'*') {
+                    value = value.checked_mul(self.atom()?).ok_or(Error::Overflow)?;
+                } else if self.eat(b'/') {
+                    let divisor = self.atom()?;
+                    value = rounded_div(value, divisor)?;
+                } else {
+                    return Ok(value);
+                }
+            }
+        }
+        fn atom(&mut self) -> Result<i128, Error> {
+            if self.eat(b'+') {
+                self.depth = self
+                    .depth
+                    .checked_add(1)
+                    .filter(|depth| *depth <= 32)
+                    .ok_or(Error::TooComplex)?;
+                let value = self.atom();
+                self.depth -= 1;
+                return value;
+            }
+            if self.eat(b'-') {
+                self.depth = self
+                    .depth
+                    .checked_add(1)
+                    .filter(|depth| *depth <= 32)
+                    .ok_or(Error::TooComplex)?;
+                let value = self
+                    .atom()
+                    .and_then(|value| value.checked_neg().ok_or(Error::Overflow));
+                self.depth -= 1;
+                return value;
+            }
+            if self.eat(b'(') {
+                self.depth = self
+                    .depth
+                    .checked_add(1)
+                    .filter(|depth| *depth <= 32)
+                    .ok_or(Error::TooComplex)?;
+                let value = self.sum()?;
+                self.depth -= 1;
+                if !self.eat(b')') {
+                    return Err(Error::UnexpectedToken);
+                }
+                return Ok(value);
+            }
+            self.skip_space();
+            let start = self.at;
+            if self.bytes.get(self.at).is_some_and(u8::is_ascii_digit) {
+                while self.bytes.get(self.at).is_some_and(u8::is_ascii_digit) {
+                    self.at += 1;
+                }
+                return std::str::from_utf8(&self.bytes[start..self.at])
+                    .map_err(|_| Error::InvalidNumber(start))?
+                    .parse::<i128>()
+                    .map_err(|_| Error::Overflow);
+            }
+            if self.bytes.get(self.at).is_some_and(u8::is_ascii_alphabetic) {
+                while self
+                    .bytes
+                    .get(self.at)
+                    .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
+                {
+                    self.at += 1;
+                }
+                let name = std::str::from_utf8(&self.bytes[start..self.at])
+                    .map_err(|_| Error::InvalidCharacter(start))?;
+                return if name == "x" {
+                    Ok(self.x)
+                } else {
+                    Err(Error::UnknownName(name.into()))
+                };
+            }
+            Err(Error::UnexpectedToken)
+        }
+    }
+    if source.len() > 4_096 {
+        return Err(Error::TooComplex);
+    }
+    let mut parser = Parser {
+        bytes: source.as_bytes(),
+        at: 0,
+        x,
+        depth: 0,
+    };
+    let value = parser.sum()?;
+    parser.skip_space();
+    if parser.at != parser.bytes.len() {
+        return Err(Error::InvalidCharacter(parser.at));
+    }
+    Ok(value)
+}
+
+fn rounded_div(value: i128, divisor: i128) -> Result<i128, Error> {
+    if divisor == 0 {
+        return Err(Error::DivisionByZero);
+    }
+    let quotient = value.checked_div(divisor).ok_or(Error::Overflow)?;
+    let remainder = value.checked_rem(divisor).ok_or(Error::Overflow)?;
+    if remainder == 0 {
+        return Ok(quotient);
+    }
+    let denominator = divisor.unsigned_abs();
+    let numerator = remainder.unsigned_abs();
+    if numerator < denominator.div_ceil(2) {
+        return Ok(quotient);
+    }
+    quotient
+        .checked_add(if (value < 0) == (divisor < 0) { 1 } else { -1 })
+        .ok_or(Error::Overflow)
+}
+
+pub fn evaluate_exact_integer(source: &str, x: i128) -> Result<i128, Error> {
+    evaluate_exact_basic(source, x)
+}
+
+/// Evaluate the shared expression language while retaining exact integer
+/// values. Named integer variables retain their full width; fractional
+/// expressions remain available for safe-width fields.
+pub fn evaluate_exact_integer_with_vars(
+    source: &str,
+    x: i128,
+    vars: &HashMap<String, NumericValue>,
+) -> Result<i128, Error> {
+    match evaluate_exact_basic(source, x) {
+        Ok(value) => Ok(value),
+        // The basic parser can evaluate a branch before discovering a trailing
+        // conditional. Let the full grammar decide which branch is live.
+        Err(_) => parse::<true>(source)?.evaluate_exact(x, vars),
+    }
+}
+
+pub fn evaluate_exact_i64(source: &str, x: i64) -> Result<i64, Error> {
+    i64::try_from(evaluate_exact_integer(source, i128::from(x))?).map_err(|_| Error::Overflow)
+}
+
+pub fn evaluate_exact_u64(source: &str, x: u64) -> Result<u64, Error> {
+    u64::try_from(evaluate_exact_integer(source, i128::from(x))?).map_err(|_| Error::Overflow)
+}
+
+pub fn evaluate_exact_i64_with_vars(
+    source: &str,
+    x: i64,
+    vars: &HashMap<String, NumericValue>,
+) -> Result<i64, Error> {
+    i64::try_from(evaluate_exact_integer_with_vars(
+        source,
+        i128::from(x),
+        vars,
+    )?)
+    .map_err(|_| Error::Overflow)
+}
+
+pub fn evaluate_exact_u64_with_vars(
+    source: &str,
+    x: u64,
+    vars: &HashMap<String, NumericValue>,
+) -> Result<u64, Error> {
+    u64::try_from(evaluate_exact_integer_with_vars(
+        source,
+        i128::from(x),
+        vars,
+    )?)
+    .map_err(|_| Error::Overflow)
+}
+
+#[cfg(test)]
+mod exact_integer_tests {
+    use super::*;
+
+    #[test]
+    fn full_width_values_and_checked_arithmetic() {
+        assert_eq!(evaluate_exact_i64("-9223372036854775808", 0), Ok(i64::MIN));
+        assert_eq!(evaluate_exact_i64("x + 1", i64::MAX - 1), Ok(i64::MAX));
+        assert_eq!(evaluate_exact_u64("18446744073709551615", 0), Ok(u64::MAX));
+        assert_eq!(evaluate_exact_u64("x + 1", u64::MAX), Err(Error::Overflow));
+        assert_eq!(evaluate_exact_i64("(2 + 3) * 4", 0), Ok(20));
+        assert_eq!(evaluate_exact_i64("1 / 0", 0), Err(Error::DivisionByZero));
+        assert_eq!(
+            evaluate_exact_i64(&"-".repeat(64), 0),
+            Err(Error::TooComplex)
+        );
+        assert_eq!(evaluate_exact_u64("-1", 0), Err(Error::Overflow));
+        assert!(evaluate_exact_i64("1.5", 0).is_err());
+    }
+
+    #[test]
+    fn exact_values_support_named_variables_and_shared_expression_forms() {
+        let vars = HashMap::from([
+            ("c".into(), NumericValue::Integer(1)),
+            ("y".into(), NumericValue::Unsigned(7)),
+        ]);
+        assert_eq!(
+            evaluate_exact_u64_with_vars("x if c else y", u64::MAX, &vars),
+            Ok(u64::MAX)
+        );
+        assert_eq!(
+            evaluate_exact_u64_with_vars("max(x, 18446744073709551614)", u64::MAX, &vars),
+            Ok(u64::MAX)
+        );
+        assert_eq!(
+            evaluate_exact_u64_with_vars("x - y*2", u64::MAX, &vars),
+            Ok(u64::MAX - 14)
+        );
+        assert_eq!(
+            evaluate_exact_u64_with_vars("x + 1.0", u64::MAX - 1, &vars),
+            Ok(u64::MAX)
+        );
+        assert_eq!(evaluate_exact_i64_with_vars("2**3 + 7%4", 0, &vars), Ok(11));
+        assert_eq!(
+            evaluate_exact_i64_with_vars("1 if 1 else 1/0", 0, &vars),
+            Ok(1)
+        );
+        assert_eq!(
+            evaluate_exact_i64_with_vars("1/0 if 0 else 2", 0, &vars),
+            Ok(2)
+        );
+        assert_eq!(
+            evaluate_exact_i64_with_vars(
+                "170141183460469231731687303715884105727+1 if 0 else 2",
+                0,
+                &vars
+            ),
+            Ok(2)
+        );
+        assert_eq!(
+            evaluate_exact_i64_with_vars("1/0 if 1 else 2", 0, &vars),
+            Err(Error::DivisionByZero)
+        );
+        assert_eq!(
+            evaluate_exact_i64_with_vars("9007199254740992.9 - 9007199254740992", 0, &vars),
+            Err(Error::Domain)
+        );
+        assert_eq!(
+            evaluate_exact_i64_with_vars("2 if 1 else 9007199254740992.9", 0, &vars),
+            Ok(2)
+        );
+        assert_eq!(evaluate_exact_i64_with_vars("1e2 + 2.0", 0, &vars), Ok(102));
+        assert_eq!(evaluate_exact_i64("3/2", 0), Ok(2));
+        let wide = HashMap::from([("limit".into(), NumericValue::Unsigned(u64::MAX - 1))]);
+        assert_eq!(
+            evaluate_exact_u64_with_vars("x == limit", u64::MAX - 1, &wide),
+            Ok(1)
+        );
+        assert_eq!(
+            evaluate_exact_u64_with_vars("x - limit", u64::MAX, &wide),
+            Ok(1)
+        );
+        assert_eq!(
+            evaluate_exact_i64_with_vars("sqrt(2)*2", 0, &wide),
+            Err(Error::Domain)
+        );
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 enum Token {
     Number(f64),
+    RoundedNumber(f64),
+    ExactNumber(i128),
     Name(String),
     Plus,
     Minus,
@@ -57,7 +354,49 @@ enum Token {
     End,
 }
 
-fn lex(source: &str) -> Result<Vec<Token>, Error> {
+/// Return an integer only when the decimal source is mathematically integral.
+fn decimal_integer(raw: &str) -> Option<i128> {
+    let exponent_at = raw.find(['e', 'E']);
+    let (mantissa, exponent_text) = if let Some(at) = exponent_at {
+        (&raw[..at], Some(&raw[at + 1..]))
+    } else {
+        (raw, None)
+    };
+    let mut digits = String::with_capacity(mantissa.len());
+    let mut fractional_digits = 0_i64;
+    let mut after_dot = false;
+    for byte in mantissa.bytes() {
+        if byte == b'.' {
+            after_dot = true;
+        } else {
+            digits.push(char::from(byte));
+            fractional_digits += i64::from(after_dot);
+        }
+    }
+    if digits.bytes().all(|digit| digit == b'0') {
+        return Some(0);
+    }
+    digits = digits.trim_start_matches('0').to_owned();
+    let exponent = exponent_text.map_or(Some(0), |text| text.parse::<i64>().ok())?;
+    let shift = exponent.checked_sub(fractional_digits)?;
+    if shift < 0 {
+        let remove = usize::try_from(shift.checked_neg()?).ok()?;
+        let keep = digits.len().checked_sub(remove)?;
+        if !digits[keep..].bytes().all(|digit| digit == b'0') {
+            return None;
+        }
+        digits.truncate(keep);
+    } else {
+        let add = usize::try_from(shift).ok()?;
+        if digits.len().checked_add(add)? > 39 {
+            return None;
+        }
+        digits.extend(std::iter::repeat_n('0', add));
+    }
+    digits.parse::<i128>().ok()
+}
+
+fn lex<const EXACT: bool>(source: &str) -> Result<Vec<Token>, Error> {
     let bytes = source.as_bytes();
     let mut i = 0;
     let mut out = Vec::new();
@@ -91,10 +430,20 @@ fn lex(source: &str) -> Result<Vec<Token>, Error> {
                         return Err(Error::InvalidNumber(start));
                     }
                 }
-                let n = source[start..i]
-                    .parse()
-                    .map_err(|_| Error::InvalidNumber(start))?;
-                out.push(Token::Number(n));
+                let raw = &source[start..i];
+                let float: f64 = raw.parse().map_err(|_| Error::InvalidNumber(start))?;
+                if EXACT {
+                    let exact = raw.parse::<i128>().ok().or_else(|| decimal_integer(raw));
+                    out.push(match exact {
+                        Some(value) => Token::ExactNumber(value),
+                        None if float.is_finite() && float.fract() == 0.0 => {
+                            Token::RoundedNumber(float)
+                        }
+                        None => Token::Number(float),
+                    });
+                } else {
+                    out.push(Token::Number(float));
+                }
                 continue;
             }
             b'a'..=b'z' | b'A'..=b'Z' | b'_' => {
@@ -152,11 +501,85 @@ fn lex(source: &str) -> Result<Vec<Token>, Error> {
     Ok(out)
 }
 
+/// Whether an expression contains a numeric literal that cannot be safely
+/// passed through the legacy floating-point evaluator.
+pub fn has_wide_numeric_literal(source: &str) -> bool {
+    lex::<true>(source).is_ok_and(|tokens| {
+        tokens.into_iter().any(|token| match token {
+            Token::ExactNumber(value) => value.unsigned_abs() > 9_007_199_254_740_992,
+            Token::RoundedNumber(_) => true,
+            Token::Number(value) => value.abs() > 9_007_199_254_740_992.0,
+            _ => false,
+        })
+    })
+}
+
 pub fn evaluate(source: &str, vars: &HashMap<String, f64>) -> Result<f64, Error> {
+    parse::<false>(source)?.evaluate::<false, _>(&|name| {
+        vars.get(name)
+            .copied()
+            .ok_or_else(|| Error::UnknownName(name.into()))
+    })
+}
+
+/// Evaluate a float expression against typed field variables without copying
+/// the map. The field's current value always overrides a named `x` variable.
+pub fn evaluate_typed(
+    source: &str,
+    x: f64,
+    vars: &HashMap<String, NumericValue>,
+) -> Result<f64, Error> {
+    parse::<false>(source)?.evaluate::<false, _>(&|name| {
+        if name == "x" {
+            Ok(x)
+        } else {
+            vars.get(name)
+                .map(|value| value.as_f64())
+                .ok_or_else(|| Error::UnknownName(name.into()))
+        }
+    })
+}
+
+/// Evaluate only safe-width values on the selected expression path.
+pub fn evaluate_typed_safe(
+    source: &str,
+    x: f64,
+    vars: &HashMap<String, NumericValue>,
+) -> Result<f64, Error> {
+    let safe = |value: f64| {
+        if value.is_finite() && value.abs() <= 9_007_199_254_740_992.0 {
+            Ok(value)
+        } else {
+            Err(Error::Domain)
+        }
+    };
+    parse::<true>(source)?.evaluate::<true, _>(&|name| {
+        if name == "x" {
+            safe(x)
+        } else {
+            vars.get(name)
+                .map(|value| match value {
+                    NumericValue::Integer(value)
+                        if value.unsigned_abs() <= 9_007_199_254_740_992 =>
+                    {
+                        safe(*value as f64)
+                    }
+                    NumericValue::Unsigned(value) if *value <= 9_007_199_254_740_992 => {
+                        safe(*value as f64)
+                    }
+                    NumericValue::Float(value) => safe(*value),
+                    _ => Err(Error::Domain),
+                })
+                .ok_or_else(|| Error::UnknownName(name.into()))?
+        }
+    })
+}
+
+fn parse<const EXACT: bool>(source: &str) -> Result<Expression, Error> {
     if source.len() > 4_096 {
         return Err(Error::TooComplex);
     }
-    let tokens = lex(source)?;
+    let tokens = lex::<EXACT>(source)?;
     if tokens.len() > 512 {
         return Err(Error::TooComplex);
     }
@@ -168,7 +591,7 @@ pub fn evaluate(source: &str, vars: &HashMap<String, f64>) -> Result<f64, Error>
     if parser.peek() != &Token::End {
         return Err(Error::UnexpectedToken);
     }
-    expression.evaluate(vars)
+    Ok(expression)
 }
 
 fn finite(value: f64) -> Result<f64, Error> {
@@ -184,6 +607,8 @@ fn finite(value: f64) -> Result<f64, Error> {
 #[derive(Debug, Clone)]
 enum Expression {
     Number(f64),
+    RoundedNumber(f64),
+    ExactNumber(i128),
     Name(String),
     Unary {
         negative: bool,
@@ -231,20 +656,32 @@ enum CompareOperation {
 }
 
 impl Expression {
-    fn evaluate(&self, vars: &HashMap<String, f64>) -> Result<f64, Error> {
+    fn evaluate<const SAFE: bool, F: Fn(&str) -> Result<f64, Error>>(
+        &self,
+        lookup: &F,
+    ) -> Result<f64, Error> {
         match self {
-            Self::Number(value) => finite(*value),
+            Self::Number(value) => {
+                if SAFE && value.abs() > 9_007_199_254_740_992.0 {
+                    return Err(Error::Domain);
+                }
+                finite(*value)
+            }
+            Self::RoundedNumber(_) if SAFE => Err(Error::Domain),
+            Self::RoundedNumber(value) => finite(*value),
+            Self::ExactNumber(value) => {
+                if SAFE && value.unsigned_abs() > 9_007_199_254_740_992 {
+                    return Err(Error::Domain);
+                }
+                finite(*value as f64)
+            }
             Self::Name(name) => match name.as_str() {
                 "pi" => Ok(std::f64::consts::PI),
                 "e" => Ok(std::f64::consts::E),
-                _ => vars
-                    .get(name)
-                    .copied()
-                    .ok_or_else(|| Error::UnknownName(name.clone()))
-                    .and_then(finite),
+                _ => lookup(name).and_then(finite),
             },
             Self::Unary { negative, value } => {
-                let value = value.evaluate(vars)?;
+                let value = value.evaluate::<SAFE, _>(lookup)?;
                 finite(if *negative { -value } else { value })
             }
             Self::Binary {
@@ -252,8 +689,8 @@ impl Expression {
                 left,
                 right,
             } => {
-                let left = left.evaluate(vars)?;
-                let right = right.evaluate(vars)?;
+                let left = left.evaluate::<SAFE, _>(lookup)?;
+                let right = right.evaluate::<SAFE, _>(lookup)?;
                 match operation {
                     BinaryOperation::Add => finite(left + right),
                     BinaryOperation::Subtract => finite(left - right),
@@ -270,8 +707,8 @@ impl Expression {
                 left,
                 right,
             } => {
-                let left = left.evaluate(vars)?;
-                let right = right.evaluate(vars)?;
+                let left = left.evaluate::<SAFE, _>(lookup)?;
+                let right = right.evaluate::<SAFE, _>(lookup)?;
                 let value = match operation {
                     CompareOperation::Less => left < right,
                     CompareOperation::LessEq => left <= right,
@@ -287,20 +724,126 @@ impl Expression {
                 condition,
                 alternative,
             } => {
-                if condition.evaluate(vars)? != 0.0 {
-                    value.evaluate(vars)
+                if condition.evaluate::<SAFE, _>(lookup)? != 0.0 {
+                    value.evaluate::<SAFE, _>(lookup)
                 } else {
-                    alternative.evaluate(vars)
+                    alternative.evaluate::<SAFE, _>(lookup)
                 }
             }
             Self::Call { name, arguments } => {
                 let values = arguments
                     .iter()
-                    .map(|argument| argument.evaluate(vars))
+                    .map(|argument| argument.evaluate::<SAFE, _>(lookup))
                     .collect::<Result<Vec<_>, _>>()?;
                 function(name, &values)
             }
         }
+    }
+
+    fn evaluate_exact(&self, x: i128, vars: &HashMap<String, NumericValue>) -> Result<i128, Error> {
+        match self {
+            Self::ExactNumber(value) => Ok(*value),
+            Self::Number(_) | Self::RoundedNumber(_) => Err(Error::Domain),
+            Self::Name(name) if name == "x" => Ok(x),
+            Self::Name(name) if name == "pi" || name == "e" => Err(Error::Domain),
+            Self::Name(name) => {
+                let value = vars
+                    .get(name)
+                    .copied()
+                    .ok_or_else(|| Error::UnknownName(name.clone()))?;
+                match value {
+                    NumericValue::Integer(value) => Ok(i128::from(value)),
+                    NumericValue::Unsigned(value) => Ok(i128::from(value)),
+                    NumericValue::Float(value)
+                        if value.is_finite()
+                            && value.fract() == 0.0
+                            && value.abs() <= 9_007_199_254_740_992.0 =>
+                    {
+                        Ok(value as i128)
+                    }
+                    NumericValue::Float(_) => Err(Error::Domain),
+                }
+            }
+            Self::Unary { negative, value } => {
+                let value = value.evaluate_exact(x, vars)?;
+                if *negative {
+                    value.checked_neg().ok_or(Error::Overflow)
+                } else {
+                    Ok(value)
+                }
+            }
+            Self::Binary {
+                operation,
+                left,
+                right,
+            } => {
+                let left = left.evaluate_exact(x, vars)?;
+                let right = right.evaluate_exact(x, vars)?;
+                match operation {
+                    BinaryOperation::Add => left.checked_add(right).ok_or(Error::Overflow),
+                    BinaryOperation::Subtract => left.checked_sub(right).ok_or(Error::Overflow),
+                    BinaryOperation::Multiply => left.checked_mul(right).ok_or(Error::Overflow),
+                    BinaryOperation::Divide => rounded_div(left, right),
+                    BinaryOperation::Remainder if right == 0 => Err(Error::DivisionByZero),
+                    BinaryOperation::Remainder => left.checked_rem(right).ok_or(Error::Overflow),
+                    BinaryOperation::Power => {
+                        let exponent = u32::try_from(right).map_err(|_| Error::Domain)?;
+                        left.checked_pow(exponent).ok_or(Error::Overflow)
+                    }
+                }
+            }
+            Self::Compare {
+                operation,
+                left,
+                right,
+            } => {
+                let left = left.evaluate_exact(x, vars)?;
+                let right = right.evaluate_exact(x, vars)?;
+                Ok(i128::from(match operation {
+                    CompareOperation::Less => left < right,
+                    CompareOperation::LessEq => left <= right,
+                    CompareOperation::Greater => left > right,
+                    CompareOperation::GreaterEq => left >= right,
+                    CompareOperation::Equal => left == right,
+                    CompareOperation::NotEqual => left != right,
+                }))
+            }
+            Self::Conditional {
+                value,
+                condition,
+                alternative,
+            } => {
+                if condition.evaluate_exact(x, vars)? != 0 {
+                    value.evaluate_exact(x, vars)
+                } else {
+                    alternative.evaluate_exact(x, vars)
+                }
+            }
+            Self::Call { name, arguments } => {
+                let values = arguments
+                    .iter()
+                    .map(|argument| argument.evaluate_exact(x, vars))
+                    .collect::<Result<Vec<_>, _>>()?;
+                exact_function(name, &values)
+            }
+        }
+    }
+}
+
+fn exact_function(name: &str, args: &[i128]) -> Result<i128, Error> {
+    let invalid = || Error::InvalidArguments(name.into());
+    match (name, args) {
+        ("min", [_first, ..]) => args.iter().copied().min().ok_or_else(invalid),
+        ("max", [_first, ..]) => args.iter().copied().max().ok_or_else(invalid),
+        ("abs", [value]) => value.checked_abs().ok_or(Error::Overflow),
+        ("round" | "floor" | "ceil", [value]) => Ok(*value),
+        ("clamp", [value, min, max]) if min <= max => Ok((*value).clamp(*min, *max)),
+        ("pow", [base, exponent]) => {
+            let exponent = u32::try_from(*exponent).map_err(|_| Error::Domain)?;
+            base.checked_pow(exponent).ok_or(Error::Overflow)
+        }
+        ("sqrt" | "sin" | "cos" | "tan", [_]) => Err(Error::Domain),
+        _ => Err(invalid()),
     }
 }
 
@@ -444,6 +987,8 @@ impl Parser<'_> {
     fn primary(&mut self) -> Result<Expression, Error> {
         match self.take() {
             Token::Number(value) => Ok(Expression::Number(value)),
+            Token::RoundedNumber(value) => Ok(Expression::RoundedNumber(value)),
+            Token::ExactNumber(value) => Ok(Expression::ExactNumber(value)),
             Token::LParen => {
                 let value = self.conditional()?;
                 if self.take() != Token::RParen {

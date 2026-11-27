@@ -1,5 +1,6 @@
 //! Bounded and unbounded numeric controls, parsing, stepping, and formatting.
 
+pub use bbui_core::NumericValue;
 use bbui_text::expression::{self, Error};
 pub use bbui_text::format_float;
 use bevy_ecs::prelude::Component;
@@ -9,39 +10,32 @@ use std::collections::HashMap;
 /// component to the field entity and update it when application data changes.
 /// The field's current value is always exposed as `x` and takes precedence.
 #[derive(Component, Debug, Clone, Default, PartialEq)]
-pub struct NumericExpressionVariables(pub HashMap<String, f64>);
+pub struct NumericExpressionVariables(pub HashMap<String, NumericValue>);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum NumericFieldKind {
     Integer,
+    Unsigned,
     #[default]
     Float,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum NumericValue {
-    Integer(i64),
-    Float(f64),
-}
-
-impl NumericValue {
-    pub fn as_f64(self) -> f64 {
-        match self {
-            Self::Integer(value) => value as f64,
-            Self::Float(value) => value,
-        }
-    }
 }
 
 #[derive(Component, Debug, Clone, PartialEq)]
 #[component(summary_tick)]
 pub struct NumericField {
-    pub value: f64,
-    pub default: f64,
-    pub min: Option<f64>,
-    pub max: Option<f64>,
-    pub step: f64,
-    pub kind: NumericFieldKind,
+    value: f64,
+    /// Authoritative value for full-width integer fields. `value` is a legacy
+    /// float projection used by bounded sliders and paint geometry.
+    exact_value: Option<NumericValue>,
+    default: f64,
+    exact_default: Option<NumericValue>,
+    min: Option<f64>,
+    max: Option<f64>,
+    exact_min: Option<NumericValue>,
+    exact_max: Option<NumericValue>,
+    step: f64,
+    exact_step: Option<u64>,
+    kind: NumericFieldKind,
     pub unit: Option<String>,
     pub enabled: bool,
     pub read_only: bool,
@@ -54,6 +48,66 @@ pub struct NumericField {
 }
 
 impl NumericField {
+    pub fn value_projection(&self) -> f64 {
+        self.value
+    }
+    pub fn default_projection(&self) -> f64 {
+        self.default
+    }
+    pub fn bounds_projection(&self) -> (Option<f64>, Option<f64>) {
+        (self.min, self.max)
+    }
+    pub fn min_projection(&self) -> Option<f64> {
+        self.min
+    }
+    pub fn max_projection(&self) -> Option<f64> {
+        self.max
+    }
+    pub fn step_projection(&self) -> f64 {
+        self.step
+    }
+    pub fn kind(&self) -> NumericFieldKind {
+        self.kind
+    }
+    pub fn typed_bounds(&self) -> (Option<NumericValue>, Option<NumericValue>) {
+        (self.exact_min, self.exact_max)
+    }
+    pub fn typed_min(&self) -> Option<NumericValue> {
+        self.exact_min
+    }
+    pub fn typed_max(&self) -> Option<NumericValue> {
+        self.exact_max
+    }
+    pub fn typed_default(&self) -> Option<NumericValue> {
+        self.exact_default
+    }
+    pub fn typed_step(&self) -> Option<u64> {
+        self.exact_step
+    }
+
+    pub fn set_step(&mut self, step: f64) -> Result<(), &'static str> {
+        if !step.is_finite() || step <= 0.0 {
+            return Err("numeric step must be finite and positive");
+        }
+        if self.kind != NumericFieldKind::Float {
+            if step.fract() != 0.0 || step > 9_007_199_254_740_992.0 {
+                return Err("integer numeric step must be exactly representable");
+            }
+            self.exact_step = Some(step as u64);
+        }
+        self.step = step;
+        Ok(())
+    }
+
+    pub fn set_typed_step(&mut self, step: u64) -> Result<(), &'static str> {
+        if self.kind == NumericFieldKind::Float || step == 0 {
+            return Err("typed step requires a positive integer field step");
+        }
+        self.exact_step = Some(step);
+        self.step = step as f64;
+        Ok(())
+    }
+
     pub fn new(
         value: f64,
         min: Option<f64>,
@@ -61,6 +115,13 @@ impl NumericField {
         step: f64,
         kind: NumericFieldKind,
     ) -> Result<Self, &'static str> {
+        if kind != NumericFieldKind::Float
+            && (value.abs() > 9_007_199_254_740_992.0
+                || min.is_some_and(|min| min.abs() > 9_007_199_254_740_992.0)
+                || max.is_some_and(|max| max.abs() > 9_007_199_254_740_992.0))
+        {
+            return Err("full-width integers require a typed constructor");
+        }
         if !value.is_finite()
             || !step.is_finite()
             || step <= 0.0
@@ -70,15 +131,32 @@ impl NumericField {
         {
             return Err("invalid numeric field value, bounds, or step");
         }
+        if kind == NumericFieldKind::Unsigned
+            && (value < 0.0
+                || min.is_some_and(|bound| bound < 0.0)
+                || max.is_some_and(|bound| bound < 0.0))
+        {
+            return Err("unsigned numeric values and bounds cannot be negative");
+        }
+        if kind != NumericFieldKind::Float
+            && (step.fract() != 0.0 || step > 9_007_199_254_740_992.0)
+        {
+            return Err("integer numeric step must be an exactly representable whole number");
+        }
         if kind == NumericFieldKind::Integer && integer_bounds(min, max).is_none() {
             return Err("integer numeric bounds contain no representable value");
         }
         let mut field = Self {
             value,
+            exact_value: None,
             default: value,
+            exact_default: None,
             min,
             max,
+            exact_min: None,
+            exact_max: None,
             step,
+            exact_step: (kind != NumericFieldKind::Float).then_some(step as u64),
             kind,
             unit: None,
             enabled: true,
@@ -90,6 +168,21 @@ impl NumericField {
         };
         field.value = field.normalize(value);
         field.default = field.value;
+        if kind == NumericFieldKind::Integer {
+            let exact = NumericValue::Integer(field.value as i64);
+            field.exact_value = Some(exact);
+            field.exact_default = Some(exact);
+            field.exact_min = min.map(|bound| NumericValue::Integer(bound.ceil() as i64));
+            field.exact_max = max.map(|bound| NumericValue::Integer(bound.floor() as i64));
+        }
+        if kind == NumericFieldKind::Unsigned {
+            let exact = NumericValue::Unsigned(field.value as u64);
+            field.exact_value = Some(exact);
+            field.exact_default = Some(exact);
+            field.exact_min = min.map(|bound| NumericValue::Unsigned(bound.ceil().max(0.0) as u64));
+            field.exact_max =
+                max.map(|bound| NumericValue::Unsigned(bound.floor().max(0.0) as u64));
+        }
         Ok(field)
     }
 
@@ -98,13 +191,18 @@ impl NumericField {
     }
 
     pub fn integer(value: i64) -> Self {
-        let value = value as f64;
+        let projected = value as f64;
         Self {
-            value,
-            default: value,
+            value: projected,
+            exact_value: Some(NumericValue::Integer(value)),
+            default: projected,
+            exact_default: Some(NumericValue::Integer(value)),
             min: None,
             max: None,
+            exact_min: None,
+            exact_max: None,
             step: 1.0,
+            exact_step: Some(1),
             kind: NumericFieldKind::Integer,
             unit: None,
             enabled: true,
@@ -116,14 +214,152 @@ impl NumericField {
         }
     }
 
+    pub fn unsigned(value: u64) -> Self {
+        let projected = value as f64;
+        Self {
+            value: projected,
+            exact_value: Some(NumericValue::Unsigned(value)),
+            default: projected,
+            exact_default: Some(NumericValue::Unsigned(value)),
+            min: None,
+            max: None,
+            exact_min: None,
+            exact_max: None,
+            step: 1.0,
+            exact_step: Some(1),
+            kind: NumericFieldKind::Unsigned,
+            unit: None,
+            enabled: true,
+            read_only: false,
+            editing: None,
+            replace_on_input: false,
+            expression_error: None,
+            precision: 6,
+        }
+    }
+
     pub fn typed_value(&self) -> NumericValue {
+        if let Some(value) = self.exact_value {
+            return value;
+        }
         match self.kind {
             NumericFieldKind::Integer => NumericValue::Integer(self.value.round() as i64),
+            NumericFieldKind::Unsigned => NumericValue::Unsigned(self.value.round() as u64),
             NumericFieldKind::Float => NumericValue::Float(self.value),
         }
     }
 
+    pub fn set_typed_value(&mut self, value: NumericValue) -> Result<bool, &'static str> {
+        if !self.enabled || self.read_only {
+            return Ok(false);
+        }
+        self.restore_typed_value(value)
+    }
+
+    pub fn restore_typed_value(&mut self, value: NumericValue) -> Result<bool, &'static str> {
+        let value = self.normalize_typed(value)?;
+        let changed = self.typed_value() != value;
+        self.exact_value = match value {
+            NumericValue::Float(_) => None,
+            exact => Some(exact),
+        };
+        self.value = value.as_f64();
+        self.expression_error = None;
+        Ok(changed)
+    }
+
+    pub fn set_typed_default(&mut self, value: NumericValue) -> Result<(), &'static str> {
+        let value = self.normalize_typed(value)?;
+        self.exact_default = match value {
+            NumericValue::Float(_) => None,
+            exact => Some(exact),
+        };
+        self.default = value.as_f64();
+        Ok(())
+    }
+
+    pub fn set_typed_bounds(
+        &mut self,
+        min: Option<NumericValue>,
+        max: Option<NumericValue>,
+    ) -> Result<bool, &'static str> {
+        let valid = match (self.kind, min, max) {
+            (
+                NumericFieldKind::Float,
+                Some(NumericValue::Float(a)),
+                Some(NumericValue::Float(b)),
+            ) => a.is_finite() && b.is_finite() && a <= b,
+            (NumericFieldKind::Float, Some(NumericValue::Float(a)), None) => a.is_finite(),
+            (NumericFieldKind::Float, None, Some(NumericValue::Float(b))) => b.is_finite(),
+            (NumericFieldKind::Float, None, None) => true,
+            (
+                NumericFieldKind::Integer,
+                Some(NumericValue::Integer(a)),
+                Some(NumericValue::Integer(b)),
+            ) => a <= b,
+            (
+                NumericFieldKind::Unsigned,
+                Some(NumericValue::Unsigned(a)),
+                Some(NumericValue::Unsigned(b)),
+            ) => a <= b,
+            (NumericFieldKind::Integer, Some(NumericValue::Integer(_)), None)
+            | (NumericFieldKind::Integer, None, Some(NumericValue::Integer(_)))
+            | (NumericFieldKind::Unsigned, Some(NumericValue::Unsigned(_)), None)
+            | (NumericFieldKind::Unsigned, None, Some(NumericValue::Unsigned(_)))
+            | (NumericFieldKind::Integer | NumericFieldKind::Unsigned, None, None) => true,
+            _ => false,
+        };
+        if !valid {
+            return Err("invalid typed numeric bounds");
+        }
+        let before = self.typed_value();
+        self.exact_min = min;
+        self.exact_max = max;
+        self.min = min.map(NumericValue::as_f64);
+        self.max = max.map(NumericValue::as_f64);
+        let value = self.typed_value();
+        self.restore_typed_value(value)?;
+        if let Some(default) = self.exact_default {
+            self.set_typed_default(default)?;
+        }
+        Ok(before != self.typed_value())
+    }
+
+    fn normalize_typed(&self, value: NumericValue) -> Result<NumericValue, &'static str> {
+        match (self.kind, value) {
+            (NumericFieldKind::Float, NumericValue::Float(value)) if value.is_finite() => {
+                Ok(NumericValue::Float(self.normalize(value)))
+            }
+            (NumericFieldKind::Integer, NumericValue::Integer(value)) => {
+                let min = match self.exact_min {
+                    Some(NumericValue::Integer(min)) => min,
+                    _ => i64::MIN,
+                };
+                let max = match self.exact_max {
+                    Some(NumericValue::Integer(max)) => max,
+                    _ => i64::MAX,
+                };
+                Ok(NumericValue::Integer(value.clamp(min, max)))
+            }
+            (NumericFieldKind::Unsigned, NumericValue::Unsigned(value)) => {
+                let min = match self.exact_min {
+                    Some(NumericValue::Unsigned(min)) => min,
+                    _ => u64::MIN,
+                };
+                let max = match self.exact_max {
+                    Some(NumericValue::Unsigned(max)) => max,
+                    _ => u64::MAX,
+                };
+                Ok(NumericValue::Unsigned(value.clamp(min, max)))
+            }
+            _ => Err("numeric value has wrong type or is non-finite"),
+        }
+    }
+
     pub fn set_default(&mut self, value: f64) -> Result<(), &'static str> {
+        if self.kind != NumericFieldKind::Float {
+            return self.set_typed_default(self.legacy_integer(value)?);
+        }
         if !value.is_finite() {
             return Err("default must be finite");
         }
@@ -132,6 +368,15 @@ impl NumericField {
     }
 
     pub fn set_bounds(&mut self, min: Option<f64>, max: Option<f64>) -> Result<bool, &'static str> {
+        if self.kind != NumericFieldKind::Float {
+            let min = min
+                .map(|value| self.legacy_integer(value.ceil()))
+                .transpose()?;
+            let max = max
+                .map(|value| self.legacy_integer(value.floor()))
+                .transpose()?;
+            return self.set_typed_bounds(min, max);
+        }
         if min.is_some_and(|bound| !bound.is_finite())
             || max.is_some_and(|bound| !bound.is_finite())
             || min.zip(max).is_some_and(|(min, max)| min > max)
@@ -150,6 +395,9 @@ impl NumericField {
     }
 
     pub fn set_value(&mut self, value: f64) -> Result<bool, &'static str> {
+        if self.kind != NumericFieldKind::Float {
+            return self.set_typed_value(self.legacy_integer(value)?);
+        }
         if !self.enabled || self.read_only {
             return Ok(false);
         }
@@ -159,6 +407,9 @@ impl NumericField {
     /// Restore a value from history or an external data source, bypassing the
     /// user-facing enabled/read-only guards while retaining numeric validation.
     pub fn restore_value(&mut self, value: f64) -> Result<bool, &'static str> {
+        if self.kind != NumericFieldKind::Float {
+            return self.restore_typed_value(self.legacy_integer(value)?);
+        }
         if !value.is_finite() {
             return Err("value must be finite");
         }
@@ -170,6 +421,17 @@ impl NumericField {
     }
 
     pub fn reset(&mut self) -> bool {
+        if self.kind != NumericFieldKind::Float {
+            if !self.enabled
+                || self.read_only
+                || self.typed_value() == self.exact_default.unwrap_or(self.typed_value())
+            {
+                return false;
+            }
+            if let Some(default) = self.exact_default {
+                return self.restore_typed_value(default).unwrap_or(false);
+            }
+        }
         if !self.enabled || self.read_only || self.value == self.default {
             return false;
         }
@@ -181,14 +443,65 @@ impl NumericField {
     pub fn evaluate_input(
         &mut self,
         input: &str,
-        vars: &HashMap<String, f64>,
+        vars: &HashMap<String, NumericValue>,
     ) -> Result<bool, Error> {
         if !self.enabled || self.read_only {
             return Ok(false);
         }
-        let mut context = vars.clone();
-        context.insert("x".into(), self.value);
-        let result = match expression::evaluate(input, &context) {
+        if self.kind != NumericFieldKind::Float {
+            let result = match self.typed_value() {
+                NumericValue::Integer(value) => {
+                    expression::evaluate_exact_i64_with_vars(input, value, vars)
+                        .map(NumericValue::Integer)
+                }
+                NumericValue::Unsigned(value) => {
+                    expression::evaluate_exact_u64_with_vars(input, value, vars)
+                        .map(NumericValue::Unsigned)
+                }
+                NumericValue::Float(_) => Err(Error::Domain),
+            };
+            let has_division = input.contains('/');
+            let needs_legacy = matches!(&result, Err(Error::Domain)) || has_division;
+            let legacy_safe = needs_legacy;
+            let evaluate_fractional = || {
+                expression::evaluate_typed_safe(input, self.typed_value().as_f64(), vars).and_then(
+                    |value| {
+                        let rounded = value.round();
+                        if rounded.abs() > 9_007_199_254_740_992.0 {
+                            return Err(Error::Overflow);
+                        }
+                        match self.kind {
+                            NumericFieldKind::Integer => Ok(NumericValue::Integer(rounded as i64)),
+                            NumericFieldKind::Unsigned if rounded >= 0.0 => {
+                                Ok(NumericValue::Unsigned(rounded as u64))
+                            }
+                            _ => Err(Error::Domain),
+                        }
+                    },
+                )
+            };
+            let result = match result {
+                Err(Error::Domain) if legacy_safe => evaluate_fractional(),
+                Ok(exact) if legacy_safe && has_division => match evaluate_fractional() {
+                    Err(Error::Domain) => Ok(exact),
+                    result => result,
+                },
+                result => result,
+            };
+            let value = match result {
+                Ok(value) => value,
+                Err(error) => {
+                    self.expression_error = Some(error.clone());
+                    return Err(error);
+                }
+            };
+            let changed = self.set_typed_value(value).map_err(|_| Error::Overflow)?;
+            self.editing = None;
+            self.replace_on_input = false;
+            self.expression_error = None;
+            return Ok(changed);
+        }
+        let result = match expression::evaluate_typed(input, self.value, vars) {
             Ok(value) => value,
             Err(error) => {
                 self.expression_error = Some(error.clone());
@@ -210,7 +523,7 @@ impl NumericField {
             return;
         }
         if self.editing.is_none() {
-            self.editing = Some(format_float(self.value, self.precision));
+            self.editing = Some(self.value_text());
             self.replace_on_input = true;
             self.expression_error = None;
         }
@@ -255,7 +568,7 @@ impl NumericField {
     }
 
     /// Commit the edit buffer. Parse failures leave both value and buffer intact.
-    pub fn commit_edit(&mut self, vars: &HashMap<String, f64>) -> Result<bool, Error> {
+    pub fn commit_edit(&mut self, vars: &HashMap<String, NumericValue>) -> Result<bool, Error> {
         let Some(text) = self.editing.clone() else {
             return Ok(false);
         };
@@ -272,6 +585,21 @@ impl NumericField {
         if !self.enabled || self.read_only || steps == 0 {
             return false;
         }
+        if let Some(step) = self.exact_step {
+            let current = self.typed_value();
+            let delta = i128::from(step) * i128::from(steps);
+            let next = match current {
+                NumericValue::Integer(value) => NumericValue::Integer(
+                    (i128::from(value) + delta).clamp(i128::from(i64::MIN), i128::from(i64::MAX))
+                        as i64,
+                ),
+                NumericValue::Unsigned(value) => NumericValue::Unsigned(
+                    (i128::from(value) + delta).clamp(0, i128::from(u64::MAX)) as u64,
+                ),
+                NumericValue::Float(_) => return false,
+            };
+            return self.set_typed_value(next).unwrap_or(false);
+        }
         let value = self.value + self.step * f64::from(steps);
         if !value.is_finite() {
             return false;
@@ -285,16 +613,28 @@ impl NumericField {
 
     /// Numeric text shown in the control before appending a configured unit.
     pub fn value_text(&self) -> String {
+        if let Some(value) = self.exact_value {
+            return match value {
+                NumericValue::Integer(value) => value.to_string(),
+                NumericValue::Unsigned(value) => value.to_string(),
+                NumericValue::Float(value) => format_float(value, self.precision),
+            };
+        }
         match self.kind {
             NumericFieldKind::Integer => format!("{}", self.value.round() as i64),
+            NumericFieldKind::Unsigned => format!("{}", self.value.round() as u64),
             NumericFieldKind::Float => format_float(self.value, self.precision),
         }
     }
 
     /// Full-precision numeric text for lossless copy and paste.
     pub fn clipboard_value(&self) -> String {
+        if self.exact_value.is_some() {
+            return self.value_text();
+        }
         match self.kind {
             NumericFieldKind::Integer => format!("{}", self.value.round() as i64),
+            NumericFieldKind::Unsigned => format!("{}", self.value.round() as u64),
             NumericFieldKind::Float => self.value.to_string(),
         }
     }
@@ -312,7 +652,7 @@ impl NumericField {
 
     fn normalize(&self, value: f64) -> f64 {
         match self.kind {
-            NumericFieldKind::Integer => {
+            NumericFieldKind::Integer | NumericFieldKind::Unsigned => {
                 let (min, max) = integer_bounds(self.min, self.max).unwrap_or((0.0, 0.0));
                 value.round().clamp(min, max)
             }
@@ -320,6 +660,17 @@ impl NumericField {
                 self.min.unwrap_or(f64::NEG_INFINITY),
                 self.max.unwrap_or(f64::INFINITY),
             ),
+        }
+    }
+
+    fn legacy_integer(&self, value: f64) -> Result<NumericValue, &'static str> {
+        if !value.is_finite() || value.fract() != 0.0 || value.abs() > 9_007_199_254_740_992.0 {
+            return Err("exact integer requires a typed value");
+        }
+        match self.kind {
+            NumericFieldKind::Integer => Ok(NumericValue::Integer(value as i64)),
+            NumericFieldKind::Unsigned if value >= 0.0 => Ok(NumericValue::Unsigned(value as u64)),
+            _ => Err("wrong integer kind"),
         }
     }
 }
@@ -333,6 +684,115 @@ fn integer_bounds(min: Option<f64>, max: Option<f64>) -> Option<(f64, f64)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn exact_full_width_signed_and_unsigned_values_survive_edits() {
+        let mut signed = NumericField::integer(i64::MIN);
+        assert_eq!(signed.value_text(), i64::MIN.to_string());
+        signed.begin_edit();
+        assert_eq!(signed.editing.as_deref(), Some("-9223372036854775808"));
+        assert!(signed.evaluate_input("x + 1", &HashMap::new()).unwrap());
+        assert_eq!(signed.typed_value(), NumericValue::Integer(i64::MIN + 1));
+        assert_eq!(signed.clipboard_value(), (i64::MIN + 1).to_string());
+
+        let mut unsigned = NumericField::unsigned(u64::MAX);
+        unsigned.begin_edit();
+        assert!(unsigned.evaluate_input("x + 1", &HashMap::new()).is_err());
+        assert_eq!(unsigned.typed_value(), NumericValue::Unsigned(u64::MAX));
+        assert!(unsigned.editing.is_some(), "invalid draft remains editable");
+        unsigned.cancel_edit();
+        assert!(unsigned.step_by(-1));
+        assert_eq!(unsigned.typed_value(), NumericValue::Unsigned(u64::MAX - 1));
+        assert!(
+            unsigned
+                .restore_typed_value(NumericValue::Unsigned(u64::MAX))
+                .unwrap()
+        );
+        assert_eq!(unsigned.value_text(), u64::MAX.to_string());
+    }
+
+    #[test]
+    fn integer_fields_keep_named_expression_features_without_rounding_full_width_values() {
+        let mut field = NumericField::unsigned(u64::MAX - 1);
+        let vars = HashMap::from([
+            ("c".into(), NumericValue::Integer(1)),
+            ("y".into(), NumericValue::Unsigned(3)),
+        ]);
+        assert!(field.evaluate_input("x + y if c else 0", &vars).is_err());
+        assert_eq!(field.typed_value(), NumericValue::Unsigned(u64::MAX - 1));
+        assert!(field.evaluate_input("max(x, 7)", &vars).is_ok());
+        assert_eq!(field.typed_value(), NumericValue::Unsigned(u64::MAX - 1));
+        assert!(field.evaluate_input("x - y if c else 0", &vars).unwrap());
+        assert_eq!(field.typed_value(), NumericValue::Unsigned(u64::MAX - 4));
+
+        let mut safe = NumericField::integer(3);
+        assert!(safe.evaluate_input("round(1.7)", &HashMap::new()).unwrap());
+        assert_eq!(safe.typed_value(), NumericValue::Integer(2));
+        assert!(
+            safe.evaluate_input("min(4, 3) + 2*pi", &HashMap::new())
+                .unwrap()
+        );
+        assert_eq!(safe.typed_value(), NumericValue::Integer(9));
+        assert!(safe.evaluate_input("3/2*2", &HashMap::new()).unwrap());
+        assert_eq!(safe.typed_value(), NumericValue::Integer(3));
+        assert!(safe.evaluate_input("sqrt(2)*2", &HashMap::new()).is_ok());
+        assert_eq!(safe.typed_value(), NumericValue::Integer(3));
+        let unused_wide = HashMap::from([("unused".into(), NumericValue::Unsigned(u64::MAX))]);
+        assert!(safe.evaluate_input("sqrt(2)*2", &unused_wide).is_ok());
+        assert!(
+            safe.evaluate_input("9007199254740992.9 - 9007199254740992", &HashMap::new())
+                .is_err()
+        );
+        assert_eq!(safe.typed_value(), NumericValue::Integer(3));
+        assert!(
+            safe.evaluate_input("sqrt(2)*2 if 1 else 18446744073709551615", &unused_wide)
+                .is_ok()
+        );
+        let selected_wide = HashMap::from([("wide".into(), NumericValue::Unsigned(u64::MAX))]);
+        assert!(safe.evaluate_input("sqrt(wide)", &selected_wide).is_err());
+        assert!(
+            safe.evaluate_input("sqrt(18446744073709551615)", &HashMap::new())
+                .is_err()
+        );
+        assert!(
+            field
+                .evaluate_input("x + sqrt(2)", &HashMap::new())
+                .is_err()
+        );
+        assert!(field.evaluate_input("sqrt(2)", &HashMap::new()).is_ok());
+        assert_eq!(field.typed_value(), NumericValue::Unsigned(1));
+
+        let mut wide_literal = NumericField::unsigned(0);
+        assert!(
+            wide_literal
+                .evaluate_input("18446744073709551615/2", &HashMap::new())
+                .unwrap()
+        );
+        assert_eq!(
+            wide_literal.typed_value(),
+            NumericValue::Unsigned(9_223_372_036_854_775_808)
+        );
+    }
+
+    #[test]
+    fn typed_variables_and_setters_keep_full_width_state_consistent() {
+        let mut field = NumericField::unsigned(u64::MAX);
+        let vars = HashMap::from([("limit".to_owned(), NumericValue::Unsigned(u64::MAX - 1))]);
+        assert!(field.evaluate_input("x - limit", &vars).unwrap());
+        assert_eq!(field.typed_value(), NumericValue::Unsigned(1));
+        assert!(
+            field
+                .set_typed_value(NumericValue::Unsigned(u64::MAX))
+                .unwrap()
+        );
+        assert_eq!(field.value_text(), u64::MAX.to_string());
+        assert_eq!(field.value_projection(), u64::MAX as f64);
+        assert!(field.set_value(u64::MAX as f64).is_err());
+        assert!(field.set_typed_step(u64::MAX).is_ok());
+        assert_eq!(field.typed_step(), Some(u64::MAX));
+        assert!(field.set_step(0.5).is_err());
+        assert_eq!(field.typed_step(), Some(u64::MAX));
+    }
 
     #[test]
     fn unbounded_integer_and_float_fields_step_and_format() {
@@ -361,13 +821,13 @@ mod tests {
     fn expression_variables_keep_current_x_authoritative() {
         let mut field = NumericField::float(3.0).unwrap();
         let mut variables = HashMap::from([
-            ("x".to_owned(), 999.0),
-            ("c".to_owned(), 1.0),
-            ("y".to_owned(), 7.0),
+            ("x".to_owned(), NumericValue::Float(999.0)),
+            ("c".to_owned(), NumericValue::Float(1.0)),
+            ("y".to_owned(), NumericValue::Float(7.0)),
         ]);
         assert!(!field.evaluate_input("x if c else y", &variables).unwrap());
         assert_eq!(field.value, 3.0);
-        variables.insert("c".to_owned(), 0.0);
+        variables.insert("c".to_owned(), NumericValue::Float(0.0));
         assert!(field.evaluate_input("x if c else y", &variables).unwrap());
         assert_eq!(field.value, 7.0);
     }
@@ -419,6 +879,19 @@ mod tests {
         assert_eq!(field.min, Some(0.2));
         assert_eq!(field.max, Some(3.7));
         assert_eq!(field.value, 3.0);
+    }
+
+    #[test]
+    fn unsigned_constructor_rejects_negative_inputs_and_fractional_steps() {
+        for (value, min, max) in [
+            (-1.0, None, None),
+            (0.0, Some(-1.0), Some(10.0)),
+            (0.0, Some(0.0), Some(-1.0)),
+        ] {
+            assert!(NumericField::new(value, min, max, 1.0, NumericFieldKind::Unsigned).is_err());
+        }
+        assert!(NumericField::new(2.0, None, None, 0.5, NumericFieldKind::Integer).is_err());
+        assert!(NumericField::new(2.0, None, None, 0.5, NumericFieldKind::Unsigned).is_err());
     }
 
     #[test]

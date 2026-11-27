@@ -10,8 +10,8 @@ use bevy_ecs::prelude::*;
 use crate::actions::{WidgetEvent, WidgetEventQueue, WidgetValue};
 use crate::{
     Canvas, Checkbox, CheckboxValue, ColorRamp, CurveEditor, DataTable, Dropdown, FileBrowser,
-    HsvColorEditor, ListModel, NodeGraph, NumericField, Panel, PanelExpansionStore, PanelGroup,
-    PreviewGrid, RadioGroup, Slider, TreeModel,
+    HsvColorEditor, ListModel, NodeGraph, NumericField, NumericValue, Panel, PanelExpansionStore,
+    PanelGroup, PreviewGrid, RadioGroup, Slider, TreeModel,
 };
 
 #[derive(Resource, Debug, Default)]
@@ -269,6 +269,21 @@ fn apply_value(world: &mut World, entity: Entity, value: UiValue) -> bool {
                     2 => CheckboxValue::Mixed,
                     _ => CheckboxValue::Off,
                 };
+            } else if let Some(mut field) = world.get_mut::<NumericField>(entity) {
+                let _ = field.restore_typed_value(NumericValue::Integer(value));
+            } else if let Some(mut slider) = world.get_mut::<Slider>(entity) {
+                let _ = slider
+                    .field
+                    .restore_typed_value(NumericValue::Integer(value));
+            }
+        }
+        UiValue::Unsigned(value) => {
+            if let Some(mut field) = world.get_mut::<NumericField>(entity) {
+                let _ = field.restore_typed_value(NumericValue::Unsigned(value));
+            } else if let Some(mut slider) = world.get_mut::<Slider>(entity) {
+                let _ = slider
+                    .field
+                    .restore_typed_value(NumericValue::Unsigned(value));
             }
         }
         UiValue::Float(value) => {
@@ -487,6 +502,8 @@ fn widget_value(value: WidgetValue) -> Option<UiValue> {
     match value {
         WidgetValue::Bool(value) => Some(UiValue::Bool(value)),
         WidgetValue::Number(value) => Some(UiValue::Float(value)),
+        WidgetValue::Integer(value) => Some(UiValue::Integer(value)),
+        WidgetValue::Unsigned(value) => Some(UiValue::Unsigned(value)),
         WidgetValue::Option(value) => Some(UiValue::OptionalIndex(value)),
         WidgetValue::Text => None,
     }

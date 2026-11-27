@@ -59,6 +59,10 @@ pub enum WidgetSpec {
         step: f64,
         kind: NumericFieldKind,
     },
+    ExactNumber {
+        label: String,
+        field: NumericField,
+    },
     Slider {
         label: String,
         slider: Slider,
@@ -308,6 +312,7 @@ impl WidgetNode {
                 | WidgetSpec::Checkbox { label, .. }
                 | WidgetSpec::RadioGroup { label, .. }
                 | WidgetSpec::Number { label, .. }
+                | WidgetSpec::ExactNumber { label, .. }
                 | WidgetSpec::Slider { label, .. }
                 | WidgetSpec::SliderRange { label, .. }
                 | WidgetSpec::TextField { label, .. }
@@ -440,6 +445,18 @@ impl WidgetNode {
             max: None,
             step,
             kind: NumericFieldKind::Float,
+        })
+    }
+    pub fn exact_i64(label: impl Into<String>, value: i64) -> Self {
+        Self::new(WidgetSpec::ExactNumber {
+            label: label.into(),
+            field: NumericField::integer(value),
+        })
+    }
+    pub fn exact_u64(label: impl Into<String>, value: u64) -> Self {
+        Self::new(WidgetSpec::ExactNumber {
+            label: label.into(),
+            field: NumericField::unsigned(value),
         })
     }
     pub fn slider(label: impl Into<String>, slider: Slider) -> Self {

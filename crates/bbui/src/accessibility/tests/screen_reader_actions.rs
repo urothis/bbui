@@ -63,8 +63,53 @@ pub(super) fn slider_screen_reader_step_and_set_value_use_widget_actions() {
                 data,
             }));
         app.update();
-        assert_eq!(app.world().get::<Slider>(target).unwrap().value, expected);
+        assert_eq!(
+            app.world()
+                .get::<Slider>(target)
+                .unwrap()
+                .value_projection(),
+            expected
+        );
     }
+}
+
+#[test]
+pub(super) fn exact_slider_screen_reader_value_stays_full_width() {
+    let mut app = App::new();
+    app.add_plugins(bbui_widgets::WidgetPlugin)
+        .add_message::<ActionRequest>()
+        .init_resource::<UiFocus>()
+        .add_systems(
+            Update,
+            route_accessibility_actions.before(bbui_widgets::actions::apply_widget_actions),
+        );
+    let mut field = NumericField::unsigned(u64::MAX - 2);
+    field
+        .set_typed_bounds(
+            Some(NumericValue::Unsigned(u64::MAX - 10)),
+            Some(NumericValue::Unsigned(u64::MAX)),
+        )
+        .unwrap();
+    let target = app
+        .world_mut()
+        .spawn((UiNode, Slider::from_field(field).unwrap()))
+        .id();
+    sync_accessibility(app.world_mut());
+    let node = &app.world().get::<AccessibilityNode>(target).unwrap().0;
+    assert_eq!(node.value(), Some((u64::MAX - 2).to_string().as_str()));
+    assert_eq!(node.numeric_value(), None);
+    app.world_mut()
+        .write_message(ActionRequest(AccessKitActionRequest {
+            action: Action::SetValue,
+            target_tree: TreeId::ROOT,
+            target_node: NodeId(target.to_bits()),
+            data: Some(ActionData::Value(u64::MAX.to_string().into())),
+        }));
+    app.update();
+    assert_eq!(
+        app.world().get::<Slider>(target).unwrap().typed_value(),
+        NumericValue::Unsigned(u64::MAX)
+    );
 }
 
 #[test]
@@ -114,7 +159,13 @@ pub(super) fn screen_reader_text_replacement_and_number_set_use_widget_actions()
         app.world().get::<TextArea>(area).unwrap().field.text,
         "memo"
     );
-    assert_eq!(app.world().get::<NumericField>(number).unwrap().value, 5.0);
+    assert_eq!(
+        app.world()
+            .get::<NumericField>(number)
+            .unwrap()
+            .value_projection(),
+        5.0
+    );
 }
 
 #[test]
