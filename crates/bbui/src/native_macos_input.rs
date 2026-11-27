@@ -8,7 +8,7 @@ use bevy::ecs::system::SystemParam;
 use bevy::input::ButtonState;
 use bevy::input::mouse::{MouseButton, MouseButtonInput};
 use bevy::prelude::*;
-use bevy::window::{CursorMoved, PrimaryWindow, RawHandleWrapper, WindowEvent};
+use bevy::window::{CursorMoved, PrimaryWindow, RawHandleWrapper, RequestRedraw, WindowEvent};
 use std::time::{Duration, Instant};
 
 use crate::cursor_bridge::CursorCaptureState;
@@ -53,6 +53,13 @@ impl MacInputFrame {
             .is_some_and(|pending| now >= pending.deadline)
         {
             self.flush_scroll_end(queue);
+        }
+    }
+
+    fn request_scroll_redraw(&self, redraw_events: &mut Messages<RequestRedraw>) {
+        if self.pending_scroll_end.is_some() {
+            // Reactive desktop apps may otherwise sleep past the momentum grace period.
+            redraw_events.write(RequestRedraw);
         }
     }
 
@@ -174,6 +181,7 @@ pub(crate) struct NativePointerMessages<'w, 's> {
     cursor_events: MessageReader<'w, 's, CursorMoved>,
     mouse_buttons: Option<ResMut<'w, ButtonInput<MouseButton>>>,
     window_events: Option<ResMut<'w, Messages<WindowEvent>>>,
+    redraw_events: Option<ResMut<'w, Messages<RequestRedraw>>>,
     capture: Res<'w, CursorCaptureState>,
     world_pointers: Res<'w, WorldPointerState>,
     time: Option<Res<'w, Time>>,
@@ -366,6 +374,9 @@ pub(crate) fn bridge_native_macos_input(
         }
     }
     frame.expire_scroll_end(now, &mut queue);
+    if let Some(redraw_events) = messages.redraw_events.as_deref_mut() {
+        frame.request_scroll_redraw(redraw_events);
+    }
     // A Bevy cursor update from this frame is authoritative. Replaying an
     // older AppKit drag sample after it would move the pointer backwards.
     if let Some(position) = raw_drag_position.filter(|_| !pointer_moved) {
@@ -512,7 +523,15 @@ mod tests {
             now,
             &mut queue,
         );
+        let mut redraw_events = Messages::<RequestRedraw>::default();
+        frame.request_scroll_redraw(&mut redraw_events);
+        assert_eq!(redraw_events.len(), 1);
+        frame.expire_scroll_end(now + Duration::from_millis(25), &mut queue);
+        frame.request_scroll_redraw(&mut redraw_events);
+        assert_eq!(redraw_events.len(), 2);
         frame.expire_scroll_end(now + SCROLL_MOMENTUM_GRACE, &mut queue);
+        frame.request_scroll_redraw(&mut redraw_events);
+        assert_eq!(redraw_events.len(), 2);
         assert_eq!(
             scroll_phases(&queue),
             [
@@ -551,6 +570,9 @@ mod tests {
             now + Duration::from_millis(60),
             &mut queue,
         );
+        let mut redraw_events = Messages::<RequestRedraw>::default();
+        frame.request_scroll_redraw(&mut redraw_events);
+        assert!(redraw_events.is_empty());
         frame.expire_scroll_end(now + Duration::from_millis(60), &mut queue);
         frame.push_scroll(
             scroll_sample(false, false, false, true, true),
