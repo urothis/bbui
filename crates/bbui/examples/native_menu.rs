@@ -16,7 +16,6 @@ mod macos {
     struct Demo {
         edited: bool,
         show_grid: bool,
-        alternate_save: bool,
         commands: CommandRegistry,
         menu_dirty: bool,
         menu_installed: bool,
@@ -29,7 +28,6 @@ mod macos {
                 ("settings", "Settings…", Some(UiKeyCode::Comma)),
                 ("new", "New", Some(UiKeyCode::N)),
                 ("save", "Save", Some(UiKeyCode::S)),
-                ("switch-save", "Use Alternate Save", None),
                 ("recent.example", "Example Document", None),
                 ("grid", "Show Grid", None),
                 ("quit", "Quit", Some(UiKeyCode::Q)),
@@ -53,7 +51,6 @@ mod macos {
             Self {
                 edited: false,
                 show_grid: false,
-                alternate_save: false,
                 commands,
                 menu_dirty: true,
                 menu_installed: false,
@@ -81,13 +78,6 @@ mod macos {
                         command("new"),
                         Entry::Separator,
                         command("save"),
-                        Entry::Command(NativeMenuCommand::new("switch-save", "").with_state(
-                            if demo.alternate_save {
-                                NativeMenuState::On
-                            } else {
-                                NativeMenuState::Off
-                            },
-                        )),
                         Entry::Submenu(NativeMenuGroup::new(
                             "recent",
                             "Open Recent",
@@ -134,28 +124,6 @@ mod macos {
                     demo.show_grid = !demo.show_grid;
                     demo.menu_dirty = true;
                 }
-                "switch-save" => {
-                    demo.alternate_save = !demo.alternate_save;
-                    let alternate = demo.alternate_save;
-                    demo.commands
-                        .set_label("save", if alternate { "Save Changes" } else { "Save" });
-                    let shortcut = CommandShortcut::new(
-                        UiKeyCode::S,
-                        UiModifiers {
-                            super_key: true,
-                            shift: alternate,
-                            ..Default::default()
-                        },
-                    );
-                    if let Err(error) = demo.commands.set_shortcut(
-                        "save",
-                        Some(shortcut),
-                        Some(if alternate { "⌘⇧S" } else { "⌘S" }.into()),
-                    ) {
-                        warn!("Save shortcut update failed: {error:?}");
-                    }
-                    demo.menu_dirty = true;
-                }
                 "quit" if !demo.edited => {
                     exits.write(AppExit::Success);
                 }
@@ -165,18 +133,13 @@ mod macos {
         }
         if let Ok(mut text) = status.single_mut() {
             let next = format!(
-                "DOCUMENT  {}\nGRID  {}\nSAVE  {}",
+                "DOCUMENT  {}\nGRID  {}",
                 if demo.edited {
                     "Unsaved changes"
                 } else {
                     "Saved"
                 },
                 if demo.show_grid { "On" } else { "Off" },
-                if demo.alternate_save {
-                    "Save Changes  ⌘⇧S"
-                } else {
-                    "Save  ⌘S"
-                },
             );
             if text.0 != next {
                 text.0 = next;
@@ -237,13 +200,13 @@ mod macos {
                     ));
                     card.spawn((
                         Text::new(
-                            "One CommandRegistry supplies menu labels, availability, and shortcuts. File > New enables Save; Use Alternate Save changes its label and shortcut at runtime. View toggles a checkmark; Quit goes through the host.",
+                            "One CommandRegistry supplies menu labels, availability, and shortcuts. File > New enables Save. View toggles a checkmark; Quit goes through the host.",
                         ),
                         ui_default_text_font(18.0),
                         TextColor(Color::srgb(0.72, 0.78, 0.86)),
                     ));
                     card.spawn((
-                        Text::new("DOCUMENT  Saved\nGRID  Off\nSAVE  Save  ⌘S"),
+                        Text::new("DOCUMENT  Saved\nGRID  Off"),
                         ui_default_text_font(20.0),
                         TextColor(Color::srgb(0.4, 0.85, 0.85)),
                         StatusText,

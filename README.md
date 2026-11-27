@@ -30,7 +30,7 @@ Panels, menus, fields, graphs, and tables are real widgets with pointer, keyboar
 | --- | --- |
 | ![Native macOS File menu with New and Save commands](docs/visuals/examples/native-menu-file.png) | ![Native macOS View menu with Show Grid checked](docs/visuals/examples/native-menu-view.png) |
 
-The host chooses the application menu, commands, nested menus, and checkmarks. `CommandRegistry` supplies the labels, enabled states, and shortcuts shared with a BBUI command palette; BBUI sends selected command IDs back to the app. The example enables Save after File > New, changes its label and shortcut with File > Use Alternate Save, toggles Show Grid, and lets the host intercept Quit when a document has unsaved changes. Run `cargo run -p bbui --example native_menu` on macOS; see the [native menu guide](docs/native-menu.md) for the model and main-thread requirements.
+The host chooses the application menu, commands, nested menus, and checkmarks. `CommandRegistry` supplies the labels, enabled states, and shortcuts shared with a BBUI command palette; BBUI sends selected command IDs back to the app. The example enables Save after File > New, toggles Show Grid, and lets the host intercept Quit when a document has unsaved changes. Run `cargo run -p bbui --example native_menu` on macOS; see the [native menu guide](docs/native-menu.md) for the model and main-thread requirements.
 
 ## Visual effects
 
