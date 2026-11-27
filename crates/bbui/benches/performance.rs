@@ -20,6 +20,7 @@ fn workspace_benchmarks(c: &mut Criterion) {
     suite::text_media::bench(c);
     suite::workspace::bench(c);
     suite::modal::bench(c);
+    suite::native_menu::bench(c);
 }
 
 criterion_group! {

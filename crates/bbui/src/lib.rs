@@ -9,6 +9,7 @@ mod clipboard_bridge;
 mod cursor_bridge;
 mod input_bridge;
 pub mod modal;
+pub mod native_menu_commands;
 pub mod toasts;
 mod window_layout;
 pub mod workspace;
