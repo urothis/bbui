@@ -1,5 +1,325 @@
 use super::*;
-use crate::{UiChildren, UiNode, UiParent, UiVisible, cleanup_removed_node, set_parent};
+use crate::{
+    UiChildren, UiGestureSurface, UiNode, UiParent, UiVisible, cleanup_removed_node, set_parent,
+};
+
+#[test]
+fn trackpad_keeps_scroll_momentum_on_start_surface_and_pinch_owns_its_target() {
+    let (mut world, window, surface, _) = setup();
+    world.entity_mut(surface).insert(UiGestureSurface);
+    let other = world
+        .spawn((
+            UiNode,
+            UiGestureSurface,
+            UiHitBox {
+                window: Some(window),
+                rect: UiRect::new(60.0, 0.0, 40.0, 100.0),
+                clip: None,
+                z_index: 2,
+            },
+        ))
+        .id();
+    set_parent(&mut world, other, surface).unwrap();
+    world.resource_mut::<UiInputQueue>().extend([
+        UiInputEvent::TrackpadGesture(UiTrackpadGesture {
+            window,
+            position: [20.0, 20.0],
+            delta: [4.0, 2.0],
+            scale: 1.0,
+            kind: UiTrackpadKind::Scroll,
+            phase: UiGesturePhase::Started,
+            phased: true,
+        }),
+        UiInputEvent::TrackpadGesture(UiTrackpadGesture {
+            window,
+            position: [80.0, 20.0],
+            delta: [5.0, 3.0],
+            scale: 1.0,
+            kind: UiTrackpadKind::Scroll,
+            phase: UiGesturePhase::Updated,
+            phased: true,
+        }),
+        UiInputEvent::TrackpadGesture(UiTrackpadGesture {
+            window,
+            position: [80.0, 20.0],
+            delta: [0.0, 0.0],
+            scale: 1.2,
+            kind: UiTrackpadKind::Magnify,
+            phase: UiGesturePhase::Started,
+            phased: true,
+        }),
+    ]);
+    process_ui_input(&mut world);
+    let events = &world.resource::<UiRoutedEvents>().events;
+    assert!(events.iter().any(|event| matches!(event,
+        UiRoutedEvent::SurfaceGesture { target, phase: UiGesturePhase::Updated,
+            delta: [5.0, 3.0], .. } if *target == surface)));
+    assert!(events.iter().any(|event| matches!(event,
+        UiRoutedEvent::SurfaceGesture { target, phase: UiGesturePhase::Updated,
+            scale, .. } if *target == other && (*scale - 1.2).abs() < 0.0001)));
+    world
+        .resource_mut::<UiInputQueue>()
+        .push(UiInputEvent::WindowBlur { window });
+    process_ui_input(&mut world);
+    assert_eq!(
+        world
+            .resource::<UiRoutedEvents>()
+            .events
+            .iter()
+            .filter(|event| matches!(
+                event,
+                UiRoutedEvent::SurfaceGesture {
+                    phase: UiGesturePhase::Cancelled,
+                    ..
+                }
+            ))
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn trackpad_started_outside_surface_cannot_capture_it_mid_scroll() {
+    let (mut world, window, surface, _) = setup();
+    world.entity_mut(surface).insert(UiGestureSurface);
+    world.resource_mut::<UiInputQueue>().extend([
+        UiInputEvent::TrackpadGesture(UiTrackpadGesture {
+            window,
+            position: [150.0, 20.0],
+            delta: [0.0, 4.0],
+            scale: 1.0,
+            kind: UiTrackpadKind::Scroll,
+            phase: UiGesturePhase::Started,
+            phased: true,
+        }),
+        UiInputEvent::TrackpadGesture(UiTrackpadGesture {
+            window,
+            position: [20.0, 20.0],
+            delta: [0.0, 6.0],
+            scale: 1.0,
+            kind: UiTrackpadKind::Scroll,
+            phase: UiGesturePhase::Updated,
+            phased: true,
+        }),
+    ]);
+    process_ui_input(&mut world);
+    assert!(
+        !world
+            .resource::<UiRoutedEvents>()
+            .events
+            .iter()
+            .any(|event| {
+                matches!(event, UiRoutedEvent::SurfaceGesture { target, .. } if *target == surface)
+            })
+    );
+}
+
+#[test]
+fn precise_trackpad_scroll_without_surface_remains_a_pixel_wheel() {
+    let (mut world, window, surface, _) = setup();
+    world
+        .resource_mut::<UiInputQueue>()
+        .push(UiInputEvent::TrackpadGesture(UiTrackpadGesture {
+            window,
+            position: [50.0, 50.0],
+            delta: [2.0, 5.0],
+            scale: 1.0,
+            kind: UiTrackpadKind::Scroll,
+            phase: UiGesturePhase::Started,
+            phased: true,
+        }));
+    process_ui_input(&mut world);
+    assert!(world.resource::<UiRoutedEvents>().events.iter().any(|event| {
+        matches!(event, UiRoutedEvent::Wheel { target, delta: [2.0, 5.0], unit: UiWheelUnit::Pixels, .. } if *target == surface)
+    }));
+}
+
+#[test]
+fn phased_wheel_keeps_its_starting_control_across_a_gesture_surface() {
+    let (mut world, window, _, start) = setup();
+    let gesture = world
+        .spawn((
+            UiNode,
+            UiGestureSurface,
+            UiHitBox {
+                window: Some(window),
+                rect: UiRect::new(60.0, 0.0, 40.0, 100.0),
+                clip: None,
+                z_index: 10,
+            },
+        ))
+        .id();
+    for (position, delta, phase) in [
+        ([20.0, 20.0], [0.0, 4.0], UiGesturePhase::Started),
+        ([80.0, 20.0], [0.0, 6.0], UiGesturePhase::Updated),
+        ([80.0, 20.0], [0.0, 2.0], UiGesturePhase::Updated),
+    ] {
+        world
+            .resource_mut::<UiInputQueue>()
+            .push(UiInputEvent::TrackpadGesture(UiTrackpadGesture {
+                window,
+                position,
+                delta,
+                scale: 1.0,
+                kind: UiTrackpadKind::Scroll,
+                phase,
+                phased: true,
+            }));
+    }
+    process_ui_input(&mut world);
+    let events = &world.resource::<UiRoutedEvents>().events;
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event,
+        UiRoutedEvent::Wheel { target, .. } if *target == start))
+            .count(),
+        3
+    );
+    assert!(!events.iter().any(|event| matches!(event,
+        UiRoutedEvent::SurfaceGesture { target, .. } if *target == gesture)));
+    world
+        .resource_mut::<UiInputQueue>()
+        .push(UiInputEvent::WindowBlur { window });
+    process_ui_input(&mut world);
+    world
+        .resource_mut::<UiInputQueue>()
+        .push(UiInputEvent::TrackpadGesture(UiTrackpadGesture {
+            window,
+            position: [80.0, 20.0],
+            delta: [0.0, 3.0],
+            scale: 1.0,
+            kind: UiTrackpadKind::Scroll,
+            phase: UiGesturePhase::Started,
+            phased: true,
+        }));
+    process_ui_input(&mut world);
+    assert!(world.resource::<UiRoutedEvents>().events.iter().any(|event| matches!(event,
+        UiRoutedEvent::SurfaceGesture { target, phase: UiGesturePhase::Started, .. } if *target == gesture)));
+}
+
+#[test]
+fn phased_wheel_does_not_retarget_after_its_starting_control_is_removed() {
+    let (mut world, window, _, start) = setup();
+    world
+        .resource_mut::<UiInputQueue>()
+        .push(UiInputEvent::TrackpadGesture(UiTrackpadGesture {
+            window,
+            position: [20.0, 20.0],
+            delta: [0.0, 4.0],
+            scale: 1.0,
+            kind: UiTrackpadKind::Scroll,
+            phase: UiGesturePhase::Started,
+            phased: true,
+        }));
+    process_ui_input(&mut world);
+    world.despawn(start);
+    world
+        .resource_mut::<UiInputQueue>()
+        .push(UiInputEvent::TrackpadGesture(UiTrackpadGesture {
+            window,
+            position: [50.0, 50.0],
+            delta: [0.0, 6.0],
+            scale: 1.0,
+            kind: UiTrackpadKind::Scroll,
+            phase: UiGesturePhase::Updated,
+            phased: true,
+        }));
+    process_ui_input(&mut world);
+    assert!(
+        !world
+            .resource::<UiRoutedEvents>()
+            .events
+            .iter()
+            .any(|event| matches!(event, UiRoutedEvent::Wheel { .. }))
+    );
+}
+
+#[test]
+fn second_touch_cancels_control_press_and_routes_pan_and_pinch() {
+    let (mut world, window, surface, button) = setup();
+    world.entity_mut(surface).insert(UiGestureSurface);
+    world.resource_mut::<UiInputQueue>().extend([
+        UiInputEvent::PointerButton {
+            window,
+            button: UiPointerButton::Primary,
+            pressed: true,
+            position: [20.0, 20.0],
+            time_seconds: 0.0,
+        },
+        UiInputEvent::Touch {
+            window,
+            id: 1,
+            position: [20.0, 20.0],
+            phase: UiTouchPhase::Started,
+        },
+        UiInputEvent::Touch {
+            window,
+            id: 2,
+            position: [50.0, 20.0],
+            phase: UiTouchPhase::Started,
+        },
+    ]);
+    process_ui_input(&mut world);
+    let events = &world.resource::<UiRoutedEvents>().events;
+    assert!(events.iter().any(|event| matches!(event,
+        UiRoutedEvent::PointerCancel { target, .. } if *target == button)));
+    assert!(events.iter().any(|event| matches!(event,
+        UiRoutedEvent::SurfaceGesture {
+            target, phase: UiGesturePhase::Started, center, ..
+        } if *target == surface && *center == [35.0, 20.0])));
+
+    world
+        .resource_mut::<UiInputQueue>()
+        .push(UiInputEvent::Touch {
+            window,
+            id: 2,
+            position: [60.0, 20.0],
+            phase: UiTouchPhase::Moved,
+        });
+    process_ui_input(&mut world);
+    assert!(
+        world
+            .resource::<UiRoutedEvents>()
+            .events
+            .iter()
+            .any(|event| matches!(event,
+        UiRoutedEvent::SurfaceGesture {
+            phase: UiGesturePhase::Updated, center, delta, scale, ..
+        } if *center == [40.0, 20.0] && *delta == [5.0, 0.0]
+            && (*scale - 4.0 / 3.0).abs() < 0.0001))
+    );
+
+    world.resource_mut::<UiInputQueue>().extend([
+        UiInputEvent::PointerButton {
+            window,
+            button: UiPointerButton::Primary,
+            pressed: false,
+            position: [20.0, 20.0],
+            time_seconds: 0.1,
+        },
+        UiInputEvent::Touch {
+            window,
+            id: 1,
+            position: [20.0, 20.0],
+            phase: UiTouchPhase::Ended,
+        },
+    ]);
+    process_ui_input(&mut world);
+    let events = &world.resource::<UiRoutedEvents>().events;
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, UiRoutedEvent::Click { .. }))
+    );
+    assert!(events.iter().any(|event| matches!(
+        event,
+        UiRoutedEvent::SurfaceGesture {
+            phase: UiGesturePhase::Ended,
+            ..
+        }
+    )));
+}
 
 fn setup() -> (World, Entity, Entity, Entity) {
     let mut world = World::new();

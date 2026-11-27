@@ -1,4 +1,5 @@
 use super::*;
+use bbui_core::UiGesturePhase;
 
 #[derive(Debug)]
 pub(super) struct CanvasDrag {
@@ -38,6 +39,26 @@ pub fn process_canvas_input(world: &mut World) {
         .collect();
     for event in events {
         match event {
+            UiRoutedEvent::SurfaceGesture {
+                target,
+                phase: UiGesturePhase::Updated,
+                center,
+                delta,
+                scale,
+                ..
+            } => {
+                let Some(owner) = canvas_owner(world, target) else {
+                    continue;
+                };
+                let Some((local, _)) = local_point(world, owner, center) else {
+                    continue;
+                };
+                edit_canvas(world, owner, |canvas| {
+                    let panned = canvas.pan_by(delta);
+                    let zoomed = canvas.zoom_at(local, scale);
+                    panned || zoomed
+                });
+            }
             UiRoutedEvent::PointerDown {
                 window,
                 target,

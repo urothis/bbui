@@ -2,7 +2,9 @@
 
 use crate::cursor_bridge::{CursorCaptureState, logical_pointer_motion};
 use crate::world_input::WorldPointerState;
-use bbui_core::{UiInputEvent, UiInputQueue, UiKeyCode, UiModifiers, UiPointerButton, UiWheelUnit};
+use bbui_core::{
+    UiInputEvent, UiInputQueue, UiKeyCode, UiModifiers, UiPointerButton, UiTouchPhase, UiWheelUnit,
+};
 use bevy::ecs::system::SystemParam;
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{KeyCode, KeyboardInput};
@@ -38,6 +40,8 @@ pub struct InputMessages<'w, 's> {
     exits: MessageReader<'w, 's, CursorLeft>,
     buttons: MessageReader<'w, 's, MouseButtonInput>,
     wheels: MessageReader<'w, 's, MouseWheel>,
+    #[cfg(target_os = "macos")]
+    trackpad: Option<Res<'w, crate::native_macos_input::MacInputFrame>>,
     keys: MessageReader<'w, 's, KeyboardInput>,
     ime: MessageReader<'w, 's, Ime>,
     focus: MessageReader<'w, 's, WindowFocused>,
@@ -56,6 +60,14 @@ pub fn bridge_bevy_input(
 ) {
     let now = time.elapsed_secs_f64();
     for event in messages.moves.read() {
+        #[cfg(target_os = "macos")]
+        if messages
+            .trackpad
+            .as_ref()
+            .is_some_and(|frame| frame.recovered_drag_window == Some(event.window))
+        {
+            continue;
+        }
         if messages.world_pointers.hover_target(event.window).is_some() {
             continue;
         }
@@ -155,8 +167,30 @@ pub fn bridge_bevy_input(
             }
             _ => {}
         }
+        queue.push(UiInputEvent::Touch {
+            window: event.window,
+            id: event.id,
+            position,
+            phase: match event.phase {
+                TouchPhase::Started => UiTouchPhase::Started,
+                TouchPhase::Moved => UiTouchPhase::Moved,
+                TouchPhase::Ended => UiTouchPhase::Ended,
+                TouchPhase::Canceled => UiTouchPhase::Cancelled,
+            },
+        });
     }
     for event in messages.buttons.read() {
+        #[cfg(target_os = "macos")]
+        if event.state == ButtonState::Released
+            && messages
+                .trackpad
+                .as_ref()
+                .is_some_and(|frame| frame.recovered_release(event.window, event.button))
+        {
+            // The native bridge already queued this release with its precise
+            // AppKit position; Bevy listeners still receive the message.
+            continue;
+        }
         if messages.touch_state.active.contains_key(&event.window) {
             continue;
         }
@@ -191,6 +225,16 @@ pub fn bridge_bevy_input(
         });
     }
     for event in messages.wheels.read() {
+        #[cfg(target_os = "macos")]
+        if event.unit == MouseScrollUnit::Pixel
+            && messages
+                .trackpad
+                .as_ref()
+                .is_some_and(|trackpad| trackpad.suppresses_pixel_wheel(event.window))
+        {
+            // AppKit supplied the positioned, phased form of this wheel sample.
+            continue;
+        }
         let Ok(window) = windows.get(event.window) else {
             continue;
         };

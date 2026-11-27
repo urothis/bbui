@@ -207,6 +207,7 @@ pub enum NodeGraphError {
 }
 
 #[derive(Component, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[require(bbui_core::UiGestureSurface)]
 #[component(summary_tick)]
 #[serde(default)]
 pub struct NodeGraph {

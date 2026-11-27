@@ -9,6 +9,8 @@ mod clipboard_bridge;
 mod cursor_bridge;
 mod input_bridge;
 pub mod modal;
+#[cfg(target_os = "macos")]
+mod native_macos_input;
 pub mod toasts;
 mod window_layout;
 pub mod workspace;
@@ -87,6 +89,28 @@ impl Plugin for BbuiPlugin {
         );
         app.init_resource::<input_bridge::ImeBridgeState>();
         app.init_resource::<input_bridge::TouchBridgeState>();
+        #[cfg(target_os = "macos")]
+        {
+            app.insert_non_send(bbui_macos_input::TrackpadMonitor::default());
+            app.init_resource::<native_macos_input::MacInputFrame>();
+            app.init_resource::<native_macos_input::MacPointerState>();
+            app.add_systems(
+                Update,
+                native_macos_input::bridge_native_macos_input
+                    .in_set(bbui_core::UiSystems::Input)
+                    .before(native_macos_input::publish_recovered_mouse_releases)
+                    .before(world_input::bridge_world_pointer)
+                    .before(input_bridge::bridge_bevy_input)
+                    .before(bbui_core::process_ui_input),
+            );
+            app.add_systems(
+                Update,
+                native_macos_input::publish_recovered_mouse_releases
+                    .in_set(bbui_core::UiSystems::Input)
+                    .before(world_input::bridge_world_pointer)
+                    .before(input_bridge::bridge_bevy_input),
+            );
+        }
         app.init_resource::<cursor_bridge::CursorCaptureState>();
         app.init_resource::<world_input::WorldPointerState>();
         app.init_resource::<Assets<Mesh>>();
@@ -130,8 +154,9 @@ pub mod prelude {
     };
     pub use crate::workspace::{Workspace, WorkspaceAppearance, WorkspacePlugin};
     pub use bbui_core::{
-        UiDirty, UiDirtyBatch, UiDirtyDomain, UiEnabled, UiFocus, UiFocusable, UiHistoryDelegate,
-        UiKey, UiLivePoliteness, UiLiveRegion, UiNode, UiSystems, UiVisible,
+        UiDirty, UiDirtyBatch, UiDirtyDomain, UiEnabled, UiFocus, UiFocusable, UiGesturePhase,
+        UiGestureSurface, UiHistoryDelegate, UiKey, UiLivePoliteness, UiLiveRegion, UiNode,
+        UiRoutedEvent, UiRoutedEvents, UiSystems, UiTrackpadGesture, UiTrackpadKind, UiVisible,
     };
     pub use bbui_layout::{
         Rect, UiAlign, UiEdges, UiFlexDirection, UiFlexItem, UiIntrinsicSize, UiJustify,

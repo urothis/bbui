@@ -1,6 +1,69 @@
 use super::*;
 
 #[test]
+fn two_finger_pan_scrolls_the_common_surface() {
+    let mut app = App::new();
+    app.add_plugins((CorePlugin, LayoutPlugin));
+    let window = app.world_mut().spawn_empty().id();
+    let scroll = app
+        .world_mut()
+        .spawn((
+            UiNode,
+            UiScroll::at(0.0, 30.0),
+            UiLayoutRoot::new(window, Rect::new(0.0, 0.0, 100.0, 60.0), 1.0),
+            UiLayoutNode {
+                mode: UiLayoutMode::Column,
+                size: UiSize {
+                    width: UiLength::Px(100.0),
+                    height: UiLength::Px(60.0),
+                },
+                ..UiLayoutNode::default()
+            },
+        ))
+        .id();
+    let content = app
+        .world_mut()
+        .spawn((
+            UiNode,
+            UiLayoutNode::leaf(UiLength::Px(100.0), UiLength::Px(200.0)),
+        ))
+        .id();
+    set_parent(app.world_mut(), content, scroll).unwrap();
+    app.update();
+    app.world_mut().resource_mut::<UiInputQueue>().extend([
+        UiInputEvent::Touch {
+            window,
+            id: 1,
+            position: [20.0, 20.0],
+            phase: bbui_core::UiTouchPhase::Started,
+        },
+        UiInputEvent::Touch {
+            window,
+            id: 2,
+            position: [40.0, 20.0],
+            phase: bbui_core::UiTouchPhase::Started,
+        },
+    ]);
+    app.update();
+    app.world_mut().resource_mut::<UiInputQueue>().extend([
+        UiInputEvent::Touch {
+            window,
+            id: 1,
+            position: [20.0, 30.0],
+            phase: bbui_core::UiTouchPhase::Moved,
+        },
+        UiInputEvent::Touch {
+            window,
+            id: 2,
+            position: [40.0, 30.0],
+            phase: bbui_core::UiTouchPhase::Moved,
+        },
+    ]);
+    app.update();
+    assert_eq!(app.world().get::<UiScroll>(scroll).unwrap().offset[1], 20.0);
+}
+
+#[test]
 pub(super) fn pointer_routing_hits_scrolled_descendants_and_rejects_clipped_regions() {
     let mut app = App::new();
     app.add_plugins((CorePlugin, LayoutPlugin));

@@ -31,6 +31,7 @@ The [properties editor source map](properties-editor-reference.md) records the c
 | Menus and controls | [Menus](examples/menus.png) · [Object Actions open](examples/menus_object_actions.png) · [Transform pie](examples/menus_transform_pie.png) · [Controls](examples/controls.png) · [Sliders](examples/sliders.png) · [panel reorder](examples/panel_reorder.png) |
 | Numeric and text | [Numeric group](examples/numeric_group.png) · [expressions](examples/numeric_expressions.png) · [text area](examples/text_area.png) · [text history](examples/text_history.png) |
 | Color and graphs | [Color ramp](examples/color_ramp.png) · [HSV](examples/hsv_color.png) · [curve](examples/curve_editor.png) · [node graph](examples/node_graph.png) · [canvas](examples/canvas.png) |
+| Touch gestures | [Before pinch](examples/touch-gestures-start-dark.png) · [after pinch dark](examples/touch-gestures-dark.png) · [after pinch light](examples/touch-gestures-light.png) |
 | Data and files | [Collections](examples/collections.png) · [data table](examples/data_table.png) · [file browser](examples/file_browser.png) |
 | Other | [Accessibility live](examples/accessibility_live.png) · [icon assets](examples/icon_assets.png) · [render basics](examples/render_basics.png) |
 
@@ -83,6 +84,8 @@ The workspace shell captures come from `cargo test -p bbui --example workspace_s
 The modal dialog captures come from `cargo test -p bbui --example modal_dialog --locked -- --ignored`; the capture test writes both themes directly to `docs/visuals/examples/`.
 
 The command palette captures come from `cargo test -p bbui --example command_palette --locked -- --ignored`; the capture test writes both themes directly to `docs/visuals/examples/`.
+
+The touch gesture captures come from `cargo test -p bbui --example touch_gestures --locked -- --ignored`; the capture test writes both themes directly to `docs/visuals/examples/`.
 
 The window chrome captures come from `cargo test -p bbui --example chrome_shell --locked -- --ignored`; the capture test writes desktop and compact views in both themes directly to `docs/visuals/examples/`.
 

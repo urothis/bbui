@@ -7,6 +7,8 @@ use super::*;
 /// capture is cancelled and focus references are cleared.
 pub fn process_ui_input(world: &mut World) {
     world.init_resource::<crate::UiDirty>();
+    world.init_resource::<UiTouchState>();
+    world.init_resource::<UiTrackpadState>();
     world.init_resource::<UiHoverValidation>();
     if !std::mem::take(&mut world.resource_mut::<UiHoverValidation>().prepared) {
         world
@@ -32,12 +34,33 @@ pub fn process_ui_input(world: &mut World) {
 
     for event in events {
         match event {
+            UiInputEvent::TrackpadGesture(sample)
+                if sample
+                    .position
+                    .iter()
+                    .chain(sample.delta.iter())
+                    .all(|value| value.is_finite())
+                    && sample.scale.is_finite()
+                    && sample.scale > 0.0 =>
+            {
+                route_trackpad(world, sample);
+            }
+            UiInputEvent::Touch {
+                window,
+                id,
+                position,
+                phase,
+            } if position.iter().all(|value| value.is_finite()) => {
+                route_touch(world, window, id, position, phase);
+            }
             UiInputEvent::PointerMove {
                 window,
                 position,
                 time_seconds: _,
             } if position.iter().all(|value| value.is_finite()) => {
-                route_pointer_move(world, window, position);
+                if !touch_gesture_active(world, window) {
+                    route_pointer_move(world, window, position);
+                }
             }
             UiInputEvent::PointerButton {
                 window,
@@ -68,7 +91,11 @@ pub fn process_ui_input(world: &mut World) {
             }
             UiInputEvent::PointerCancel { window } => cancel_pointer(world, window),
             UiInputEvent::PointerLeave { window } => pointer_leave(world, window),
-            UiInputEvent::WindowBlur { window } => window_blur(world, window),
+            UiInputEvent::WindowBlur { window } => {
+                cancel_touch_window(world, window);
+                cancel_trackpad_window(world, window);
+                window_blur(world, window);
+            }
             UiInputEvent::Key {
                 window,
                 key,
