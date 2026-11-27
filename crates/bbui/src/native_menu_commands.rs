@@ -295,6 +295,34 @@ mod tests {
         assert_eq!(updated_item.title, "Save Changes");
         assert!(updated_item.enabled);
         assert_eq!(
+            registry.set_shortcut(
+                "save",
+                Some(CommandShortcut::new(
+                    UiKeyCode::F12,
+                    UiModifiers {
+                        shift: true,
+                        ..Default::default()
+                    },
+                )),
+                Some("Shift+F12".into()),
+            ),
+            Ok(true)
+        );
+        let shortcut_updated = resolve_native_menu(&template, &registry).unwrap();
+        let NativeMenuEntry::Command(shortcut_item) = &shortcut_updated.menus[0].items[0] else {
+            panic!("expected command");
+        };
+        assert_eq!(
+            shortcut_item.shortcut.as_ref().map(|s| s.key),
+            Some('\u{f70f}')
+        );
+        assert!(
+            shortcut_item
+                .shortcut
+                .as_ref()
+                .is_some_and(|s| s.modifiers.shift)
+        );
+        assert_eq!(
             template.menus[0].items[0],
             NativeMenuEntry::Command(
                 NativeMenuCommand::new("save", "stale title").with_state(NativeMenuState::On)
