@@ -9,6 +9,7 @@ mod macos {
     use bbui::native_menu_commands::sync_native_menu_from_registry;
     use bbui::widgets::{Command, CommandRegistry, CommandShortcut};
     use bbui_core::{UiKeyCode, UiModifiers};
+    use bbui_text::ui_default_text_font;
     use bevy::prelude::*;
 
     #[derive(Resource)]
@@ -57,6 +58,9 @@ mod macos {
         }
     }
 
+    #[derive(Component)]
+    struct StatusText;
+
     struct MainThreadToken;
 
     fn command(id: &str) -> Entry {
@@ -101,6 +105,7 @@ mod macos {
         _main_thread: NonSend<MainThreadToken>,
         mut demo: ResMut<Demo>,
         mut exits: MessageWriter<AppExit>,
+        mut status: Query<&mut Text, With<StatusText>>,
     ) {
         for id in native_menu::take_commands() {
             if !demo.commands.record_activation(&id) {
@@ -126,6 +131,20 @@ mod macos {
                 _ => info!("Selected {id}"),
             }
         }
+        if let Ok(mut text) = status.single_mut() {
+            let next = format!(
+                "DOCUMENT  {}\nGRID  {}",
+                if demo.edited {
+                    "Unsaved changes"
+                } else {
+                    "Saved"
+                },
+                if demo.show_grid { "On" } else { "Off" },
+            );
+            if text.0 != next {
+                text.0 = next;
+            }
+        }
         // AppKit may create the application menu after the first update. Once
         // installed, rebuild only when command or checkmark state changes.
         if demo.menu_dirty || !demo.menu_installed {
@@ -143,6 +162,59 @@ mod macos {
         }
     }
 
+    fn setup(mut commands: Commands) {
+        commands.spawn(Camera2d);
+        commands
+            .spawn((
+                Node {
+                    width: percent(100),
+                    height: percent(100),
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
+                    ..default()
+                },
+                BackgroundColor(Color::srgb(0.055, 0.075, 0.11)),
+            ))
+            .with_children(|root| {
+                root.spawn((
+                    Node {
+                        width: px(620),
+                        flex_direction: FlexDirection::Column,
+                        row_gap: px(18),
+                        padding: UiRect::all(px(32)),
+                        border_radius: BorderRadius::all(px(18)),
+                        ..default()
+                    },
+                    BackgroundColor(Color::srgb(0.105, 0.14, 0.2)),
+                ))
+                .with_children(|card| {
+                    card.spawn((
+                        Text::new("BBUI  /  macOS"),
+                        ui_default_text_font(16.0),
+                        TextColor(Color::srgb(0.4, 0.85, 0.85)),
+                    ));
+                    card.spawn((
+                        Text::new("Native application menus"),
+                        ui_default_text_font(34.0),
+                        TextColor(Color::WHITE),
+                    ));
+                    card.spawn((
+                        Text::new(
+                            "Choose File > New to enable Save. Open Recent is nested; View > Show Grid toggles its checkmark. Quit asks the host before exiting.",
+                        ),
+                        ui_default_text_font(18.0),
+                        TextColor(Color::srgb(0.72, 0.78, 0.86)),
+                    ));
+                    card.spawn((
+                        Text::new("DOCUMENT  Saved\nGRID  Off"),
+                        ui_default_text_font(20.0),
+                        TextColor(Color::srgb(0.4, 0.85, 0.85)),
+                        StatusText,
+                    ));
+                });
+            });
+    }
+
     pub fn run() {
         App::new()
             .add_plugins(DefaultPlugins.set(WindowPlugin {
@@ -152,8 +224,10 @@ mod macos {
                 }),
                 ..Default::default()
             }))
+            .add_plugins(bbui::BbuiPlugin)
             .insert_non_send(MainThreadToken)
             .init_resource::<Demo>()
+            .add_systems(Startup, setup)
             .add_systems(Update, update)
             .run();
     }
