@@ -740,6 +740,11 @@ mod tests {
         let unused_wide = HashMap::from([("unused".into(), NumericValue::Unsigned(u64::MAX))]);
         assert!(safe.evaluate_input("sqrt(2)*2", &unused_wide).is_ok());
         assert!(
+            safe.evaluate_input("9007199254740992.9 - 9007199254740992", &HashMap::new())
+                .is_err()
+        );
+        assert_eq!(safe.typed_value(), NumericValue::Integer(3));
+        assert!(
             safe.evaluate_input("sqrt(2)*2 if 1 else 18446744073709551615", &unused_wide)
                 .is_ok()
         );

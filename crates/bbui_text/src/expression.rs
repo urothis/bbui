@@ -302,6 +302,15 @@ mod exact_integer_tests {
             evaluate_exact_i64_with_vars("1/0 if 1 else 2", 0, &vars),
             Err(Error::DivisionByZero)
         );
+        assert_eq!(
+            evaluate_exact_i64_with_vars("9007199254740992.9 - 9007199254740992", 0, &vars),
+            Err(Error::Domain)
+        );
+        assert_eq!(
+            evaluate_exact_i64_with_vars("2 if 1 else 9007199254740992.9", 0, &vars),
+            Ok(2)
+        );
+        assert_eq!(evaluate_exact_i64_with_vars("1e2 + 2.0", 0, &vars), Ok(102));
         assert_eq!(evaluate_exact_i64("3/2", 0), Ok(2));
         let wide = HashMap::from([("limit".into(), NumericValue::Unsigned(u64::MAX - 1))]);
         assert_eq!(
@@ -322,6 +331,7 @@ mod exact_integer_tests {
 #[derive(Debug, Clone, PartialEq)]
 enum Token {
     Number(f64),
+    RoundedNumber(f64),
     ExactNumber(i128),
     Name(String),
     Plus,
@@ -342,6 +352,48 @@ enum Token {
     Eq,
     NotEq,
     End,
+}
+
+/// Return an integer only when the decimal source is mathematically integral.
+fn decimal_integer(raw: &str) -> Option<i128> {
+    let exponent_at = raw.find(['e', 'E']);
+    let (mantissa, exponent_text) = if let Some(at) = exponent_at {
+        (&raw[..at], Some(&raw[at + 1..]))
+    } else {
+        (raw, None)
+    };
+    let mut digits = String::with_capacity(mantissa.len());
+    let mut fractional_digits = 0_i64;
+    let mut after_dot = false;
+    for byte in mantissa.bytes() {
+        if byte == b'.' {
+            after_dot = true;
+        } else {
+            digits.push(char::from(byte));
+            fractional_digits += i64::from(after_dot);
+        }
+    }
+    if digits.bytes().all(|digit| digit == b'0') {
+        return Some(0);
+    }
+    digits = digits.trim_start_matches('0').to_owned();
+    let exponent = exponent_text.map_or(Some(0), |text| text.parse::<i64>().ok())?;
+    let shift = exponent.checked_sub(fractional_digits)?;
+    if shift < 0 {
+        let remove = usize::try_from(shift.checked_neg()?).ok()?;
+        let keep = digits.len().checked_sub(remove)?;
+        if !digits[keep..].bytes().all(|digit| digit == b'0') {
+            return None;
+        }
+        digits.truncate(keep);
+    } else {
+        let add = usize::try_from(shift).ok()?;
+        if digits.len().checked_add(add)? > 39 {
+            return None;
+        }
+        digits.extend(std::iter::repeat_n('0', add));
+    }
+    digits.parse::<i128>().ok()
 }
 
 fn lex<const EXACT: bool>(source: &str) -> Result<Vec<Token>, Error> {
@@ -381,13 +433,14 @@ fn lex<const EXACT: bool>(source: &str) -> Result<Vec<Token>, Error> {
                 let raw = &source[start..i];
                 let float: f64 = raw.parse().map_err(|_| Error::InvalidNumber(start))?;
                 if EXACT {
-                    let exact = raw.parse::<i128>().ok().or_else(|| {
-                        (float.is_finite()
-                            && float.fract() == 0.0
-                            && float.abs() <= 9_007_199_254_740_992.0)
-                            .then_some(float as i128)
+                    let exact = raw.parse::<i128>().ok().or_else(|| decimal_integer(raw));
+                    out.push(match exact {
+                        Some(value) => Token::ExactNumber(value),
+                        None if float.is_finite() && float.fract() == 0.0 => {
+                            Token::RoundedNumber(float)
+                        }
+                        None => Token::Number(float),
                     });
-                    out.push(exact.map_or(Token::Number(float), Token::ExactNumber));
                 } else {
                     out.push(Token::Number(float));
                 }
@@ -454,6 +507,7 @@ pub fn has_wide_numeric_literal(source: &str) -> bool {
     lex::<true>(source).is_ok_and(|tokens| {
         tokens.into_iter().any(|token| match token {
             Token::ExactNumber(value) => value.unsigned_abs() > 9_007_199_254_740_992,
+            Token::RoundedNumber(_) => true,
             Token::Number(value) => value.abs() > 9_007_199_254_740_992.0,
             _ => false,
         })
@@ -553,6 +607,7 @@ fn finite(value: f64) -> Result<f64, Error> {
 #[derive(Debug, Clone)]
 enum Expression {
     Number(f64),
+    RoundedNumber(f64),
     ExactNumber(i128),
     Name(String),
     Unary {
@@ -612,6 +667,8 @@ impl Expression {
                 }
                 finite(*value)
             }
+            Self::RoundedNumber(_) if SAFE => Err(Error::Domain),
+            Self::RoundedNumber(value) => finite(*value),
             Self::ExactNumber(value) => {
                 if SAFE && value.unsigned_abs() > 9_007_199_254_740_992 {
                     return Err(Error::Domain);
@@ -686,7 +743,7 @@ impl Expression {
     fn evaluate_exact(&self, x: i128, vars: &HashMap<String, NumericValue>) -> Result<i128, Error> {
         match self {
             Self::ExactNumber(value) => Ok(*value),
-            Self::Number(_) => Err(Error::Domain),
+            Self::Number(_) | Self::RoundedNumber(_) => Err(Error::Domain),
             Self::Name(name) if name == "x" => Ok(x),
             Self::Name(name) if name == "pi" || name == "e" => Err(Error::Domain),
             Self::Name(name) => {
@@ -930,6 +987,7 @@ impl Parser<'_> {
     fn primary(&mut self) -> Result<Expression, Error> {
         match self.take() {
             Token::Number(value) => Ok(Expression::Number(value)),
+            Token::RoundedNumber(value) => Ok(Expression::RoundedNumber(value)),
             Token::ExactNumber(value) => Ok(Expression::ExactNumber(value)),
             Token::LParen => {
                 let value = self.conditional()?;
