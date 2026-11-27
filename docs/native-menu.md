@@ -23,4 +23,4 @@ for command_id in bbui::native_menu::take_commands() {
 # Ok::<(), bbui::native_menu::NativeMenuError>(())
 ```
 
-Run `cargo run -p bbui --example native_menu` on macOS. Its File menu enables a save flow, View toggles a checkmark, Recent is nested, and Quit goes through a host guard. On other platforms the same model validates but `sync` reports that no native menu was installed.
+Run `cargo run -p bbui --example native_menu` on macOS. Its File menu enables a save flow, View toggles a checkmark, Recent is nested, and Quit goes through a host guard. The example window shows the current document and grid states. On other platforms the same model validates but `sync` reports that no native menu was installed.

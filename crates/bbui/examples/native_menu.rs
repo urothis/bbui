@@ -97,7 +97,7 @@ mod macos {
             }
         }
         if let Ok(mut text) = status.single_mut() {
-            text.0 = format!(
+            let next = format!(
                 "DOCUMENT  {}\nGRID  {}",
                 if demo.edited {
                     "Unsaved changes"
@@ -106,6 +106,9 @@ mod macos {
                 },
                 if demo.show_grid { "On" } else { "Off" },
             );
+            if text.0 != next {
+                text.0 = next;
+            }
         }
         if let Err(error) = native_menu::sync(&model(&demo)) {
             warn!("Native menu update failed: {error:?}");
